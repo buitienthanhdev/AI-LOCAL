@@ -1,0 +1,38 @@
+{
+  "category": "knowledge",
+  "description": "Company knowledge base (RAG over the company's documents, served by the Company Brain subsystem). Read-only. Use it to answer questions about company data, specifications, documents and people, and to get evidence before acting (e.g. a spec to draw in AutoCAD).",
+  "tools": [
+    {
+      "name": "knowledge.status",
+      "description": "Report whether the company knowledge backend is running and reachable.",
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["ready"], "properties": {"ready": {"type": "boolean"}, "base_url": {"type": "string"}}},
+      "timeout_ms": 10000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "side_effects": "none", "policy_category": "knowledge"
+    },
+    {
+      "name": "knowledge.search",
+      "description": "Search the company knowledge base. Returns ranked passages with citations (document name, location, why it matched). Use this to answer questions about company documents, specifications, products or people.",
+      "input_schema": {"type": "object", "required": ["query"], "additionalProperties": false, "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 500}, "limit": {"type": "integer", "minimum": 1, "maximum": 30}}},
+      "output_schema": {"type": "object", "required": ["hits"], "properties": {"hits": {"type": "array", "items": {"type": "object", "properties": {"score": {"type": "number"}, "file_id": {"type": "string"}, "name": {"type": "string"}, "path": {"type": "string"}, "loc": {"type": "string"}, "text": {"type": "string"}, "why": {"type": "string"}, "author": {"type": "string"}, "modified_at": {"type": "string"}}}}}},
+      "timeout_ms": 40000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "side_effects": "none", "policy_category": "knowledge"
+    },
+    {
+      "name": "knowledge.get_context",
+      "description": "Retrieve the most relevant company-knowledge passages for a query, formatted as evidence (with citations) to ground your answer or plan. Use before answering a knowledge question or before acting on a company specification.",
+      "input_schema": {"type": "object", "required": ["query"], "additionalProperties": false, "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 500}, "limit": {"type": "integer", "minimum": 1, "maximum": 15}}},
+      "output_schema": {"type": "object", "required": ["context", "citations", "found"], "properties": {"context": {"type": "string"}, "found": {"type": "boolean"}, "citations": {"type": "array", "items": {"type": "object", "properties": {"file_id": {"type": "string"}, "name": {"type": "string"}, "loc": {"type": "string"}}}}}},
+      "timeout_ms": 40000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "side_effects": "none", "policy_category": "knowledge"
+    },
+    {
+      "name": "knowledge.read_document",
+      "description": "Read the full text of a company-knowledge document by its file_id (from knowledge.search results).",
+      "input_schema": {"type": "object", "required": ["file_id"], "additionalProperties": false, "properties": {"file_id": {"type": "string", "minLength": 1}, "max_bytes": {"type": "integer", "minimum": 1}}},
+      "output_schema": {"type": "object", "required": ["file_id", "content", "content_type"], "properties": {"file_id": {"type": "string"}, "content": {"type": "string"}, "content_type": {"type": "string"}}},
+      "timeout_ms": 40000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "side_effects": "none", "policy_category": "knowledge"
+    }
+  ]
+}

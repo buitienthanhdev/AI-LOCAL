@@ -146,14 +146,14 @@ pub async fn run(rt: &mut Runtime, gateway: &GatewayProvider) -> Vec<Check> {
             }
             Err(e) => checks.push(check("chrome", Status::Fail, format!("environment probe failed: {e}"))),
         }
-        for (name, tool) in [("browser", "browser.status"), ("vision", "vision.status")] {
+        for (name, tool) in [("browser", "browser.status"), ("vision", "vision.status"), ("knowledge", "knowledge.status")] {
             let available = rt.worker().await.map(|w| w.tools().iter().any(|t| t == tool)).unwrap_or(false);
             checks.push(if !available {
                 check(name, Status::Fail, format!("{tool} is not available in the worker"))
             } else {
                 match tool_data(rt, tool, json!({})).await {
                     Ok((data, obs)) => check(name, if data["ready"] == true { Status::Pass } else { Status::Warn }, obs),
-                    Err(e) => check(name, Status::Fail, e),
+                    Err(e) => check(name, if name == "knowledge" { Status::Warn } else { Status::Fail }, e),
                 }
             });
         }
