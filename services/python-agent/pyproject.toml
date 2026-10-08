@@ -20,10 +20,16 @@ dependencies = [
     # Worker infrastructure.
     "lga-common",
     "jsonschema>=4.23",
+    # Browser execution layer (pure CDP; Playwright not needed). Imported lazily by lga_worker.browser.
+    "browser-use==0.13.11",
+    "winrt-runtime>=3.0",
+    "winrt-windows-media-ocr>=3.0",
+    "winrt-windows-graphics-imaging>=3.0",
+    "winrt-windows-storage-streams>=3.0",
+    "winrt-windows-foundation>=3.0",
+    "winrt-windows-globalization>=3.0",
+    "winrt-windows-foundation-collections>=3.0",
 ]
-
-[project.optional-dependencies]
-browser = ["browser-use==0.13.11"]
 
 [project.scripts]
 lga-worker = "lga_worker.__main__:main"
