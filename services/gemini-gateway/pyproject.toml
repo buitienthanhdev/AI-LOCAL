@@ -1,0 +1,40 @@
+[project]
+name = "lga-gateway"
+version = "0.1.0"
+description = "Local Gemini Agent - Gemini Web gateway (primary/fallback backends, circuit breaker, health)"
+license = "MIT"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "lga-common",
+    "aiohttp>=3.10",
+    "psutil>=6.0",
+    "pywin32>=308",
+]
+
+[project.scripts]
+lga-gateway = "lga_gateway.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24", "pytest-aiohttp>=1.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lga_gateway"]
+
+[tool.uv]
+python-preference = "managed"
+
+[tool.uv.sources]
+lga-common = { path = "../lga-common", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["gateway: talks to the real Gemini Web backends"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"

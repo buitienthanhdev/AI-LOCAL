@@ -32,7 +32,7 @@ import win32gui
 from fuzzywuzzy import fuzz, process
 from PIL import ImageGrab
 
-from lga_worker.config import Config
+from lga_common.config import Config
 from lga_worker.errors import ErrorCode, ToolError
 from lga_worker.filesystem import ops as fs_ops
 from lga_worker.shell.powershell import resolve_powershell, run_powershell

@@ -21,7 +21,7 @@ _RULES: tuple[tuple[re.Pattern[str], int | None], ...] = (
     # key=value and "key": "value" secrets.
     (
         re.compile(
-            r"(?i)([\"']?\b(?:api[_-]?key|x-api-key|access[_-]?token|refresh[_-]?token|admin[_-]?token|"
+            r"(?i)([\"']?\b(?:api[ _-]?key|x-api-key|access[_-]?token|refresh[_-]?token|admin[_-]?token|"
             r"client[_-]?secret|secret|password|passwd)[\"']?\s*[:=]\s*[\"']?)[^\"'\s,}]+"
         ),
         1,

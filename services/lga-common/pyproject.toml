@@ -1,0 +1,14 @@
+[project]
+name = "lga-common"
+version = "0.1.0"
+description = "Local Gemini Agent - shared config, secret resolution and redaction"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = ["pywin32>=308"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lga_common"]

@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from lga_worker.config import Config
+from lga_common.config import Config
 from lga_worker.errors import ErrorCode, ToolError
 from lga_worker.filesystem import ops
-from lga_worker.redact import REDACTED, Redactor
+from lga_common.redact import REDACTED, Redactor
 from lga_worker.shell.powershell import looks_like_elevation_failure, resolve_powershell, run_powershell
 from lga_worker.sta import StaExecutor
 from lga_worker.windows.elements import ElementCache, matches_query, normalize_control_type
@@ -30,6 +30,7 @@ def test_config_defaults_load(config: Config) -> None:
         ("Authorization: Bearer abcdefghijklmnop", "abcdefghijklmnop"),
         ('{"api_key": "k-1234567890"}', "k-1234567890"),
         ("token sk-abcdefghijklmnopqrstuv end", "sk-abcdefghijklmnopqrstuv"),
+        ("  API key:     p5w8IV8s8rWF...VhPE  (locked by flag/env)", "p5w8IV8s8rWF"),
     ],
 )
 def test_redactor_removes_secrets(raw: str, secret: str) -> None:

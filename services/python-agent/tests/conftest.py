@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from lga_worker.config import Config, load_config
+from lga_common.config import Config, load_config
 
 # Real-desktop tests open windows and move the mouse. They run only when explicitly requested:
 #   uv run pytest -m desktop --run-desktop
