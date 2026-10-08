@@ -95,7 +95,7 @@
     },
     {
       "name": "browser.get_state",
-      "description": "Read the active page: URL, title, tabs, interactive elements with their `index` (use it for click/type/upload/scroll) and a visible-text excerpt (elements are extracted from http(s) pages only). Call again after anything changes the page; indices from older calls may be stale.",
+      "description": "Read the active page: URL, title, tabs, interactive elements with their `index` (use it for click/type/upload/scroll) and a visible-text excerpt (elements are extracted from http(s) pages only). Call again after anything changes the page: index actions are only accepted against the page shown by the latest call.",
       "input_schema": {"type": "object", "additionalProperties": false, "properties": {"max_elements": {"type": "integer", "minimum": 1, "maximum": 2000}}},
       "output_schema": {
         "type": "object", "required": ["url", "title", "tabs", "elements", "element_count", "truncated", "text_excerpt"],
@@ -112,13 +112,14 @@
     },
     {
       "name": "browser.click",
-      "description": "Click the element with `index` from the latest browser.get_state (CDP mouse events inside the page, not the OS mouse). Waits briefly for a resulting navigation and reports the URL afterwards; the core observes the page after this call.",
+      "description": "Click the element with `index` from the latest browser.get_state (CDP mouse events inside the page, not the OS mouse). If the page or that element changed since that get_state, nothing is clicked and STALE_ELEMENT is returned. After the click, a navigation it started is waited for (until loaded) and the resulting URL is reported; the core observes the page after this call.",
       "input_schema": {"type": "object", "required": ["index"], "additionalProperties": false, "properties": {"index": {"type": "integer", "minimum": 1}}},
       "output_schema": {
         "type": "object", "required": ["url", "title", "url_changed"],
         "properties": {
           "url": {"type": "string"}, "title": {"type": "string"}, "url_changed": {"type": "boolean"},
-          "element": {"$ref": "#/$defs/element"}, "new_tab_id": {"type": ["string", "null"]}, "download": {"type": ["string", "null"]}
+          "element": {"$ref": "#/$defs/element"}, "new_tab_id": {"type": ["string", "null"]}, "download": {"type": ["string", "null"]},
+          "pending_navigation": {"type": ["string", "null"]}
         }
       },
       "timeout_ms": 60000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,

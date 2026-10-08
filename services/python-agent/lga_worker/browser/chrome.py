@@ -13,8 +13,7 @@ Nothing here reads the user's real Chrome profile. Chrome's stdout/stderr go to 
 
 from __future__ import annotations
 
-from typing import Any
-
+import asyncio
 import json
 import logging
 import subprocess
@@ -23,7 +22,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 import psutil
 
@@ -45,9 +44,17 @@ BASE_ARGS = (
     "--no-first-run",
     "--no-default-browser-check",
     "--hide-crash-restore-bubble",
+    # The agent's other apps (AutoCAD, dialogs) often cover or minimise Chrome. Without these, Chrome treats a
+    # covered window as hidden and throttles it: timers slow down, frames stop (screenshots hang) and
+    # coordinate-based CDP clicks can be lost. Same defaults as Puppeteer.
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-background-timer-throttling",
+    "--disable-features=CalculateNativeWinOcclusion",
 )
 HEADLESS_ARG = "--headless=new"
 INITIAL_URL = "about:blank"
+PAGE_TARGET_TYPE = "page"
 
 
 def parse_devtools_active_port(text: str) -> tuple[int, str]:
@@ -92,6 +99,53 @@ def probe_endpoint(cdp_url: str, timeout_s: float = ENDPOINT_PROBE_TIMEOUT_S) ->
             return json.loads(response.read().decode("utf-8"))
     except (urllib.error.URLError, OSError, ValueError):
         return None
+
+
+def _http(url: str, method: str = "GET", timeout_s: float = ENDPOINT_PROBE_TIMEOUT_S) -> Any:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    request = urllib.request.Request(url, method=method)
+    with opener.open(request, timeout=timeout_s) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def page_targets(cdp_url: str) -> list[dict[str, Any]]:
+    """Normal tabs (`type == "page"`) of the browser at `cdp_url`, via the DevTools HTTP endpoint."""
+    targets = _http(cdp_url.rstrip("/") + "/json/list")
+    return [t for t in targets if isinstance(t, dict) and t.get("type") == PAGE_TARGET_TYPE]
+
+
+def ensure_page_target(cdp_url: str) -> int:
+    """Make sure the browser has at least one tab to attach to (a kept-open Chrome may have none left).
+
+    Returns the number of page targets before the call. Blocking; raises OSError/ValueError on HTTP failure.
+    """
+    pages = page_targets(cdp_url)
+    if not pages:
+        _http(cdp_url.rstrip("/") + "/json/new?" + INITIAL_URL, method="PUT")
+    return len(pages)
+
+
+async def close_gracefully(cdp_url: str, timeout_s: float) -> bool:
+    """Send `Browser.close` over a short-lived raw CDP websocket (no browser-use session involved, so no
+    tab-recovery logic fights the shutdown). Returns True when Chrome acknowledged or dropped the socket."""
+    from websockets.asyncio.client import connect  # dependency of cdp-use; imported lazily like browser-use
+    from websockets.exceptions import ConnectionClosed
+
+    info = await asyncio.to_thread(probe_endpoint, cdp_url)
+    ws_url = (info or {}).get("webSocketDebuggerUrl")
+    if not ws_url:
+        return False
+    try:
+        async with asyncio.timeout(timeout_s):
+            async with connect(ws_url, max_size=None) as socket:
+                await socket.send(json.dumps({"id": 1, "method": "Browser.close"}))
+                await socket.recv()
+    except ConnectionClosed:
+        return True  # Chrome closed the socket while shutting down
+    except (TimeoutError, OSError) as exc:
+        logger.info("Browser.close over CDP failed: %s", exc)
+        return False
+    return True
 
 
 def _is_browser_process_of(proc: psutil.Process, profile_marker: str) -> bool:

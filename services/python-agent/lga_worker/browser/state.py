@@ -116,6 +116,22 @@ def serialize_element(index: int, node: DomNode) -> dict[str, Any]:
             "attributes": kept}
 
 
+# Identity of an element across state refreshes. Indices are CDP backend node ids, which are unique within a
+# renderer but can repeat after a cross-site navigation; text is excluded because counters/values change.
+FINGERPRINT_ATTRIBUTES = ("id", "name", "type", "href")
+
+
+def element_fingerprint(node: DomNode) -> tuple[str, ...]:
+    attributes = node.attributes or {}
+    return ((node.tag_name or "").lower(), *(str(attributes.get(k, "")) for k in FINGERPRINT_ATTRIBUTES))
+
+
+def describe_fingerprint(fingerprint: tuple[str, ...]) -> str:
+    tag, *values = fingerprint
+    shown = " ".join(f"{k}={truncate(v, ATTRIBUTE_VALUE_CHARS)!r}" for k, v in zip(FINGERPRINT_ATTRIBUTES, values) if v)
+    return f"<{tag}{' ' + shown if shown else ''}>"
+
+
 def serialize_elements(selector_map: Mapping[int, DomNode], max_elements: int) -> tuple[list[dict[str, Any]], bool]:
     items = list(selector_map.items())
     shown = [serialize_element(index, node) for index, node in items[:max_elements]]

@@ -14,6 +14,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -23,6 +24,7 @@ import pytest
 from lga_common.config import Config
 from lga_worker.browser import chrome
 from lga_worker.browser.provider import (
+    ActionProbe,
     Attached,
     BrowserProvider,
     BrowserSettings,
@@ -299,18 +301,144 @@ def settings(config: Config) -> BrowserSettings:
     return BrowserSettings.from_config(config)
 
 
-async def test_provider_health_and_stale_index(settings: BrowserSettings) -> None:
+SEARCH_URL = "https://github.com/search?q=Windows-Use&type=repositories"
+OTHER_REPO_URL = "https://github.com/CursorTouch/Windows-MCP"
+
+
+class ScriptedProvider(BrowserProvider):
+    """The real BrowserProvider logic with the page (JS/CDP) side scripted. Records dispatched events."""
+
+    def __init__(self, settings: BrowserSettings, session: FakeSession) -> None:
+        super().__init__(settings)
+        self._session = session
+        self.doc_token: str | None = "doc-1"
+        self.url = session.state.url
+        self.dispatched: list[str] = []
+        self.dispatch_error: Exception | None = None
+        self.probes: list[dict[str, Any] | None] = []  # consumed by _probe_navigation, last one repeats
+
+    async def _document_token(self, ensure: bool) -> str | None:
+        return self.doc_token
+
+    def _click_event(self, node: Any) -> Any:
+        return SimpleNamespace(__name__="ClickElementEvent", node=node)
+
+    async def page_info(self, timeout_s: float | None = None) -> PageInfo:
+        return PageInfo(url=self.url, title=self.url, ready_state="complete")
+
+    async def dispatch(self, event: Any, timeout_s: float) -> Any:
+        self.dispatched.append(getattr(event, "__name__", type(event).__name__))
+        if self.dispatch_error is not None:
+            self.url = OTHER_REPO_URL if "navigat" in str(self.dispatch_error) else self.url
+            raise self.dispatch_error
+        return None
+
+    async def _probe_navigation(self) -> dict[str, Any] | None:
+        probe = self.probes.pop(0) if len(self.probes) > 1 else (self.probes[0] if self.probes else None)
+        if probe is not None and "url" in probe:
+            self.url = probe["url"]
+        return probe
+
+
+@pytest.fixture
+def scripted(settings: BrowserSettings) -> ScriptedProvider:
+    link = FakeNode("a", {"href": "/Jeomon/Windows-Use"}, "Jeomon/ Windows-Use", role="link")
+    state = _fake_state({425: link})
+    state.url = SEARCH_URL
+    return ScriptedProvider(settings, FakeSession(state))
+
+
+def test_provider_health(settings: BrowserSettings) -> None:
     provider = BrowserProvider(settings)
     assert provider.unhealthy_reason() == "no session" and not provider.connected
-    session = FakeSession(_fake_state({5: FakeNode("a", {"href": "/issues"}, "Issues")}))
+    session = FakeSession(_fake_state({}))
     provider._session = session  # noqa: SLF001 - unit test injects a fake browser-use session
     assert provider.connected
-    assert (await provider.element(5, 1.0)).tag_name == "a"
-    with pytest.raises(ToolError) as exc:
-        await provider.element(6, 1.0)
-    assert exc.value.code == ErrorCode.STALE_ELEMENT
     session.is_cdp_connected = False
     assert provider.unhealthy_reason() == "CDP websocket closed"
+
+
+async def test_index_requires_a_state_snapshot(scripted: ScriptedProvider) -> None:
+    with pytest.raises(ToolError) as exc:
+        await scripted.element(425, 1.0)
+    assert exc.value.code == ErrorCode.STALE_ELEMENT and exc.value.details["performed"] is False
+    await scripted.remember_state(scripted.session.state, SEARCH_URL)
+    assert (await scripted.element(425, 1.0)).attributes["href"] == "/Jeomon/Windows-Use"
+    with pytest.raises(ToolError) as exc:
+        await scripted.element(6, 1.0)  # never shown to the planner
+    assert exc.value.code == ErrorCode.STALE_ELEMENT
+
+
+async def test_regression_page_navigated_elsewhere_before_click(config: Config, scripted: ScriptedProvider) -> None:
+    """Acceptance run 20261008-035252: the tab left the search page (not by our tool) before browser.click.
+
+    The tool must refuse WITHOUT clicking and say so truthfully, naming the page the tab now shows."""
+    await scripted.remember_state(scripted.session.state, SEARCH_URL)
+    scripted.doc_token, scripted.url = None, OTHER_REPO_URL  # new document: the token is gone
+    with pytest.raises(ToolError) as exc:
+        await _invoke(config, scripted, "browser.click", {"index": 425})
+    assert exc.value.code == ErrorCode.STALE_ELEMENT
+    assert "ClickElementEvent" not in scripted.dispatched
+    assert exc.value.message.startswith("Nothing was done.") and OTHER_REPO_URL in exc.value.message
+    assert exc.value.details["performed"] is False
+
+
+async def test_reused_backend_id_on_new_element_is_not_clicked(scripted: ScriptedProvider) -> None:
+    """Backend node ids can repeat across documents: same index, different element -> STALE, no click."""
+    await scripted.remember_state(scripted.session.state, SEARCH_URL)
+    scripted.session.state.dom_state.selector_map[425] = FakeNode("button", {"id": "other"}, "Follow")
+    with pytest.raises(ToolError) as exc:
+        await scripted.element(425, 1.0)
+    assert exc.value.code == ErrorCode.STALE_ELEMENT and "<button id='other'>" in exc.value.message
+
+
+async def test_click_that_raised_after_navigating_is_reported_as_performed(scripted: ScriptedProvider) -> None:
+    before = await scripted.page_info()
+    scripted.dispatch_error = RuntimeError("Node with given id does not exist (page navigated)")
+    result = await scripted.click(FakeNode("a", {}), before, 1.0)
+    assert result is not None and "navigating" in result["warning"]
+
+
+async def test_click_that_raised_without_effect_is_never_stale(scripted: ScriptedProvider) -> None:
+    before = await scripted.page_info()
+    scripted.dispatch_error = RuntimeError("No node with given id found")
+    with pytest.raises(ToolError) as exc:
+        await scripted.click(FakeNode("a", {}), before, 1.0)
+    assert exc.value.code == ErrorCode.EXECUTION_FAILED and exc.value.details["maybe_performed"] is True
+
+
+async def test_failure_after_click_reports_click_performed(config: Config, scripted: ScriptedProvider) -> None:
+    await scripted.remember_state(scripted.session.state, SEARCH_URL)
+
+    async def broken_settle(probe: Any, timeout_s: float) -> PageInfo:
+        raise ValueError("Target ABC has detached - no active sessions")  # would map to STALE_ELEMENT
+
+    scripted.settle = broken_settle  # type: ignore[method-assign]
+    with pytest.raises(ToolError) as exc:
+        await _invoke(config, scripted, "browser.click", {"index": 425})
+    assert scripted.dispatched == ["ClickElementEvent"]
+    assert exc.value.code == ErrorCode.EXECUTION_FAILED and exc.value.details["performed"] is True
+    assert "WAS performed" in exc.value.message
+
+
+async def test_settle_waits_for_a_started_navigation_beyond_the_settle_window(scripted: ScriptedProvider) -> None:
+    """Regression for 'Sign in' reported as unchanged: the link navigation started but committed only after
+    post_action_settle_ms (slow server). settle() must keep waiting and report the new URL."""
+    scripted.settings = replace(scripted.settings, post_action_settle_s=0.05, poll_interval_s=0.01)
+    login = "https://github.com/login?return_to=x"
+    started = {"url": SEARCH_URL, "token": "t", "nav": {"url": login, "same": False}}
+    scripted.probes = [started] * 20 + [None, None, {"url": login, "token": None, "nav": None}]
+    info = await scripted.settle(ActionProbe(PageInfo(SEARCH_URL, "Search", "complete"), "t"), 5.0)
+    assert info.url == login and info.pending_url is None
+
+
+async def test_settle_without_navigation_returns_after_the_settle_window(scripted: ScriptedProvider) -> None:
+    scripted.settings = replace(scripted.settings, post_action_settle_s=0.05, poll_interval_s=0.01)
+    scripted.probes = [{"url": SEARCH_URL, "token": "t", "nav": None}]
+    started = time.monotonic()
+    info = await scripted.settle(ActionProbe(PageInfo(SEARCH_URL, "Search", "complete"), "t"), 5.0)
+    assert info.url == SEARCH_URL and info.pending_url is None
+    assert time.monotonic() - started < 1.0
 
 
 def test_upload_never_redirects_a_text_field_to_another_input(settings: BrowserSettings) -> None:
@@ -353,6 +481,9 @@ class FakeProvider:
 
     async def page_info(self, timeout_s: float | None = None) -> PageInfo:
         return self.info
+
+    async def remember_state(self, state: Any, url: str) -> None:
+        self.remembered = url
 
 
 async def _invoke(config: Config, provider: Any, tool: str, args: dict[str, Any]) -> Any:

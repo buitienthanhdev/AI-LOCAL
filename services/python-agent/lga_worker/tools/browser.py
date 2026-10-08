@@ -25,6 +25,7 @@ from lga_worker.browser.provider import (
     browser_use_installed,
     browser_use_version,
     png_size,
+    to_tool_error,
 )
 from lga_worker.browser.state import (
     HTTP_SCHEMES,
@@ -69,7 +70,10 @@ def _with_notice(att: Attached, text: str) -> str:
 
 
 def _page_line(info: PageInfo) -> str:
-    return f"URL now {info.url} (title {truncate(info.title, OBSERVATION_TITLE_CHARS)!r})"
+    line = f"URL now {info.url} (title {truncate(info.title, OBSERVATION_TITLE_CHARS)!r})"
+    if info.pending_url:
+        line += f"; a navigation to {info.pending_url} was started but has not loaded yet"
+    return line
 
 
 def _navigation_checks(requested: str, info: PageInfo) -> tuple[list[Check], bool]:
@@ -82,6 +86,15 @@ def _navigation_checks(requested: str, info: PageInfo) -> tuple[list[Check], boo
               f"title={info.title!r} readyState={info.ready_state}"),
     ]
     return checks, redirected
+
+
+def _performed_error(action: str, index: int, exc: BaseException) -> ToolError:
+    """An error raised AFTER the action reached the page: keep its code, but never claim a stale index."""
+    error = to_tool_error(exc, f"browser.{action}")
+    code = ErrorCode.EXECUTION_FAILED if error.code == ErrorCode.STALE_ELEMENT else error.code
+    return ToolError(code, f"The {action} on [{index}] WAS performed, but observing the page afterwards failed: "
+                           f"{error.message}. Call browser.get_state to see the result.",
+                     details={**error.details, "performed": True})
 
 
 async def _tab_dicts(provider: BrowserProvider) -> list[dict[str, Any]]:
@@ -219,6 +232,7 @@ def register(registry: ToolRegistry) -> None:
             tab_list = await _tab_dicts(provider)
             text = await provider.page_text()
             info = await provider.page_info()  # JS title/url; CDP target info (state.title) can lag
+            await provider.remember_state(state, info.url or state.url)  # indices are checked against this
             selector_map = state.dom_state.selector_map if state.dom_state else {}
             dom_text = state.dom_state.llm_representation() if state.dom_state else ""
         elements, truncated = serialize_elements(selector_map, max_elements)
@@ -252,11 +266,18 @@ def register(registry: ToolRegistry) -> None:
         async with provider.attached(ctx.timeout_s(None, settings.launch_timeout_s), "browser.click") as att:
             node = await provider.element(index, ctx.timeout_s(None, settings.action_timeout_s))
             element = serialize_element(index, node)
-            before = await provider.page_info()
             tabs_before, _ = await provider.tabs()
-            meta = await provider.click(node, ctx.timeout_s(None, settings.navigation_timeout_s)) or {}
-            info = await provider.settle(before, ctx.timeout_s(None, settings.navigation_timeout_s))
-            tabs_after, _ = await provider.tabs()
+            probe = await provider.arm_action()
+            before = probe.before
+            meta = await provider.click(node, before, ctx.timeout_s(None, settings.navigation_timeout_s)) or {}
+            # From here on the click has happened: a failure while observing its effect is not a stale index.
+            try:
+                info = await provider.settle(probe, ctx.timeout_s(None, settings.navigation_timeout_s))
+                tabs_after, _ = await provider.tabs()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - re-raised with the fact that the click was performed
+                raise _performed_error("click", index, exc) from exc
         new_tabs = {t.target_id for t in tabs_after} - {t.target_id for t in tabs_before}
         new_tab_id = next(iter(new_tabs), None)
         download = meta.get("download", {}).get("path") if isinstance(meta.get("download"), dict) else None
@@ -267,8 +288,11 @@ def register(registry: ToolRegistry) -> None:
             parts.append(f"A new tab opened: {new_tab_id} (use browser.switch_tab to work in it).")
         if download:
             parts.append(f"Downloaded {download}.")
+        if meta.get("warning"):
+            parts.append(f"Note: {meta['warning']}.")
         return ToolOutcome(data={"url": info.url, "title": info.title, "url_changed": changed, "element": element,
-                                 "new_tab_id": new_tab_id, "download": download},
+                                 "new_tab_id": new_tab_id, "download": download,
+                                 "pending_navigation": info.pending_url},
                            backend=BACKEND, observation=_with_notice(att, " ".join(parts)))
 
     @registry.handler("browser.type")
@@ -283,8 +307,9 @@ def register(registry: ToolRegistry) -> None:
             value = await provider.type_text(node, text, clear, ctx.timeout_s(None, settings.action_timeout_s))
             info = before
             if args["press_enter"]:
+                probe = await provider.arm_action()
                 await provider.send_keys("Enter", ctx.timeout_s(None, settings.action_timeout_s))
-                info = await provider.settle(before, ctx.timeout_s(None, settings.navigation_timeout_s))
+                info = await provider.settle(probe, ctx.timeout_s(None, settings.navigation_timeout_s))
         expected_empty = clear and text == ""
         ok = value is not None and (value == "" if expected_empty else text in value)
         shown = MASK if sensitive and value else value
@@ -302,9 +327,10 @@ def register(registry: ToolRegistry) -> None:
         provider = await _provider(ctx)
         settings = provider.settings
         async with provider.attached(ctx.timeout_s(None, settings.launch_timeout_s), "browser.press_keys") as att:
-            before = await provider.page_info()
+            probe = await provider.arm_action()
+            before = probe.before
             await provider.send_keys(args["keys"], ctx.timeout_s(None, settings.action_timeout_s))
-            info = await provider.settle(before, ctx.timeout_s(None, settings.navigation_timeout_s))
+            info = await provider.settle(probe, ctx.timeout_s(None, settings.navigation_timeout_s))
         return ToolOutcome(data={"url": info.url, "title": info.title, "url_changed": info.url != before.url},
                            backend=BACKEND,
                            observation=_with_notice(att, f"Pressed {args['keys']!r}. {_page_line(info)}."))
@@ -416,9 +442,10 @@ def register(registry: ToolRegistry) -> None:
         provider = await _provider(ctx)
         settings = provider.settings
         async with provider.attached(ctx.timeout_s(None, settings.launch_timeout_s), "browser.go_back") as att:
-            before = await provider.page_info()
+            probe = await provider.arm_action()
+            before = probe.before
             await provider.go_back(ctx.timeout_s(None, settings.action_timeout_s))
-            info = await provider.settle(before, ctx.timeout_s(None, settings.navigation_timeout_s))
+            info = await provider.settle(probe, ctx.timeout_s(None, settings.navigation_timeout_s))
         changed = info.url != before.url
         return ToolOutcome(data={"url": info.url, "title": info.title, "url_changed": changed}, backend=BACKEND,
                            observation=_with_notice(att, "Went back. " + _page_line(info)
