@@ -1,4 +1,8 @@
 //! Windows Job Object with KILL_ON_JOB_CLOSE: child processes die with the owning process.
+//!
+//! BREAKAWAY_OK is set as well: applications the agent starts for the user (desktop.launch_app,
+//! AutoCAD, Chrome) are created with CREATE_BREAKAWAY_FROM_JOB and must outlive the agent. Helper
+//! processes started without that flag (PowerShell commands, the worker itself) still die with it.
 
 #[cfg(windows)]
 mod imp {
@@ -7,7 +11,7 @@ mod imp {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
 
@@ -28,7 +32,7 @@ mod imp {
                     return Err(io::Error::last_os_error());
                 }
                 let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
                 let ok = SetInformationJobObject(
                     handle,
                     JobObjectExtendedLimitInformation,

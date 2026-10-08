@@ -118,6 +118,28 @@ class DesktopSettings:
         )
 
 
+# CreateProcess fails with ERROR_ACCESS_DENIED when an enclosing job forbids CREATE_BREAKAWAY_FROM_JOB.
+_ERROR_ACCESS_DENIED = 5
+
+
+def _spawn_user_app(argv: list[str], cwd: Path) -> int:
+    """Start an application for the user so that it outlives the agent: detached, outside the worker's
+    kill-on-close job when the job permits it, and without inheriting the worker's handles."""
+    flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+
+    def spawn(extra: int) -> int:
+        return subprocess.Popen(argv, cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, creationflags=flags | extra, close_fds=True).pid
+
+    try:
+        return spawn(subprocess.CREATE_BREAKAWAY_FROM_JOB)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) != _ERROR_ACCESS_DENIED:
+            raise
+        logger.warning("job does not allow breakaway; %s will close when the agent exits", argv[0])
+        return spawn(0)
+
+
 def _is_com_error(exc: BaseException) -> bool:
     import _ctypes
 
@@ -205,14 +227,7 @@ class WindowsUseProvider(WindowsControlProvider):
         if executable is not None:
             resolved = str(executable)
             if executable.suffix.lower() in {".exe", ".com"}:
-                proc = subprocess.Popen(
-                    [str(executable), *arguments],
-                    cwd=str(executable.parent),
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
-                    close_fds=True,
-                )
-                pid = proc.pid
+                pid = _spawn_user_app([str(executable), *arguments], executable.parent)
                 expected_process = executable.name.lower()
             else:
                 win32api.ShellExecute(0, "open", str(executable), subprocess.list2cmdline(arguments) or None,
