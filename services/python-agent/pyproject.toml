@@ -13,11 +13,11 @@ dependencies = [
     "pillow>=11.0",
     "psutil>=6.0",
     "fuzzywuzzy>=0.18",
-    "python-levenshtein>=0.26",
     "markdownify>=0.13",
     "tabulate>=0.9",
     "requests>=2.32",
     # Worker infrastructure.
+    "rapidfuzz>=3.9",
     "lga-common",
     "jsonschema>=4.23",
     # Browser execution layer (pure CDP; Playwright not needed). Imported lazily by lga_worker.browser.

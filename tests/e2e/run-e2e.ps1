@@ -1,5 +1,7 @@
 # End-to-end acceptance runs of the real agent (Gemini planning + real desktop). See docs/operations.md.
 #   pwsh tests/e2e/run-e2e.ps1 -Test 1            # Notepad
+#   pwsh tests/e2e/run-e2e.ps1 -Test A1         # acceptance: Chrome + GitHub, then AutoCAD new drawing
+#   pwsh tests/e2e/run-e2e.ps1 -Test A2         # acceptance: AutoCAD circle r=100, saved
 #   pwsh tests/e2e/run-e2e.ps1 -Test all
 # Each test prepares its preconditions, runs `agent run`, then checks the outcome independently of the
 # agent's own verification (a second, external verification).
@@ -66,6 +68,23 @@ $tests = [ordered]@{
         Assert (Test-Path $target) "$target exists"
         Assert ((Get-Content $target -Raw).Trim() -eq 'resume test') 'file content is correct'
     }
+}
+
+$tests['A1'] = {
+    $code = Invoke-Agent 'Mở Chrome, tìm trang GitHub của Windows-Use, sau đó mở AutoCAD và tạo một bản vẽ mới.'
+    Assert ($code -eq 0) 'agent reported completion'
+    $titles = (Get-Process chrome -ErrorAction SilentlyContinue | Where-Object MainWindowTitle).MainWindowTitle -join ' | '
+    Assert ($titles -match 'Windows-Use') "a Chrome window shows the Windows-Use repository ($titles)"
+    $acad = Get-Process acad -ErrorAction SilentlyContinue | Where-Object MainWindowTitle | Select-Object -First 1
+    Assert ($null -ne $acad) 'AutoCAD is running after the agent exited'
+    Assert ($acad.MainWindowTitle -match 'Drawing\d+\.dwg') "AutoCAD shows a drawing ($($acad.MainWindowTitle))"
+}
+$tests['A2'] = {
+    $target = 'C:\temp\circle.dwg'
+    Remove-Item $target -ErrorAction SilentlyContinue
+    $code = Invoke-Agent "Mở AutoCAD, vẽ một hình tròn bán kính 100 và lưu bản vẽ vào $target"
+    Assert ($code -eq 0) 'agent reported completion'
+    Assert ((Test-Path $target) -and (Get-Item $target).Length -gt 0) "$target exists and is not empty"
 }
 
 $selected = if ($Test -eq 'all') { $tests.Keys } else { @($Test) }

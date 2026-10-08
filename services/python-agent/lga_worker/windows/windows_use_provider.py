@@ -29,7 +29,7 @@ from typing import Any
 import win32api
 import win32con
 import win32gui
-from fuzzywuzzy import fuzz, process
+from rapidfuzz import fuzz, process, utils
 from PIL import ImageGrab
 
 from lga_common.config import Config
@@ -122,10 +122,33 @@ class DesktopSettings:
 _ERROR_ACCESS_DENIED = 5
 
 
+_IMAGE_SUBSYSTEM_WINDOWS_CUI = 3
+_PE_SIGNATURE = b"PE\x00\x00"
+_PE_HEADER_OFFSET_POS = 0x3C
+_PE_SUBSYSTEM_OFFSET = 0x5C  # from the PE signature: 4 + 20 (COFF header) + 68 (optional header)
+
+
+def is_console_program(executable: Path) -> bool:
+    """True for console-subsystem executables (cmd, powershell, python), read from the PE header."""
+    with executable.open("rb") as fh:
+        header = fh.read(4096)
+    if header[:2] != b"MZ" or len(header) < _PE_HEADER_OFFSET_POS + 4:
+        return False
+    pe = int.from_bytes(header[_PE_HEADER_OFFSET_POS:_PE_HEADER_OFFSET_POS + 4], "little")
+    if header[pe:pe + 4] != _PE_SIGNATURE or len(header) < pe + _PE_SUBSYSTEM_OFFSET + 2:
+        return False
+    subsystem = int.from_bytes(header[pe + _PE_SUBSYSTEM_OFFSET:pe + _PE_SUBSYSTEM_OFFSET + 2], "little")
+    return subsystem == _IMAGE_SUBSYSTEM_WINDOWS_CUI
+
+
 def _spawn_user_app(argv: list[str], cwd: Path) -> int:
-    """Start an application for the user so that it outlives the agent: detached, outside the worker's
-    kill-on-close job when the job permits it, and without inheriting the worker's handles."""
-    flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    """Start an application for the user so that it outlives the agent: outside the worker's kill-on-close
+    job when the job permits it, and without inheriting the worker's handles. Console programs get their
+    own visible console window (DETACHED_PROCESS would make e.g. PowerShell exit at once); GUI programs
+    need no console."""
+    flags = subprocess.CREATE_NEW_PROCESS_GROUP
+    if is_console_program(Path(argv[0])):
+        flags |= subprocess.CREATE_NEW_CONSOLE
 
     def spawn(extra: int) -> int:
         return subprocess.Popen(argv, cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -210,7 +233,7 @@ class WindowsUseProvider(WindowsControlProvider):
         exact = lowered.get(target.lower())
         if exact:
             return exact, apps[exact]
-        best = process.extractOne(target, list(apps.keys()), scorer=fuzz.token_set_ratio,
+        best = process.extractOne(target, list(apps.keys()), scorer=fuzz.token_set_ratio, processor=utils.default_process,
                                   score_cutoff=START_APP_MATCH_THRESHOLD)
         if best is None:
             return None
