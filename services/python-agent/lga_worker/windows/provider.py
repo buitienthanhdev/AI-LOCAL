@@ -292,6 +292,9 @@ class WindowsControlProvider(ABC):
     def focus_element(self, element_id: str) -> UIElement: ...
 
     @abstractmethod
+    def describe_element(self, element_id: str) -> UIElement: ...
+
+    @abstractmethod
     def element_center(self, element_id: str) -> tuple[int, int]: ...
 
     @abstractmethod

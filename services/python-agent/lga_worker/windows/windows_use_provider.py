@@ -602,6 +602,9 @@ class WindowsUseProvider(WindowsControlProvider):
             element.element_id = entry.element_id
         return element
 
+    def describe_element(self, element_id: str) -> UIElement:
+        return self._describe(self._resolve(element_id))
+
     def element_center(self, element_id: str) -> tuple[int, int]:
         entry = self._resolve(element_id)
         r = entry.control.BoundingRectangle

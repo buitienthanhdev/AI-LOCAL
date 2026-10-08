@@ -1,0 +1,177 @@
+{
+  "category": "desktop",
+  "description": "Native Windows applications, windows, mouse, keyboard and UI Automation. Coordinates are physical screen pixels.",
+  "tools": [
+    {
+      "name": "desktop.list_windows",
+      "description": "List visible top-level windows (including dialogs) in Z order, foreground first.",
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["windows"], "properties": {"windows": {"type": "array", "items": {"$ref": "#/$defs/window"}}}},
+      "timeout_ms": 10000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "desktop.observe"
+    },
+    {
+      "name": "desktop.launch_app",
+      "description": "Start an application by executable name/path (e.g. 'notepad.exe', 'chrome'), App Paths registration, or Start-menu name (e.g. 'AutoCAD 2023'). Succeeds only when a window of the app appears; returns that window.",
+      "input_schema": {
+        "type": "object", "required": ["target"], "additionalProperties": false,
+        "properties": {
+          "target": {"type": "string", "minLength": 1, "description": "Executable name/path or Start-menu app name."},
+          "arguments": {"type": "array", "items": {"type": "string"}, "default": [], "description": "Command-line arguments (executables only)."},
+          "expect_title": {"type": "string", "description": "Only accept a window whose title contains this text (skips splash screens)."},
+          "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 300000}
+        }
+      },
+      "output_schema": {"type": "object", "required": ["window", "match_kind", "resolved_target"], "properties": {"pid": {"type": ["integer", "null"]}, "window": {"$ref": "#/$defs/window"}, "match_kind": {"enum": ["new_window", "existing_window"]}, "resolved_target": {"type": "string"}}},
+      "timeout_ms": 30000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": true,
+      "verification": "self", "policy_category": "desktop.app"
+    },
+    {
+      "name": "desktop.close_app",
+      "description": "Close a window politely (WM_CLOSE). Fails with details.blocking_dialog if the app shows a dialog such as 'Save changes?'. force=true terminates the whole process (unsaved work is lost).",
+      "input_schema": {"type": "object", "required": ["hwnd"], "additionalProperties": false, "properties": {"hwnd": {"type": "integer"}, "force": {"type": "boolean", "default": false}}},
+      "output_schema": {"type": "object", "required": ["closed"], "properties": {"closed": {"type": "boolean"}}},
+      "timeout_ms": 15000, "risk_level": "high", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "desktop.app"
+    },
+    {
+      "name": "desktop.focus_window",
+      "description": "Bring a window to the foreground (restores it if minimized).",
+      "input_schema": {"type": "object", "required": ["hwnd"], "additionalProperties": false, "properties": {"hwnd": {"type": "integer"}}},
+      "output_schema": {"type": "object", "required": ["window"], "properties": {"window": {"$ref": "#/$defs/window"}}},
+      "timeout_ms": 10000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "desktop.input"
+    },
+    {
+      "name": "desktop.wait_for_window",
+      "description": "Wait until a window matching the criteria exists (e.g. a dialog after clicking Save).",
+      "input_schema": {
+        "type": "object", "additionalProperties": false, "minProperties": 1,
+        "properties": {
+          "title_contains": {"type": "string"}, "process_name": {"type": "string"},
+          "timeout_ms": {"type": "integer", "minimum": 100, "maximum": 300000, "default": 10000}
+        }
+      },
+      "output_schema": {"type": "object", "required": ["window"], "properties": {"window": {"$ref": "#/$defs/window"}}},
+      "timeout_ms": 310000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "desktop.observe"
+    },
+    {
+      "name": "desktop.inspect_ui",
+      "description": "Read the interactive UI Automation elements of a window (default: foreground). Prefer this over screenshots. Returns element_ids usable by click/type/read/set_value.",
+      "input_schema": {"type": "object", "additionalProperties": false, "properties": {"hwnd": {"type": "integer"}, "max_elements": {"type": "integer", "minimum": 1, "maximum": 1000}}},
+      "output_schema": {"type": "object", "required": ["snapshot_id", "elements", "truncated"], "properties": {"snapshot_id": {"type": "integer"}, "window": {"anyOf": [{"$ref": "#/$defs/window"}, {"type": "null"}]}, "elements": {"type": "array", "items": {"$ref": "#/$defs/element"}}, "truncated": {"type": "boolean"}}},
+      "timeout_ms": 30000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "desktop.observe"
+    },
+    {
+      "name": "desktop.find_element",
+      "description": "Search all UI Automation elements of a window (including text and non-interactive ones). All given criteria must match. control_type examples: Button, Edit, Document, MenuItem, ListItem, CheckBox, ComboBox, Text.",
+      "input_schema": {
+        "type": "object", "additionalProperties": false, "minProperties": 1,
+        "properties": {
+          "hwnd": {"type": "integer"}, "name": {"type": "string"}, "name_contains": {"type": "string"},
+          "control_type": {"type": "string"}, "automation_id": {"type": "string"}, "class_name": {"type": "string"},
+          "include_offscreen": {"type": "boolean", "default": false},
+          "max_results": {"type": "integer", "minimum": 1, "maximum": 100, "default": 10}
+        }
+      },
+      "output_schema": {"type": "object", "required": ["elements"], "properties": {"elements": {"type": "array", "items": {"$ref": "#/$defs/element"}}}},
+      "timeout_ms": 30000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "desktop.observe"
+    },
+    {
+      "name": "desktop.read_element",
+      "description": "Read an element's current value, text content and toggle state.",
+      "input_schema": {"type": "object", "required": ["element_id"], "additionalProperties": false, "properties": {"element_id": {"type": "string"}}},
+      "output_schema": {"type": "object", "required": ["element"], "properties": {"element": {"$ref": "#/$defs/element"}, "value": {"type": ["string", "null"]}, "text": {"type": ["string", "null"]}, "toggle_state": {"type": ["string", "null"]}, "is_read_only": {"type": ["boolean", "null"]}}},
+      "timeout_ms": 15000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "desktop.observe"
+    },
+    {
+      "name": "desktop.set_value",
+      "description": "Set an editable element's value directly through UI Automation (no keystrokes). Verified by reading the value back.",
+      "input_schema": {"type": "object", "required": ["element_id", "value"], "additionalProperties": false, "properties": {"element_id": {"type": "string"}, "value": {"type": "string"}}},
+      "output_schema": {"type": "object", "required": ["value"], "properties": {"value": {"type": ["string", "null"]}}},
+      "timeout_ms": 15000, "risk_level": "medium", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "desktop.input"
+    },
+    {
+      "name": "desktop.click",
+      "description": "Click an element (by element_id, preferred) or a screen point. count=2 double-clicks.",
+      "input_schema": {
+        "type": "object", "additionalProperties": false,
+        "oneOf": [{"required": ["element_id"]}, {"required": ["x", "y"]}],
+        "properties": {
+          "element_id": {"type": "string"}, "x": {"type": "integer"}, "y": {"type": "integer"},
+          "button": {"enum": ["left", "right", "middle"], "default": "left"},
+          "count": {"type": "integer", "enum": [1, 2], "default": 1}
+        }
+      },
+      "output_schema": {"type": "object", "required": ["x", "y"], "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "element": {"$ref": "#/$defs/element"}}},
+      "timeout_ms": 15000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "observe", "policy_category": "desktop.input"
+    },
+    {
+      "name": "desktop.move_mouse",
+      "description": "Move the mouse pointer to a screen point (hover).",
+      "input_schema": {"type": "object", "required": ["x", "y"], "additionalProperties": false, "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}},
+      "output_schema": {"type": "object", "required": ["x", "y"], "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}},
+      "timeout_ms": 5000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "desktop.input"
+    },
+    {
+      "name": "desktop.drag",
+      "description": "Press the left button at start, move to end, release.",
+      "input_schema": {"type": "object", "required": ["start_x", "start_y", "end_x", "end_y"], "additionalProperties": false, "properties": {"start_x": {"type": "integer"}, "start_y": {"type": "integer"}, "end_x": {"type": "integer"}, "end_y": {"type": "integer"}, "duration_ms": {"type": "integer", "minimum": 50, "maximum": 10000, "default": 500}}},
+      "output_schema": {"type": "object", "properties": {}},
+      "timeout_ms": 20000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "observe", "policy_category": "desktop.input"
+    },
+    {
+      "name": "desktop.scroll",
+      "description": "Scroll the mouse wheel, optionally after moving to a point. amount is wheel notches.",
+      "input_schema": {"type": "object", "required": ["direction"], "additionalProperties": false, "properties": {"direction": {"enum": ["up", "down", "left", "right"]}, "amount": {"type": "integer", "minimum": 1, "maximum": 50, "default": 3}, "x": {"type": "integer"}, "y": {"type": "integer"}}},
+      "output_schema": {"type": "object", "properties": {}},
+      "timeout_ms": 10000, "risk_level": "low", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "observe", "policy_category": "desktop.input"
+    },
+    {
+      "name": "desktop.type",
+      "description": "Type text with the keyboard (Unicode, any IME). If element_id is given the element is focused first and, when it exposes a value, the typed text is verified. '\\n' presses Enter.",
+      "input_schema": {"type": "object", "required": ["text"], "additionalProperties": false, "properties": {"text": {"type": "string"}, "element_id": {"type": "string"}, "clear": {"type": "boolean", "default": false, "description": "Select all and delete before typing (needs element_id)."}, "press_enter": {"type": "boolean", "default": false}}},
+      "output_schema": {"type": "object", "required": ["typed_chars"], "properties": {"typed_chars": {"type": "integer"}, "value_after": {"type": ["string", "null"]}}},
+      "timeout_ms": 60000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "observe", "policy_category": "desktop.input"
+    },
+    {
+      "name": "desktop.press_key",
+      "description": "Press one key, optionally repeated. Names: enter, tab, esc, backspace, delete, up, down, left, right, home, end, pageup, pagedown, f1-f12, space, or a single character.",
+      "input_schema": {"type": "object", "required": ["key"], "additionalProperties": false, "properties": {"key": {"type": "string", "minLength": 1}, "repeat": {"type": "integer", "minimum": 1, "maximum": 100, "default": 1}}},
+      "output_schema": {"type": "object", "properties": {}},
+      "timeout_ms": 15000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "observe", "policy_category": "desktop.input"
+    },
+    {
+      "name": "desktop.hotkey",
+      "description": "Press a key combination, e.g. [\"ctrl\", \"s\"] or [\"alt\", \"f4\"]. Keys are pressed in order and released in reverse.",
+      "input_schema": {"type": "object", "required": ["keys"], "additionalProperties": false, "properties": {"keys": {"type": "array", "items": {"type": "string", "minLength": 1}, "minItems": 1, "maxItems": 4}}},
+      "output_schema": {"type": "object", "properties": {}},
+      "timeout_ms": 10000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "observe", "policy_category": "desktop.input"
+    },
+    {
+      "name": "desktop.screenshot",
+      "description": "Capture the screen, one window (hwnd) or a region to a PNG artifact. Use only when UI Automation cannot answer the question.",
+      "input_schema": {"type": "object", "additionalProperties": false, "properties": {"hwnd": {"type": "integer"}, "region": {"type": "object", "required": ["left", "top", "right", "bottom"], "properties": {"left": {"type": "integer"}, "top": {"type": "integer"}, "right": {"type": "integer"}, "bottom": {"type": "integer"}}}}},
+      "output_schema": {"type": "object", "required": ["path", "width", "height", "origin_x", "origin_y"], "properties": {"path": {"type": "string"}, "width": {"type": "integer"}, "height": {"type": "integer"}, "origin_x": {"type": "integer"}, "origin_y": {"type": "integer"}}},
+      "timeout_ms": 15000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "desktop.observe"
+    }
+  ],
+  "$defs": {
+    "rect": {"type": "object", "required": ["left", "top", "right", "bottom"], "properties": {"left": {"type": "integer"}, "top": {"type": "integer"}, "right": {"type": "integer"}, "bottom": {"type": "integer"}, "width": {"type": "integer"}, "height": {"type": "integer"}}},
+    "window": {"type": "object", "required": ["hwnd", "title", "pid", "process_name", "rect", "state", "is_foreground"], "properties": {"hwnd": {"type": "integer"}, "title": {"type": "string"}, "class_name": {"type": "string"}, "pid": {"type": "integer"}, "process_name": {"type": "string"}, "rect": {"$ref": "#/$defs/rect"}, "state": {"enum": ["normal", "minimized", "maximized"]}, "is_foreground": {"type": "boolean"}}},
+    "element": {"type": "object", "required": ["element_id", "name", "control_type", "rect", "center"], "properties": {"element_id": {"type": "string"}, "name": {"type": "string"}, "control_type": {"type": "string"}, "automation_id": {"type": "string"}, "class_name": {"type": "string"}, "rect": {"$ref": "#/$defs/rect"}, "center": {"type": "object", "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}}}, "window_hwnd": {"type": "integer"}, "window_title": {"type": "string"}, "is_enabled": {"type": "boolean"}, "is_offscreen": {"type": "boolean"}, "has_focus": {"type": "boolean"}, "value": {"type": ["string", "null"]}, "patterns": {"type": "array", "items": {"type": "string"}}}}
+  }
+}
