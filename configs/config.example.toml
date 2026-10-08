@@ -203,6 +203,20 @@ dxf_save_type = 65
 pdf_plot_device = "DWG To PDF.pc3"
 geometry_tolerance = 1e-6
 
+[knowledge]
+# Company Brain knowledge subsystem (RAG over company documents), reached over its local HTTP API.
+# The agent never runs Company Brain's own chat/agent loop — only its knowledge retrieval.
+base_url = "http://127.0.0.1:8765"
+# Start `python -m brain serve` automatically when the knowledge backend is not reachable.
+autostart = true
+# Python that runs Company Brain (its own environment; it targets Python 3.14).
+python = "python"
+# Repository root of Company Brain (where `python -m brain` runs).
+source_dir = ".."
+startup_timeout_ms = 60_000
+request_timeout_ms = 30_000
+search_limit = 10
+
 [memory]
 persistent_db = "memory/persistent.db"
 tasks_dir = "memory/tasks"
