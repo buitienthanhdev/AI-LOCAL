@@ -93,3 +93,21 @@ def test_prepare_downscales_to_pixel_budget(config: Config, tmp_path: Path) -> N
     assert gemini.screen.left == -1920 and gemini.screen.width == 1920
     tars = provider.prepare(shot, for_ui_tars=True)
     assert (tars.height, tars.width) == smart_resize(1080, 1920, max_pixels=int(config.get("vision.max_pixels")))
+
+
+def test_ui_tars_server_reachable_false_when_down() -> None:
+    from lga_worker.vision.backends import UiTarsGrounding
+    backend = UiTarsGrounding("http://127.0.0.1:9", "ui-tars-1.5-7b", 6000)  # nothing on port 9
+    assert backend.server_reachable() is False
+
+
+async def test_auto_backend_prefers_gemini_then_ui_tars(config: Config, monkeypatch) -> None:
+    from lga_worker.vision import provider as prov
+    from lga_worker.vision.backends import GeminiGrounding, UiTarsGrounding
+
+    vp = prov.VisionProvider(config, desktop=None)  # type: ignore[arg-type]
+    monkeypatch.setattr(vp, "_backend_name", "auto")
+    monkeypatch.setattr(vp, "_gemini_can_do_images", lambda: True)
+    assert isinstance(await vp.grounding_backend(), GeminiGrounding)
+    monkeypatch.setattr(vp, "_gemini_can_do_images", lambda: False)
+    assert isinstance(await vp.grounding_backend(), UiTarsGrounding)

@@ -67,6 +67,30 @@ Exit codes of `agent run` / `agent resume`:
 | 3 | waiting for the user (`task.ask_user` with no terminal) |
 | 130 | cancelled |
 
+## Popup (floating button)
+
+`pwsh scripts/start-widget.ps1` puts a small always-on-top **● Agent** button at the bottom-right of the
+screen (drag to move it). Click it to open a chat panel: type a task in Vietnamese or English, pick the
+mode, and watch each step, confirmations and questions inline. It drives the same agent CLI as everything
+else. It runs with `pythonw` (no console window).
+
+## Local vision (offline, no Google account)
+
+`pwsh scripts/start-vision-server.ps1` serves UI-TARS-1.5-7B for visual grounding on `127.0.0.1:11435`.
+With `[vision] backend = "auto"` (the default in `configs/config.toml`) the agent uses Gemini when a
+Google account that accepts images is signed in, and otherwise this local server. The model files live in
+`runtime/models/ui-tars/` (downloaded once). Grounding is accurate; on CPU it takes ~25 s per call, so a
+signed-in Gemini account is still the fast path. To accelerate the local model, serve it on the GPU with a
+CUDA-enabled llama.cpp build or vLLM and point `[vision] ui_tars_base_url` at it.
+
+## Vietnamese OCR
+
+Install once: `cd services/python-agent; uv sync --extra ocr --index-strategy unsafe-best-match` (adds
+EasyOCR + CPU PyTorch, Apache-2.0). Then `vision.ocr {"vietnamese": true}` reads Vietnamese diacritics; its
+model downloads on first use into `runtime/models/easyocr/`. Windows' built-in OCR still handles English and
+Latin text with no install. Note: real application text is read through UI Automation (perfect for
+Vietnamese, no OCR); OCR is only for pixels (images, canvas, games).
+
 ## Web UI
 
 `pwsh scripts/start-ui.ps1`, then open the printed URL (default `http://127.0.0.1:8791/`). The UI starts tasks through the

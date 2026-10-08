@@ -31,6 +31,11 @@ dependencies = [
     "winrt-windows-foundation-collections>=3.0",
 ]
 
+[project.optional-dependencies]
+# Local Vietnamese OCR (Apache-2.0, CPU). Heavy (PyTorch); install with:
+#   uv sync --extra ocr --index-strategy unsafe-best-match
+ocr = ["easyocr>=1.7.2", "torch>=2.2", "torchvision>=0.17"]
+
 [project.scripts]
 lga-worker = "lga_worker.__main__:main"
 
@@ -50,6 +55,8 @@ python-preference = "managed"
 [tool.uv.sources]
 lga-common = { path = "../lga-common", editable = true }
 windows-use = { git = "https://github.com/Jeomon/Windows-Use", rev = "582a5669e9251372beb63baf39dac453693ff0d8" }
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
 
 # Windows-Use declares 39 runtime dependencies (every LLM SDK, chat-bot SDKs, telemetry, datasets).
 # We only use its primitive layer, so its dependency metadata is overridden with exactly the
@@ -81,3 +88,11 @@ markers = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+torch = { index = "pytorch-cpu" }
+torchvision = { index = "pytorch-cpu" }
