@@ -170,6 +170,11 @@ fn extract_json_object(text: &str) -> Option<&str> {
     None
 }
 
+/// The first JSON object in a model reply, if any.
+pub fn extract_json_value(text: &str) -> Option<Value> {
+    extract_json_object(text).and_then(|raw| serde_json::from_str(raw).ok())
+}
+
 pub fn parse_reply(text: &str) -> Result<PlannerAction, String> {
     let raw = extract_json_object(text).ok_or_else(|| "the reply contains no JSON object".to_string())?;
     let value: Value = serde_json::from_str(raw).map_err(|e| format!("the reply is not valid JSON: {e}"))?;

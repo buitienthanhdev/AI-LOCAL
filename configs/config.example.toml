@@ -29,6 +29,9 @@ history_images = 2
 history_steps = 12
 # Language for messages to the user.
 language = "vi"
+# After the completion checks pass, ask an independent verifier (a separate LLM call) whether the evidence
+# really proves the goal. Catches checks that are too generic or contradicted by the actual data.
+verify_completion_with_llm = true
 
 [paths]
 state_dir = "runtime"
