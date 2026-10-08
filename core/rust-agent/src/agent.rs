@@ -241,6 +241,8 @@ impl<'a> TaskRunner<'a> {
 
     async fn run_loop(&mut self, record: &mut TaskRecord, started: Instant, budget: Duration) -> Result<()> {
         let max_steps = self.rt.config.agent.max_steps;
+        // Shifted forward by time spent paused, so pauses do not consume the task's time budget.
+        let mut started = started;
         loop {
             if self.cancel.is_cancelled() {
                 return self.finish(record, TaskStatus::Cancelled, "cancelled by the user");
@@ -258,6 +260,18 @@ impl<'a> TaskRunner<'a> {
             if record.status != TaskStatus::Planning {
                 self.set_status(record, TaskStatus::Planning, None)?;
             }
+            if self.cancel.is_paused() {
+                self.set_status(record, TaskStatus::Paused, Some("paused by the user"))?;
+                let paused_at = Instant::now();
+                while self.cancel.is_paused() && !self.cancel.is_cancelled() {
+                    tokio::time::sleep(crate::cancel::POLL_INTERVAL).await;
+                }
+                if self.cancel.is_cancelled() {
+                    return self.finish(record, TaskStatus::Cancelled, "cancelled while paused");
+                }
+                started += paused_at.elapsed();
+                self.set_status(record, TaskStatus::Planning, Some("unpaused"))?;
+            }
 
             let Some(action) = self.plan_next(record).await? else { continue };
             if let Some(plan) = &action.plan {
@@ -266,6 +280,13 @@ impl<'a> TaskRunner<'a> {
                 self.ui.event(RunEvent::Plan(&record.plan));
             }
             let (_, step_id) = record.next_step_id();
+            self.audit.record(AuditEvent {
+                kind: "step_started",
+                step_id: Some(step_id.clone()),
+                tool: Some(action.tool.clone()),
+                detail: json!({"thought": action.thought, "args": action.args}),
+                ..Default::default()
+            })?;
             self.ui.event(RunEvent::Thinking { step_id: &step_id, thought: &action.thought, tool: &action.tool, args: &action.args });
 
             match action.tool.as_str() {
