@@ -37,7 +37,7 @@ class InFlight:
 
 # Contract tools the Rust core executes itself (core/rust-agent/src/native); the worker never sees them.
 CORE_NATIVE_TOOLS = {"shell.exec", "filesystem.read", "filesystem.write", "filesystem.list", "filesystem.stat",
-                     "system.environment"}
+                     "system.environment", "system.open"}
 
 
 def build_registry(tools_dir) -> ToolRegistry:
@@ -163,13 +163,13 @@ class Worker:
         await self._services.close()
 
 
-def _stdin_reader(loop: asyncio.AbstractEventLoop, queue: asyncio.Queue[bytes | None]) -> None:
-    for line in sys.stdin.buffer:
+def _stdin_reader(protocol_in: BinaryIO, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue[bytes | None]) -> None:
+    for line in protocol_in:
         loop.call_soon_threadsafe(queue.put_nowait, line)
     loop.call_soon_threadsafe(queue.put_nowait, None)
 
 
-async def _main(protocol_out: BinaryIO) -> None:
+async def _main(protocol_in: BinaryIO, protocol_out: BinaryIO) -> None:
     config = load_config()
     redactor = Redactor(config.get("observability.redact_env"))
     setup_logging("worker", config.path("paths.logs_dir"), str(config.get("observability.log_level")), redactor)
@@ -179,16 +179,30 @@ async def _main(protocol_out: BinaryIO) -> None:
         logger.warning("tools in the contract without a handler in this worker: %s", ", ".join(unbound))
     worker = Worker(registry, Services(config), protocol_out, redactor)
     queue: asyncio.Queue[bytes | None] = asyncio.Queue()
-    threading.Thread(target=_stdin_reader, args=(asyncio.get_running_loop(), queue), daemon=True,
+    threading.Thread(target=_stdin_reader, args=(protocol_in, asyncio.get_running_loop(), queue), daemon=True,
                      name="stdin-reader").start()
     await worker.run(queue)
 
 
 def run() -> None:
+    # Diagnostics for stalls: LGA_DUMP_STACKS=<seconds> writes every thread's stack to stderr periodically.
+    if os.environ.get("LGA_DUMP_STACKS", "").isdigit():
+        import faulthandler
+
+        faulthandler.dump_traceback_later(int(os.environ["LGA_DUMP_STACKS"]), repeat=True, file=sys.stderr)
     protocol_out = os.fdopen(os.dup(sys.stdout.fileno()), "wb", buffering=0)
     sys.stdout = sys.stderr  # nothing but protocol messages may reach the real stdout
+    # The protocol is read from a private duplicate of stdin, and stdin itself is pointed at NUL. On Windows a
+    # thread blocked in ReadFile on a synchronous pipe makes every other call on that pipe's handle wait for
+    # the read to finish; native libraries query the standard handles while they load (numpy/OpenBLAS did,
+    # inside browser-use), which froze the event loop until the core happened to send the next message.
+    protocol_in = os.fdopen(os.dup(sys.stdin.fileno()), "rb", buffering=0)
+    null_fd = os.open(os.devnull, os.O_RDONLY)
+    os.dup2(null_fd, 0)  # also updates the process's STD_INPUT_HANDLE
+    os.close(null_fd)
+    sys.stdin = open(os.devnull, encoding="utf-8")  # noqa: SIM115 - lives for the whole process
     try:
-        asyncio.run(_main(protocol_out))
+        asyncio.run(_main(protocol_in, protocol_out))
     except ConfigError as exc:
         print(f"worker configuration error: {exc}", file=sys.stderr)
         sys.exit(2)

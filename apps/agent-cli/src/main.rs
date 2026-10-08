@@ -42,6 +42,9 @@ enum Command {
         /// Use this task id instead of generating one (lets a front-end know the id in advance).
         #[arg(long)]
         task_id: Option<String>,
+        /// What came before in the conversation (the request this one follows up on and its result).
+        #[arg(long)]
+        context: Option<String>,
     },
     /// Continue a stopped, failed or interrupted task from its saved state.
     Resume {
@@ -50,6 +53,9 @@ enum Command {
         yes: bool,
         #[arg(long)]
         ui_channel: bool,
+        /// The user's answer to the question the task stopped on.
+        #[arg(long)]
+        answer: Option<String>,
     },
     /// Pause a running task before its next step.
     Pause { task_id: String },
@@ -254,7 +260,7 @@ async fn main_inner() -> Result<ExitCode> {
     let cli = Cli::parse();
     let config = Config::load()?;
     match cli.command {
-        Command::Run { task, mode, yes, ui_channel, task_id } => {
+        Command::Run { task, mode, yes, ui_channel, task_id, context } => {
             let mode = match mode {
                 Some(m) => ExecutionMode::parse(&m)?,
                 None => config.agent.mode,
@@ -267,7 +273,10 @@ async fn main_inner() -> Result<ExitCode> {
             if store(&config).load(&task_id).is_ok() {
                 bail!("task {task_id} already exists; use `agent resume {task_id}`");
             }
-            let record = TaskRecord::new(task_id, task, mode);
+            let mut record = TaskRecord::new(task_id, task, mode);
+            if let Some(context) = context.filter(|c| !c.trim().is_empty()) {
+                record.conversation.push(format!("This request follows up on an earlier one. {context}"));
+            }
             run_task(config, record, yes, ui_channel).await
         }
         Command::Pause { task_id } => {
@@ -284,12 +293,21 @@ async fn main_inner() -> Result<ExitCode> {
             println!("{task_id} may continue.");
             Ok(ExitCode::SUCCESS)
         }
-        Command::Resume { task_id, yes, ui_channel } => {
+        Command::Resume { task_id, yes, ui_channel, answer } => {
             let (mut record, source) = store(&config).load(&task_id)?;
             match source {
                 LoadSource::Primary => {}
                 LoadSource::Backup => println!("   ! state file was unreadable; resumed from its backup copy"),
                 LoadSource::AuditLog => println!("   ! state file and backup were unreadable; task rebuilt from the audit log"),
+            }
+            if let Some(answer) = answer.filter(|a| !a.trim().is_empty()) {
+                match record.pending_question.take() {
+                    Some(question) => {
+                        record.conversation.push(format!("You asked the user: {question}"));
+                        record.conversation.push(format!("The user answered: {answer}"));
+                    }
+                    None => record.conversation.push(format!("The user added: {answer}")),
+                }
             }
             record.resume()?;
             println!("Resuming {} at step {} ({})", record.task_id, record.steps.len() + 1, record.goal);

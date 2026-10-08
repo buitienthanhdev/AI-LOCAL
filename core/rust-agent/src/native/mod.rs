@@ -21,7 +21,10 @@ use crate::config::Config;
 use crate::error::{ErrorCode, ToolErrorInfo};
 use crate::worker::{Metrics, ToolCall, ToolResponse, ToolResult, VerificationInfo};
 
-pub const TOOLS: [&str; 6] = ["shell.exec", "filesystem.read", "filesystem.write", "filesystem.list", "filesystem.stat", "system.environment"];
+pub const TOOLS: [&str; 7] =
+    ["shell.exec", "filesystem.read", "filesystem.write", "filesystem.list", "filesystem.stat", "system.environment", "system.open"];
+/// Extensions `system.open` refuses: opening them would run a program (desktop.launch_app does that).
+const RUNNABLE_EXTENSIONS: [&str; 14] = ["exe", "com", "bat", "cmd", "ps1", "vbs", "vbe", "js", "jse", "wsf", "msi", "msc", "scr", "lnk"];
 const STAT_HASH_MAX_BYTES: u64 = 256 * 1024 * 1024;
 const OUTPUT_TAIL_CHARS: usize = 4000;
 
@@ -231,6 +234,32 @@ impl NativeTools {
                 let shell = shell::resolve_powershell(&self.shell.executable);
                 let (data, observation) = blocking(move || Ok(env::environment(&chrome, &prog_id, shell.as_deref()))).await?;
                 Ok(Outcome { data, checks: vec![], artifacts: vec![], observation, backend: "registry" })
+            }
+            "system.open" => {
+                let raw = str_arg(args, "target")?.trim().to_string();
+                let lowered = raw.to_ascii_lowercase();
+                let (target, kind) = if lowered.starts_with("http://") || lowered.starts_with("https://") {
+                    (raw.clone(), "url")
+                } else {
+                    let path = fs::absolute_path(&raw)?;
+                    if !path.exists() {
+                        return Err(fs::tool_error(ErrorCode::NotFound, format!("not found: {}", path.display())));
+                    }
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+                    if path.is_file() && RUNNABLE_EXTENSIONS.contains(&ext.as_str()) {
+                        return Err(fs::tool_error(ErrorCode::InvalidArgument, format!("{} is a program; use desktop.launch_app", path.display())));
+                    }
+                    (path.display().to_string(), if path.is_dir() { "folder" } else { "file" })
+                };
+                let opened = target.clone();
+                blocking(move || env::shell_open(&opened).map_err(|e| fs::tool_error(ErrorCode::ExecutionFailed, e.to_string()))).await?;
+                Ok(Outcome {
+                    observation: format!("Opened {target} with the user's default {}.", if kind == "url" { "browser" } else { "application" }),
+                    data: json!({"target": target, "kind": kind}),
+                    checks: vec![],
+                    artifacts: vec![],
+                    backend: "shell",
+                })
             }
             other => Err(fs::tool_error(ErrorCode::UnknownTool, format!("unknown or unavailable tool {other:?}"))),
         }

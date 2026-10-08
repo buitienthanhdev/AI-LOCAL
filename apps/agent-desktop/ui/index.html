@@ -126,6 +126,10 @@
 
   #toast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 10px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 80vw; }
   #toast.show { opacity: .95; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; place-items: center; z-index: 20; padding: 16px; }
+  .modal.open { display: grid; }
+  .modal .sheet { max-width: 520px; width: 100%; max-height: 90vh; overflow: auto; }
+  .modal a { color: var(--accent); }
   #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: none; place-items: center; z-index: 10; cursor: zoom-out; }
   #lightbox img { max-width: 95vw; max-height: 95vh; border-radius: 8px; }
 
@@ -146,9 +150,10 @@
   <input class="search" id="search" placeholder="Tìm trong lịch sử…">
   <div id="history"></div>
   <div class="health" id="health" title="Bấm để kiểm tra lại">
-    <div><span class="dot" id="h-gateway"></span>Gemini (bộ não)</div>
+    <div id="h-brains"><span class="dot" id="h-gateway"></span>Bộ não AI</div>
     <div><span class="dot" id="h-knowledge"></span>Tri thức công ty</div>
     <div><span class="dot" id="h-vision"></span>Thị giác cục bộ <span class="small">(tùy chọn)</span></div>
+    <button class="btn" id="settingsBtn" style="margin-top:6px;font-size:12.5px">⚙ Cài đặt bộ não AI</button>
   </div>
 </aside>
 <main>
@@ -170,6 +175,24 @@
   </div>
 </main>
 <div id="toast"></div>
+<div id="settings" class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+  <div class="card sheet">
+    <h3 id="settingsTitle" style="margin:0 0 8px">⚙ Bộ não AI</h3>
+    <div id="brainList" class="small" style="display:grid;gap:4px;margin-bottom:12px"></div>
+    <p class="small" style="margin:0 0 8px">Trợ lý dùng lần lượt: <b>Gemini API</b> (nếu có khóa) → <b>Gemini Web</b> (tài khoản Google đã dán cookie) → <b>AI trên máy</b> (Ollama, chậm khi GPU đang bận). Gemini Web hay bị Google tạm chặn khi dùng nhiều; một khóa <b>Gemini API miễn phí</b> giúp trợ lý nhanh và ổn định hơn hẳn.</p>
+    <ol class="small" style="margin:0 0 10px;padding-left:18px">
+      <li>Mở <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a>, đăng nhập Google, bấm <b>Create API key</b>.</li>
+      <li>Dán khóa (bắt đầu bằng <code>AIza…</code>) vào ô dưới rồi bấm Lưu. Khóa chỉ lưu trên máy này.</li>
+    </ol>
+    <input id="apiKey" type="password" autocomplete="off" placeholder="Dán khóa Gemini API…" style="width:100%;padding:8px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel);color:var(--text);font:inherit">
+    <div id="apiKeyState" class="small muted" style="margin-top:6px"></div>
+    <div class="actions">
+      <button class="btn primary" id="saveKey">Lưu</button>
+      <button class="btn danger" id="removeKey">Xóa khóa</button>
+      <button class="btn" id="closeSettings" style="margin-left:auto">Đóng</button>
+    </div>
+  </div>
+</div>
 <div id="lightbox"><img alt=""></div>
 <script>
 "use strict";
@@ -209,6 +232,7 @@ const IDEAS = [
   ["👁️", "Xem màn hình", "Chụp màn hình và mô tả những gì đang hiển thị"],
 ];
 
+let currentData = null;
 let selected = null, events = [], cursor = 0, sig = {}, tasks = [], mode = "normal", openDetails = new Set();
 
 function el(tag, attrs = {}, ...children) {
@@ -274,12 +298,58 @@ async function refreshHealth() {
   $("health").style.opacity = .6;
   try {
     const s = await api("/api/status");
-    for (const k of ["gateway", "knowledge"]) $(`h-${k}`).className = `dot ${s[k] ? "ok" : "bad"}`;
+    lastBrains = s.brains || [];
+    const usable = lastBrains.filter(b => b.state === "ready" && b.breaker !== "open");
+    const gemini = usable.find(b => !b.name.startsWith("local"));
+    $("h-gateway").className = `dot ${!s.gateway ? "bad" : gemini ? "ok" : usable.length ? "warn" : "bad"}`;
+    $("h-brains").lastChild.textContent = !s.gateway ? "Bộ não AI: chưa chạy" : gemini ? `Bộ não AI: ${BRAIN_NAMES[gemini.name] || gemini.name}`
+      : usable.length ? "Bộ não AI: chỉ còn AI trên máy (chậm)" : "Bộ não AI: không dùng được";
+    drawBrains();
+    $("h-knowledge").className = `dot ${s.knowledge ? "ok" : "bad"}`;
     $("h-vision").className = `dot ${s.vision ? "ok" : ""}`;
     if (!refreshHealth.modeSet) { refreshHealth.modeSet = true; let saved = null; try { saved = localStorage.getItem("lga.mode.v2"); } catch {} setMode(saved || s.default_mode || "normal", false); }
   } catch { /* the next tick retries */ }
   $("health").style.opacity = 1;
 }
+
+/* ---------- Brain settings ---------- */
+const BRAIN_NAMES = { api: "Gemini API", primary: "Gemini Web", fallback: "Gemini Web (dự phòng)", local_server: "AI trên máy (llama.cpp)", local: "AI trên máy (Ollama)" };
+let lastBrains = [];
+function brainState(b) {
+  if (b.state === "ready" && b.breaker !== "open") return ["ok", "sẵn sàng"];
+  if (/temporarily blocking|sorry/i.test(b.detail || "")) return ["bad", "Google đang tạm chặn"];
+  if (b.breaker === "open") return ["warn", "tạm nghỉ sau lỗi, tự thử lại"];
+  if (b.name === "fallback" && b.state === "degraded") return ["", "chưa đăng nhập (không bắt buộc)"];
+  return ["bad", b.detail || b.state];
+}
+function drawBrains() {
+  $("brainList").replaceChildren(...(lastBrains.length ? lastBrains.map(b => {
+    const [cls, text] = brainState(b);
+    return el("div", { style: "display:flex;gap:8px;align-items:center" }, el("span", { class: `dot ${cls}`, style: "margin-top:0" }),
+      el("b", {}, BRAIN_NAMES[b.name] || b.name), el("span", { class: "muted" }, text));
+  }) : [el("div", { class: "muted" }, "Gateway chưa chạy — đang khởi động…")]));
+}
+async function openSettings() {
+  $("settings").classList.add("open"); drawBrains(); $("apiKey").value = "";
+  try {
+    const s = await api("/api/settings");
+    $("apiKeyState").textContent = s.gemini_api_key_set ? "✓ Đã có khóa Gemini API (dán khóa mới để thay)." : "Chưa có khóa Gemini API.";
+  } catch (e) { $("apiKeyState").textContent = e.message; }
+  $("apiKey").focus();
+}
+async function saveKey(value) {
+  try {
+    await api("/api/settings", { gemini_api_key: value });
+    toast(value ? "Đã lưu khóa. Đang khởi động lại bộ não AI…" : "Đã xóa khóa.");
+    $("settings").classList.remove("open");
+    setTimeout(refreshHealth, 12000);
+  } catch (e) { toast(e.message); }
+}
+$("settingsBtn").onclick = e => { e.stopPropagation(); openSettings(); };
+$("closeSettings").onclick = () => $("settings").classList.remove("open");
+$("saveKey").onclick = () => { const v = $("apiKey").value.trim(); if (v) saveKey(v); else toast("Hãy dán khóa trước"); };
+$("removeKey").onclick = () => saveKey("");
+$("settings").onclick = e => { if (e.target.id === "settings") $("settings").classList.remove("open"); };
 
 /* ---------- Composer ---------- */
 function setMode(m, remember = true) {
@@ -288,22 +358,74 @@ function setMode(m, remember = true) {
   for (const b of $("modes").children) b.classList.toggle("on", b.dataset.mode === m);
 }
 function grow() { const t = $("input"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 220) + "px"; }
+/**
+ * The composer continues the conversation that is on screen:
+ * - the assistant asked something -> the text is the answer;
+ * - a finished task is open -> a follow-up request that knows what happened before;
+ * - nothing open ("Việc mới") -> a fresh request.
+ */
 async function send(text) {
   text = (text ?? $("input").value).trim();
   if (!text) return;
+  const data = selected && currentData && currentData.task.task_id === selected ? currentData : null;
+  const st = data ? data.task.status : null;
+  const clear = () => { $("input").value = ""; grow(); };
   $("sendBtn").disabled = true;
   try {
-    const { task_id } = await api("/api/tasks", { task: text, mode });
-    $("input").value = ""; grow();
-    select(task_id, text);
-    refreshHistory();
+    if (data && data.pending_request && data.pending_request.kind === "ask") {
+      await respond({ answer: text }); clear();
+    } else if (data && st === "needs_user") {
+      await api(`/api/tasks/${selected}/resume`, { answer: text }); clear(); sig = {}; toast("Đã gửi câu trả lời"); poll();
+    } else if (data && !TERMINAL.includes(st) && !data.interrupted) {
+      toast("Trợ lý đang làm việc này. Đợi xong hoặc bấm ■ Dừng rồi gửi yêu cầu mới.");
+    } else {
+      const result = data ? (data.task.final_summary || reasonText(data.task.failure_reason) || STATUS[st]) : "";
+      const context = data ? `Yêu cầu trước: ${data.task.goal}
+Kết quả: ${String(result).slice(0, 1500)}` : "";
+      const { task_id } = await api("/api/tasks", { task: text, mode, context });
+      clear();
+      select(task_id, text);
+      refreshHistory();
+    }
   } catch (e) { toast(e.message); }
   $("sendBtn").disabled = false;
 }
 
+/** Plain-language reason for a failure; the raw text stays in the technical details. */
+function reasonText(reason) {
+  if (!reason) return "";
+  const r = String(reason);
+  if (/planner unavailable|no LLM backend|no Gemini backend|LLM unavailable/i.test(r))
+    return "Bộ não AI không phản hồi: Gemini đang bị Google tạm chặn hoặc mất kết nối, và AI dự phòng trên máy cũng không trả lời được. Hãy thử lại sau ít phút.";
+  if (/consecutive failed steps/i.test(r)) return "Đã thử nhiều cách liên tiếp nhưng đều không thành công (xem Chi tiết kỹ thuật).";
+  if (/time budget/i.test(r)) return "Hết thời gian cho phép của một việc.";
+  if (/step budget/i.test(r)) return "Việc này cần quá nhiều bước; hãy chia nhỏ yêu cầu.";
+  if (/cancelled/i.test(r)) return "Bạn đã dừng việc này.";
+  if (/worker failed/i.test(r)) return "Bộ phận điều khiển máy gặp lỗi nhiều lần; hãy thử lại.";
+  return r;
+}
+
+/** Which model answered last ("Gemini" or the local fallback). */
+function brainName() {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const p = events[i].kind === "llm" && events[i].provider;
+    if (p) { const name = p.split(":").pop(); return BRAIN_NAMES[name] || name; }
+  }
+  return null;
+}
+
+function updateComposer(data) {
+  const input = $("input");
+  const st = data ? data.task.status : null;
+  input.placeholder = !data ? "Bạn cần tôi làm gì? Ví dụ: Mở Excel và tạo bảng chi phí tháng 10"
+    : (data.pending_request && data.pending_request.kind === "ask") || st === "needs_user" ? "Trả lời câu hỏi của trợ lý…"
+    : TERMINAL.includes(st) || data.interrupted ? "Yêu cầu tiếp theo (trợ lý nhớ việc vừa rồi)…  · ＋ Việc mới để bắt đầu lại"
+    : "Trợ lý đang làm việc…";
+}
+
 /* ---------- Views ---------- */
 function showWelcome() {
-  selected = null; drawHistory();
+  selected = null; currentData = null; updateComposer(null); drawHistory();
   $("view").replaceChildren(el("div", { class: "hello" },
     el("div", { class: "logo" }), el("h1", {}, "Bạn cần tôi làm gì?"),
     el("p", {}, "Tôi điều khiển máy tính này giúp bạn: Windows, Chrome, AutoCAD, tệp tin, PowerShell — và tra cứu tài liệu công ty. Mỗi bước đều được kiểm tra lại."),
@@ -361,15 +483,15 @@ function latestShot(task) {
 
 function render(data) {
   const task = data.task, pending = data.pending_request, st = task.status;
-  const done = TERMINAL.includes(st);
+  const done = TERMINAL.includes(st) || data.interrupted;
   $("v-goal").textContent = task.goal;
 
-  region("v-ctl", [st, data.pause_requested], () => [
+  region("v-ctl", [st, data.pause_requested, data.interrupted], () => [
     el("span", { class: "muted small", style: "margin-right:auto" }, `${when(task.created_at)} · ${modeName(task.mode)}`),
     !done && !data.pause_requested && el("button", { class: "btn", onclick: () => control("pause") }, "⏸ Tạm dừng"),
     !done && data.pause_requested && el("button", { class: "btn", onclick: () => control("unpause") }, "▶ Tiếp tục"),
     !done && el("button", { class: "btn danger", onclick: () => control("cancel") }, "■ Dừng"),
-    st !== "completed" && (done || st === "needs_user") && el("button", { class: "btn", onclick: () => control("resume") }, "↻ Chạy lại"),
+    st !== "completed" && (done || st === "needs_user") && el("button", { class: "btn", onclick: () => control("resume") }, data.interrupted ? "↻ Chạy tiếp" : "↻ Chạy lại"),
     done && el("button", { class: "btn", onclick: () => { $("input").value = task.goal; grow(); $("input").focus(); } }, "✎ Sửa & gửi lại"),
   ]);
 
@@ -393,26 +515,30 @@ function render(data) {
   const started = events.filter(e => e.kind === "step_started");
   const finished = new Set(task.steps.map(s => s.step_id));
   const current = started.length && !finished.has(started[started.length - 1].step_id) ? started[started.length - 1] : null;
-  region("v-live", [st, current && current.step_id, task.plan, task.steps.length, done], () => {
+  region("v-live", [st, current && current.step_id, task.plan, task.steps.length, done, brainName(), !!pending, task.pending_question], () => {
     if (done) return null;
     const what = current ? friendly(current.tool) : (STATUS[st] || st);
     const thought = current && current.detail && current.detail.thought;
+    const brain = brainName();
     return el("div", { class: "card" },
       el("div", { class: "live" }, ["paused", "needs_user"].includes(st) ? el("span", {}, "⏸") : el("div", { class: "spin" }),
-        el("span", { class: "what" }, what), el("span", { class: "muted small" }, `· bước ${task.steps.length + (current ? 1 : 0)}`)),
+        el("span", { class: "what" }, st === "needs_user" && !pending ? "Đang chờ bạn trả lời (gõ vào ô bên dưới)" : what),
+        el("span", { class: "muted small" }, `· bước ${task.steps.length + (current ? 1 : 0)}${brain ? ` · ${brain}` : ""}`)),
+      st === "needs_user" && task.pending_question && !pending ? el("div", { style: "margin-top:6px" }, "💬 ", task.pending_question) : null,
       thought ? el("div", { class: "muted small", style: "margin-top:4px" }, thought) : null,
       task.plan && task.plan.length ? el("ul", { class: "plan" }, task.plan.map(p => el("li", {}, p))) : null);
   });
 
-  region("v-result", [st, task.final_summary, task.failure_reason, task.artifacts, task.escalation, task.updated_at && done], () => {
+  region("v-result", [st, task.final_summary, task.failure_reason, task.artifacts, task.escalation, task.updated_at && done, data.interrupted], () => {
     if (!done && !task.escalation) return null;
     const files = [...new Set(task.artifacts || [])].filter(a => !/\.png$/i.test(a));
     const kind = st === "completed" ? "ok" : st === "failed" ? "bad" : "warn";
-    const head = { ok: "✓ Hoàn thành", bad: "✗ Chưa làm được", warn: "■ Đã dừng" }[kind];
+    const head = data.interrupted ? "⚠ Bị gián đoạn (trợ lý đã tắt giữa chừng) — bấm ↻ Chạy tiếp"
+      : { ok: "✓ Hoàn thành", bad: "✗ Chưa làm được", warn: "■ Đã dừng" }[kind];
     return el("div", { class: `card result ${kind}` },
       el("h3", {}, head, el("span", { class: "muted small", style: "font-weight:400" }, `${duration(task.created_at, task.updated_at)} · ${task.steps.length} bước`)),
       task.final_summary ? el("div", { class: "txt" }, linkify(task.final_summary)) : null,
-      task.failure_reason ? el("div", { class: "txt" }, "Lý do: ", task.failure_reason) : null,
+      task.failure_reason && !task.final_summary ? el("div", { class: "txt" }, reasonText(task.failure_reason)) : null,
       task.escalation ? el("div", { class: "txt", style: "margin-top:6px" }, "⚠ Việc này cần quyền Administrator. Trợ lý không tự vượt UAC — hãy tự chạy với quyền quản trị nếu bạn đồng ý.") : null,
       files.length ? el("div", { class: "files" }, files.map(f => el("button", { class: "chip", title: `Mở thư mục chứa ${f}`, onclick: () => reveal(f) }, "📄", el("span", {}, fileName(f))))) : null);
   });
@@ -449,6 +575,7 @@ async function poll() {
     const fresh = await api(`/api/tasks/${id}/events?after=${cursor}`);
     if (id !== selected) return;
     events.push(...fresh.events); cursor = fresh.next;
+    currentData = data; updateComposer(data);
     const sc = $("scroll"), atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 60;
     render(data);
     if (atBottom) sc.scrollTop = sc.scrollHeight;
@@ -466,7 +593,7 @@ $("sendBtn").onclick = () => send();
 $("input").addEventListener("input", grow);
 $("input").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
 for (const b of $("modes").children) b.onclick = () => setMode(b.dataset.mode);
-document.addEventListener("keydown", e => { if (e.key === "Escape") $("lightbox").style.display = "none"; if (e.ctrlKey && e.key.toLowerCase() === "n") { e.preventDefault(); showWelcome(); } });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { $("lightbox").style.display = "none"; $("settings").classList.remove("open"); } if (e.ctrlKey && e.key.toLowerCase() === "n") { e.preventDefault(); showWelcome(); } });
 
 setMode("normal", false);
 const linked = location.hash.match(/^#task=([A-Za-z0-9-]+)$/);

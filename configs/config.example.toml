@@ -14,7 +14,7 @@
 # Execution mode: "normal" | "trusted" | "full_access". See docs/security.md.
 mode = "normal"
 # Hard cap on planner iterations per task.
-max_steps = 40
+max_steps = 80
 # A task fails after this many consecutive failed steps.
 max_consecutive_failures = 4
 # The same tool call with identical arguments may be repeated at most this many times in a row.
@@ -108,6 +108,8 @@ api_key_secret = "LGA_PRIMARY_API_KEY"
 admin_token_secret = "LGA_PRIMARY_ADMIN_TOKEN"
 default_model = "gemini-3.6-flash"
 startup_timeout_ms = 30_000
+# One attempt never takes longer than this, so a hanging Gemini Web call still fails over in time.
+attempt_timeout_ms = 75_000
 
 [gateway.fallback]
 kind = "webai_to_api"
@@ -119,6 +121,32 @@ work_dir = "runtime/gateway/webai-to-api"
 # Empty: use the first model the backend reports.
 default_model = ""
 startup_timeout_ms = 60_000
+attempt_timeout_ms = 75_000
+
+[gateway.api]
+# Official Gemini API (optional, recommended): paste a free key from https://aistudio.google.com/apikey in the
+# chat window's settings (stored as LGA_GEMINI_API_KEY in .env, git-ignored). When a key exists this is
+# tried first; Gemini Web and the local model stay as fallbacks.
+enabled = true
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+model = "auto"
+api_key_secret = "LGA_GEMINI_API_KEY"
+attempt_timeout_ms = 60_000
+
+[gateway.local_server]
+# Optional local OpenAI-compatible server you already run (llama.cpp llama-server, LM Studio), e.g.
+# "http://127.0.0.1:8081". Tried before Ollama. Empty = not used.
+base_url = ""
+model = "auto"
+
+[gateway.local]
+# Last-resort brain: a local model served by Ollama, used when both Gemini Web backends cannot answer
+# (Gemini down, Google temporarily blocking the account). gemma4:12b is shared with Company Brain, so it
+# usually costs no extra VRAM; num_ctx matches Company Brain's to avoid model reloads.
+enabled = true
+base_url = "http://127.0.0.1:11434"
+model = "gemma4:12b"
+num_ctx = 16384
 
 [desktop]
 # Pause after an input action so the UI can react before the next observation.
@@ -136,7 +164,7 @@ element_cache_snapshots = 5
 [shell]
 # "pwsh" (PowerShell 7) is preferred; falls back to Windows PowerShell 5.1 when not installed.
 executable = "pwsh"
-default_timeout_ms = 30_000
+default_timeout_ms = 120_000
 max_timeout_ms = 600_000
 max_output_bytes = 1_048_576
 
@@ -226,4 +254,4 @@ max_recalled_items = 5
 log_level = "info"
 # Values of these environment variables are always redacted from logs, in addition to the built-in
 # patterns (cookies, bearer tokens, API keys).
-redact_env = ["LGA_GATEWAY_API_KEY", "LGA_PRIMARY_API_KEY", "LGA_PRIMARY_ADMIN_TOKEN"]
+redact_env = ["LGA_GATEWAY_API_KEY", "LGA_PRIMARY_API_KEY", "LGA_PRIMARY_ADMIN_TOKEN", "LGA_GEMINI_API_KEY"]

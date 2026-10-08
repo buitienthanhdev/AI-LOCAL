@@ -83,16 +83,24 @@ The tests below ran on the audited machine: Windows 11 Pro 26200, AutoCAD 2023, 
 | Knowledge: "thông số OneCoat Pro?" | **PASS** — answered from TDS with citation | `knowledge.*` |
 | Unit / integration suites | Rust 53 (core + native tools + gateway + desktop app; +2 live) · worker 123 (+ desktop/browser/AutoCAD live) | see [operations.md](docs/operations.md#tests) |
 
-`agent doctor` on this machine: every subsystem PASS except `vision` and `gemini-gateway`. Both are WARN, and both are caused by the missing Google sign-in.
+### Brains (who plans)
 
-### BLOCKED items
+The gateway tries, in order, whatever is available:
 
-| Item | Cause | Workaround | Impact |
-|---|---|---|---|
-| Image input to Gemini (`vision.locate`, `vision.describe`, screenshots in planner prompts) | gemini-web2api-go runs anonymously; Gemini Web rejects image references without a signed-in account | Add a Google cookie in the primary's admin UI (`http://127.0.0.1:8083/admin`, token `LGA_PRIMARY_ADMIN_TOKEN` in `.env`) | Planning works (text). Visual grounding falls back to Windows OCR plus UI Automation; model-based grounding is unavailable. |
-| Fallback backend answering (WebAI-to-API) | needs a one-time interactive Google sign-in (`verify_login.py`) | run it as described in docs/operations.md | Failover is attempted and recorded but cannot be served; the primary is auto-restarted. |
-| Local UI-TARS grounding backend | 11–13 GB of the 16 GB GPU is used by other Ollama models; UI-TARS-1.5-7B needs ~7–9 GB quantised and has no official GGUF/Ollama build | free VRAM, serve UI-TARS-1.5-7B with vLLM or Ollama, set `[vision] backend = "ui_tars"` | The code path and parser are implemented and unit-tested; it was not run against a live model. |
-| OCR for Vietnamese text | only the en-US Windows OCR language is installed | Settings → Time & language → add Vietnamese (with OCR) | `vision.ocr` reads English and Latin text; Vietnamese diacritics may be misread. |
+| Brain | Needs | Notes |
+|---|---|---|
+| **Gemini API** (recommended) | a free key from aistudio.google.com/apikey, pasted in the chat window: ⚙ Cài đặt bộ não AI | Fastest and most reliable; the newest Flash model is picked automatically. |
+| Gemini Web (gemini-web2api-go) | a Google cookie in its admin UI (`http://127.0.0.1:8083/admin`) | Free, but Google temporarily blocks an account that sends many requests ("unusual traffic" page); the gateway then skips it. |
+| Gemini Web fallback (WebAI-to-API) | one-time `verify_login.py` sign-in | Optional. |
+| Local model (Ollama `gemma4:12b`) | Ollama installed; started on demand | Works offline; ~3–6 s per step when the GPU is free, minutes when another app fills the GPU. |
+
+### Known limits
+
+| Item | Impact |
+|---|---|
+| Google blocking Gemini Web | Without an API key the agent falls back to the local model (slower, less capable planner). |
+| GPU shared with other apps | The local model and UI-TARS slow down sharply when VRAM is taken by games or other LLM apps. |
+| Windows OCR for Vietnamese | Only en-US Windows OCR is installed; `vision.ocr {"vietnamese": true}` uses the local EasyOCR model instead. Real app text is read through UI Automation, which handles Vietnamese fully. |
 
 ## Principles kept
 

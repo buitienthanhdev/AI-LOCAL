@@ -40,6 +40,8 @@ pub struct ChatRequest {
     pub timeout: Option<Duration>,
     /// Free-form correlation data (task_id, step_id) recorded in logs; never sent upstream.
     pub metadata: HashMap<String, String>,
+    /// The caller needs a single JSON object back; backends with a JSON mode use it.
+    pub json: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

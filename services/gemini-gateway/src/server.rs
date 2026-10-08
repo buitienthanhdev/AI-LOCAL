@@ -127,7 +127,8 @@ pub fn parse_chat_request(body: &Value) -> Result<ChatRequest, String> {
         Some(_) => return Err("metadata must be an object".into()),
     };
     let model = object.get("model").and_then(Value::as_str).filter(|m| !m.is_empty()).unwrap_or("auto").to_string();
-    Ok(ChatRequest { messages, model, timeout, metadata })
+    let json = object.get("response_format").and_then(Value::as_str) == Some("json");
+    Ok(ChatRequest { messages, model, timeout, metadata, json })
 }
 
 fn parse_json(body: &Bytes) -> Result<Value, String> {

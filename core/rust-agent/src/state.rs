@@ -138,6 +138,10 @@ pub struct TaskRecord {
     pub escalation: Option<Value>,
     pub pending_question: Option<String>,
     pub runner_pid: Option<u32>,
+    /// What the user and the agent said outside tool calls: the earlier request this one follows up on,
+    /// questions the agent asked and the user's answers. Shown to the planner on every turn.
+    #[serde(default)]
+    pub conversation: Vec<String>,
 }
 
 impl TaskRecord {
@@ -162,6 +166,7 @@ impl TaskRecord {
             escalation: None,
             pending_question: None,
             runner_pid: None,
+            conversation: Vec::new(),
         }
     }
 

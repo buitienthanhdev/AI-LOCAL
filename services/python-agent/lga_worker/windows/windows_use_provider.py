@@ -57,6 +57,11 @@ from lga_worker.windows.provider import (
 
 logger = logging.getLogger(__name__)
 
+# desktop.type: longer text is pasted via the clipboard; shorter text is typed in focus-checked chunks.
+PASTE_THRESHOLD_CHARS = 200
+TYPE_CHUNK_CHARS = 40
+PASTE_SETTLE_S = 0.5
+
 # Fuzzy-match score (0-100) required to accept a Start-menu app for a requested name.
 START_APP_MATCH_THRESHOLD = 80
 START_APPS_CACHE_TTL_S = 300.0
@@ -448,9 +453,57 @@ class WindowsUseProvider(WindowsControlProvider):
         return vk
 
     def type_text(self, text: str) -> None:
-        if text:
-            self.uia.TypeText(text, interval=self._settings.type_interval_s)
-            time.sleep(self._settings.settle_s)
+        """Type into the focused window, never into another one.
+
+        Long text (an essay, a letter) is pasted through the clipboard: typing 1,500 characters key by key
+        takes ~15 s and anything that steals focus meanwhile (a notification, a browser window) would
+        receive the rest. Short text is typed in chunks; before each chunk the foreground window must still
+        be the one typing started in, otherwise typing stops with an error naming the intruder.
+        """
+        if not text:
+            return
+        target = win32gui.GetForegroundWindow()
+        if len(text) > PASTE_THRESHOLD_CHARS:
+            self._paste_text(text, target)
+        else:
+            for start in range(0, len(text), TYPE_CHUNK_CHARS):
+                self._require_foreground(target, typed=start)
+                self.uia.TypeText(text[start:start + TYPE_CHUNK_CHARS], interval=self._settings.type_interval_s)
+        time.sleep(self._settings.settle_s)
+
+    def _require_foreground(self, target: int, typed: int) -> None:
+        current = win32gui.GetForegroundWindow()
+        if target and current != target and win32gui.GetWindow(current, win32con.GW_OWNER) != target:
+            title = win32gui.GetWindowText(current) if current else "(none)"
+            raise ToolError(ErrorCode.CONFLICT,
+                            f"focus moved to another window ({title!r}) after {typed} characters; stopped typing so "
+                            "nothing goes into the wrong window. Focus the target again and type the rest.",
+                            details={"typed_chars": typed, "foreground_title": title})
+
+    def _paste_text(self, text: str, target: int) -> None:
+        import win32clipboard
+
+        previous: str | None = None
+        win32clipboard.OpenClipboard()
+        try:
+            if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                previous = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, text.replace("\r\n", "\n").replace("\n", "\r\n"))
+        finally:
+            win32clipboard.CloseClipboard()
+        try:
+            self._require_foreground(target, typed=0)
+            self.hotkey(["ctrl", "v"])
+            time.sleep(PASTE_SETTLE_S)  # let the app read the clipboard before it is restored
+        finally:
+            if previous is not None:
+                win32clipboard.OpenClipboard()
+                try:
+                    win32clipboard.EmptyClipboard()
+                    win32clipboard.SetClipboardData(win32con.CF_UNICODETEXT, previous)
+                finally:
+                    win32clipboard.CloseClipboard()
 
     def press_key(self, key: str, repeat: int) -> None:
         vk = self._virtual_key(key)

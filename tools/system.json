@@ -449,6 +449,52 @@
       "supports_rollback": false,
       "verification": "none",
       "policy_category": "desktop.observe"
+    },
+    {
+      "name": "system.open",
+      "description": "Open a web address, file or folder with the user's default application, exactly as if the user double-clicked it: web pages, YouTube videos and music open in the user's own browser (signed in, with their extensions), documents in their usual app, folders in File Explorer. Use it to show or play something for the user. It does not read page content (use browser.* for that) and it never runs programs (use desktop.launch_app).",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "target"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "target": {
+            "type": "string",
+            "minLength": 1,
+            "description": "An http(s) URL, or the absolute path of an existing file or folder."
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "target",
+          "kind"
+        ],
+        "properties": {
+          "target": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "url",
+              "file",
+              "folder"
+            ]
+          }
+        }
+      },
+      "timeout_ms": 15000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "possible",
+      "policy_category": "desktop.app"
     }
   ]
 }
