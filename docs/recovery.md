@@ -34,8 +34,8 @@ Every failure has a bounded, deterministic response. Nothing retries forever.
 
 | Scenario | Test |
 |---|---|
-| Primary Gemini backend killed → failover attempted → primary restarted and serving | `services/gemini-gateway/tests/test_gateway_live.py` (TEST 6) |
-| Routing, breaker, rate limit retry, capability failover, broken streams | `services/gemini-gateway/tests/test_gateway.py` |
+| Primary Gemini backend killed → failover attempted → primary restarted and serving | `services/gemini-gateway/tests/live.rs` (TEST 6) |
+| Routing, breaker, rate limit retry, capability failover, broken streams | `services/gemini-gateway/tests/routing.rs` |
 | Runner killed mid-task, state file corrupted and backup deleted → `agent resume` rebuilds from the audit log and completes; stale element ids from the dead worker detected and recovered | `tests/e2e/run-e2e.ps1 -Test 8` |
 | Shell command cancelled / timed out → process tree killed | `services/python-agent/tests/test_foundation.py`, `test_worker_protocol.py` |
 | STA call timeout → thread abandoned, next call served | `test_foundation.py::test_sta_executor_runs_on_single_thread_and_times_out` |

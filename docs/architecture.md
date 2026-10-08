@@ -27,14 +27,15 @@ User ──► agent CLI (Rust) ──► Task runner (Rust core) ──► Chat
 | `core/rust-agent` (`lga-core`) | Rust | The orchestrator: task lifecycle and state machine, planner loop, tool routing, timeouts, cancellation, retry policy, observation/verification state, policy engine, audit events, memory index, IPC with the worker, the `ChatProvider` trait. |
 | `core/rust-agent/policy/` | TOML | Execution policy per mode (normal / trusted / full_access). |
 | `services/python-agent` (`lga_worker`) | Python 3.12 | Execution and AI-adapter layer: implements every tool in `tools/*.json` on top of Windows-Use, browser-use, Windows OCR, AutoCAD COM. |
-| `services/gemini-gateway` (`lga_gateway`) | Python 3.12 | Local HTTP service implementing `ChatProvider` over Gemini Web: primary/fallback routing, circuit breakers, retries, health monitor, backend process supervision. |
+| `apps/agent-desktop` | Rust | The chat window (tao + wry over WebView2): starts tasks through the CLI, shows progress, confirmations, questions and results; starts the gateway and the knowledge backend when they are down. |
+| `services/gemini-gateway` (`lga-gateway`) | Rust | Local HTTP service (axum) implementing `ChatProvider` over Gemini Web: primary/fallback routing, circuit breakers, retries, health monitor, backend process supervision in a kill-on-close Job Object. |
 | `services/lga-common` | Python | Shared config loading, secret resolution, redaction, JSON logging. |
 | `tools/` | JSON | The unified tool contract: the only interface Gemini sees ([tool-contract.md](tool-contract.md)). |
 | `configs/` | TOML | `config.example.toml` holds every default; `config.toml` holds local overrides (git-ignored). |
 | `references/` | – | Pinned upstream clones (read-only), see [repository-inventory.md](repository-inventory.md). |
 | `memory/`, `logs/`, `artifacts/`, `runtime/` | – | Task state and persistent memory, logs, screenshots/exports, local runtime (built binaries, venvs, dedicated Chrome profile). All git-ignored. |
 
-Why this split: the computer-use libraries that already work well are Python (Windows-Use, browser-use, pywin32 COM, PyWinRT OCR), so they are reused rather than rewritten. Rust owns the parts that must be deterministic and robust: state, policy, retries, cancellation and audit.
+Why this split: the computer-use libraries that already work well are Python (Windows-Use, browser-use, pywin32 COM, PyWinRT OCR), so they are reused rather than rewritten. Rust owns everything else — the parts that must be deterministic and robust (state, policy, retries, cancellation, audit), the Gemini gateway and the chat window.
 
 ## The execution loop
 

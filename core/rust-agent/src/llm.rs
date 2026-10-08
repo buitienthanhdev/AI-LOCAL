@@ -1,6 +1,6 @@
 //! `ChatProvider`: the only LLM interface the agent core depends on.
 //!
-//! Implementations: `GatewayProvider` (Gemini Web through services/gemini-gateway). Future providers
+//! Implementations: `GatewayProvider` (Gemini Web through services/gemini-gateway, `lga-gateway.exe`). Future providers
 //! (Gemini API, Claude API, OpenAI API, Ollama, vLLM) implement the same trait; see
 //! docs/architecture.md "Model routing". The core never talks to a Gemini backend directly.
 
@@ -213,21 +213,20 @@ impl GatewayProvider {
     }
 }
 
+/// `lga-gateway.exe` (services/gemini-gateway): next to the running executable, else in the build output.
+pub fn gateway_exe(config: &Config) -> Option<std::path::PathBuf> {
+    let beside = std::env::current_exe().ok().map(|exe| exe.with_file_name("lga-gateway.exe"));
+    beside
+        .into_iter()
+        .chain(["target/release/lga-gateway.exe", "target/debug/lga-gateway.exe"].map(|p| config.root.join(p)))
+        .find(|p| p.is_file())
+}
+
 fn spawn_gateway(config: &Config) -> Result<(), LlmError> {
-    let python = config.path(&config.gateway.python);
-    if !python.is_file() {
-        return Err(LlmError::Config(format!(
-            "{} not found; run scripts/setup-gateway.ps1",
-            python.display()
-        )));
-    }
+    let exe = gateway_exe(config)
+        .ok_or_else(|| LlmError::Config("lga-gateway.exe not found; run `cargo build --release`".into()))?;
     let root = config.root.to_string_lossy().into_owned();
-    crate::process::spawn_detached(
-        &python,
-        &["-X", "utf8", "-m", "lga_gateway"],
-        &config.root,
-        &[("LGA_ROOT", root.as_str()), ("PYTHONIOENCODING", "utf-8")],
-    )
+    crate::process::spawn_detached(&exe, &[], &config.root, &[("LGA_ROOT", root.as_str())])
     .map(|_| ())
     .map_err(|e| LlmError::Config(format!("starting gateway: {e}")))
 }
