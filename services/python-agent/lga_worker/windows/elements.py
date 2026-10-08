@@ -8,6 +8,8 @@ ambiguous the caller gets STALE_ELEMENT and must re-inspect the UI.
 
 from __future__ import annotations
 
+import secrets
+import string
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
@@ -23,10 +25,20 @@ class CacheEntry:
     locator: ElementLocator
 
 
+# Letters in the per-process id prefix. Ids from an earlier worker process (e.g. before a restart or a
+# resumed task) then never collide with fresh ones and fail as unknown instead of hitting another element.
+ID_PREFIX_LENGTH = 2
+
+
+def new_id_prefix() -> str:
+    return "".join(secrets.choice(string.ascii_lowercase) for _ in range(ID_PREFIX_LENGTH))
+
+
 class ElementCache:
-    def __init__(self, max_entries: int) -> None:
+    def __init__(self, max_entries: int, prefix: str | None = None) -> None:
         if max_entries <= 0:
             raise ValueError("max_entries must be positive")
+        self._prefix = prefix if prefix is not None else new_id_prefix()
         self._max_entries = max_entries
         self._entries: OrderedDict[str, CacheEntry] = OrderedDict()
         self._by_runtime_id: dict[tuple[int, ...], str] = {}
@@ -41,7 +53,7 @@ class ElementCache:
             self._entries.move_to_end(existing)
             return existing
         self._counter += 1
-        element_id = f"e{self._counter}"
+        element_id = f"e{self._prefix}{self._counter}"
         self._entries[element_id] = CacheEntry(element_id, control, runtime_id, locator)
         if runtime_id:
             self._by_runtime_id[runtime_id] = element_id

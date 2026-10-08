@@ -122,6 +122,13 @@ def test_elevation_detection() -> None:
     assert not looks_like_elevation_failure(ShellResult(0, "", "", False, False, 1))
 
 
+def test_element_ids_differ_between_worker_processes() -> None:
+    loc = ElementLocator(1, "OK", "ButtonControl", "", "")
+    first = ElementCache(max_entries=10, prefix="ab").register(object(), (1,), loc)
+    second = ElementCache(max_entries=10, prefix="cd").register(object(), (1,), loc)
+    assert first == "eab1" and second == "ecd1"
+
+
 def test_element_cache_reuses_ids_and_evicts() -> None:
     cache = ElementCache(max_entries=2)
     loc = ElementLocator(1, "OK", "ButtonControl", "", "")
@@ -153,3 +160,9 @@ def test_sta_executor_runs_on_single_thread_and_times_out() -> None:
 
     asyncio.run(scenario())
     executor.shutdown()
+
+
+def test_powershell_output_has_no_ansi_escapes() -> None:
+    shell = resolve_powershell("pwsh")
+    result = run_powershell("$PSVersionTable.PSVersion", executable=shell, cwd=None, timeout_s=60, max_output_bytes=10_000)
+    assert "[" not in result.stdout and "Major" in result.stdout
