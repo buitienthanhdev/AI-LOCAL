@@ -1,0 +1,46 @@
+{
+  "category": "system",
+  "description": "PowerShell and filesystem access with the current user's rights (never elevated).",
+  "tools": [
+    {
+      "name": "shell.exec",
+      "description": "Run a PowerShell script (PowerShell 7 when installed) non-interactively. Returns exit code, stdout and stderr separately. Exit code 0 does NOT prove the task is done: verify the effect separately. Commands needing Administrator fail with ELEVATION_REQUIRED.",
+      "input_schema": {"type": "object", "required": ["command"], "additionalProperties": false, "properties": {"command": {"type": "string", "minLength": 1}, "cwd": {"type": "string", "description": "Absolute working directory."}, "timeout_ms": {"type": "integer", "minimum": 1000, "maximum": 600000}}},
+      "output_schema": {"type": "object", "required": ["exit_code", "stdout", "stderr", "timed_out", "truncated", "duration_ms"], "properties": {"exit_code": {"type": "integer"}, "stdout": {"type": "string"}, "stderr": {"type": "string"}, "timed_out": {"type": "boolean"}, "truncated": {"type": "boolean"}, "duration_ms": {"type": "integer"}}},
+      "timeout_ms": 610000, "risk_level": "high", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "observe", "policy_category": "shell"
+    },
+    {
+      "name": "filesystem.read",
+      "description": "Read a text file (UTF-8/UTF-16 with BOM detected; binary returned as base64).",
+      "input_schema": {"type": "object", "required": ["path"], "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "max_bytes": {"type": "integer", "minimum": 1}, "encoding": {"type": "string"}}},
+      "output_schema": {"type": "object", "required": ["path", "size", "encoding", "content", "truncated", "sha256"], "properties": {"path": {"type": "string"}, "size": {"type": "integer"}, "encoding": {"type": "string"}, "content": {"type": "string"}, "truncated": {"type": "boolean"}, "sha256": {"type": "string"}}},
+      "timeout_ms": 30000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "filesystem.read"
+    },
+    {
+      "name": "filesystem.write",
+      "description": "Write a text file atomically. Verified by reading back size and SHA-256. Refuses to replace an existing file unless overwrite=true.",
+      "input_schema": {"type": "object", "required": ["path", "content"], "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "content": {"type": "string"}, "encoding": {"type": "string", "default": "utf-8"}, "overwrite": {"type": "boolean", "default": false}, "create_dirs": {"type": "boolean", "default": true}}},
+      "output_schema": {"type": "object", "required": ["path", "size", "sha256", "created"], "properties": {"path": {"type": "string"}, "size": {"type": "integer"}, "sha256": {"type": "string"}, "created": {"type": "boolean"}}},
+      "timeout_ms": 30000, "risk_level": "medium", "requires_confirmation": false, "idempotent": true, "supports_rollback": true,
+      "verification": "self", "policy_category": "filesystem.write"
+    },
+    {
+      "name": "filesystem.list",
+      "description": "List a directory (directories first).",
+      "input_schema": {"type": "object", "required": ["path"], "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "max_entries": {"type": "integer", "minimum": 1}}},
+      "output_schema": {"type": "object", "required": ["entries", "truncated"], "properties": {"entries": {"type": "array", "items": {"type": "object", "required": ["name", "is_dir"], "properties": {"name": {"type": "string"}, "is_dir": {"type": "boolean"}, "size": {"type": ["integer", "null"]}, "modified_unix": {"type": "number"}}}}, "truncated": {"type": "boolean"}}},
+      "timeout_ms": 30000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "filesystem.read"
+    },
+    {
+      "name": "filesystem.stat",
+      "description": "Check whether a path exists and get its type, size, modification time and (for files up to 256 MB) SHA-256. Use to verify that a file was created or saved.",
+      "input_schema": {"type": "object", "required": ["path"], "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}}},
+      "output_schema": {"type": "object", "required": ["path", "exists"], "properties": {"path": {"type": "string"}, "exists": {"type": "boolean"}, "is_dir": {"type": "boolean"}, "size": {"type": "integer"}, "modified_unix": {"type": "number"}, "sha256": {"type": ["string", "null"]}}},
+      "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "filesystem.read"
+    }
+  ]
+}
