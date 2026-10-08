@@ -46,6 +46,17 @@ fn loopback_port(url: &str) -> Result<String> {
     Ok(port.to_string())
 }
 
+/// ollama.exe: the configured path, else PATH, else the default per-user install folder.
+fn find_ollama(configured: &str) -> Option<PathBuf> {
+    if !configured.is_empty() {
+        return Some(PathBuf::from(configured)).filter(|p| p.is_file());
+    }
+    lga_core::native::shell::which("ollama").or_else(|| {
+        let local = std::env::var("LOCALAPPDATA").ok()?;
+        Some(PathBuf::from(local).join("Programs").join("Ollama").join("ollama.exe")).filter(|p| p.is_file())
+    })
+}
+
 fn text(path: PathBuf) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -148,10 +159,35 @@ pub fn assemble(config: &Config, redactor: Arc<Redactor>) -> Result<Assembly> {
     }
     let fallback = Backend::fallback("fallback", &f.base_url, &f.default_model, Arc::clone(&store), connect);
 
-    let routes = vec![
-        Route::new(primary, CircuitBreaker::new(breaker), primary_process, ms(p.startup_timeout_ms)),
-        Route::new(fallback, CircuitBreaker::new(breaker), fallback_process, ms(f.startup_timeout_ms)),
-    ];
+    let mut routes = Vec::new();
+    // Official Gemini API first when the user saved a key (Settings in the chat window).
+    if s.api.enabled {
+        if let Some(key) = resolve_secret(&config.root, &s.api.api_key_secret) {
+            let api = Backend::gemini_api("api", &s.api.base_url, &s.api.model, key, Arc::clone(&store), connect);
+            routes.push(Route::new(api, CircuitBreaker::new(breaker), None, ms(0)).with_attempt_timeout(ms(s.api.attempt_timeout_ms)));
+        }
+    }
+    routes.extend([
+        Route::new(primary, CircuitBreaker::new(breaker), primary_process, ms(p.startup_timeout_ms)).with_attempt_timeout(ms(p.attempt_timeout_ms)),
+        Route::new(fallback, CircuitBreaker::new(breaker), fallback_process, ms(f.startup_timeout_ms)).with_attempt_timeout(ms(f.attempt_timeout_ms)),
+    ]);
+    // A local OpenAI-compatible server the user runs (llama.cpp, LM Studio), when configured.
+    if !s.local_server.base_url.trim().is_empty() {
+        loopback_port(s.local_server.base_url.trim())?;
+        let server = Backend::openai_server("local_server", s.local_server.base_url.trim(), &s.local_server.model, Arc::clone(&store), connect);
+        routes.push(Route::new(server, CircuitBreaker::new(breaker), None, ms(0)));
+    }
+    // Local model: the agent keeps working when Gemini Web is down or Google throttles the account.
+    let l = &s.local;
+    if l.enabled {
+        loopback_port(&l.base_url)?;
+        let local = Backend::local("local", &l.base_url, &l.model, l.num_ctx, Arc::clone(&store), connect);
+        let mut route = Route::new(local, CircuitBreaker::new(breaker), None, ms(0));
+        if let Some(ollama) = find_ollama(&l.ollama) {
+            route = route.with_on_demand_start(ollama, vec!["serve".into()]);
+        }
+        routes.push(route);
+    }
     let gateway = Gateway::new(routes, store, retry, ms(s.request_timeout_ms), ms(s.health_interval_ms));
     Ok(Assembly {
         gateway,

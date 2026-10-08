@@ -77,6 +77,17 @@ impl Drop for KillOnCloseJob {
     }
 }
 
+/// Start a server that must outlive the gateway (not in the kill-on-close job): hidden console, own
+/// process group, outside any job the gateway may be in when that is allowed.
+pub fn spawn_independent(program: &std::path::Path, args: &[String]) -> std::io::Result<()> {
+    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
+    let base = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP;
+    let spawn = |flags: u32| {
+        Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(flags).spawn()
+    };
+    spawn(base | CREATE_BREAKAWAY_FROM_JOB).or_else(|_| spawn(base)).map(|_| ())
+}
+
 #[derive(Debug, Clone)]
 pub struct ProcessSpec {
     pub name: String,

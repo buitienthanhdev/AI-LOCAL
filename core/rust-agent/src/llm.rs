@@ -46,6 +46,8 @@ pub struct ChatRequest {
     pub model: String,
     pub timeout: Duration,
     pub metadata: HashMap<String, String>,
+    /// The reply must be one JSON object (backends that support it are put in JSON mode).
+    pub json: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -117,6 +119,7 @@ fn request_body(request: &ChatRequest) -> Value {
         "model": request.model,
         "timeout_ms": request.timeout.as_millis() as u64,
         "metadata": request.metadata,
+        "response_format": if request.json { "json" } else { "text" },
     })
 }
 

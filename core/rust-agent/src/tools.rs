@@ -109,10 +109,9 @@ fn core_tools() -> Vec<ToolSpec> {
     vec![
         base(
             "task.complete",
-            "Declare the task finished. If any step changed state (files, apps, drawings, web forms), give              `checks`: read-only tool calls (filesystem.stat, desktop.find_element, browser.get_state,              autocad.verify_geometry, ...) with the values they must return; the core re-runs them and              accepts completion only if every check passes. For pure information requests you may instead              cite `evidence_steps`: ids of earlier successful read-only steps whose results contain the answer.",
+            "Declare the task finished. If any step changed state (files, apps, drawings, web forms), give              `checks`: read-only tool calls (filesystem.stat, desktop.find_element, browser.get_state,              autocad.verify_geometry, ...) with the values they must return; the core re-runs them and              accepts completion only if every check passes. For pure information requests you may instead              cite `evidence_steps`: ids of earlier successful read-only steps whose results contain the answer. A direct answer that needed no tool (greeting, general knowledge) has only `summary`.",
             json!({
                 "type": "object", "required": ["summary"], "additionalProperties": false,
-                "anyOf": [{"required": ["checks"]}, {"required": ["evidence_steps"]}],
                 "properties": {
                     "summary": {"type": "string", "minLength": 1},
                     "checks": {"type": "array", "minItems": 1, "items": {

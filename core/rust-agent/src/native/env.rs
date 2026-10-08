@@ -175,6 +175,42 @@ pub fn screen_layout() -> Value {
     }
 }
 
+/// The user's real folders (they may be redirected, e.g. Desktop and Documents into OneDrive).
+pub fn known_folders() -> Vec<(&'static str, String)> {
+    const SHELL_FOLDERS: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders";
+    let profile = std::env::var("USERPROFILE").unwrap_or_default();
+    let mut out = vec![("Home", profile.clone())];
+    for (label, value, fallback) in [
+        ("Desktop", "Desktop", "Desktop"),
+        ("Documents", "Personal", "Documents"),
+        ("Downloads", "{374DE290-123F-4565-9164-39C4925E467B}", "Downloads"),
+        ("Pictures", "My Pictures", "Pictures"),
+        ("Music", "My Music", "Music"),
+        ("Videos", "My Video", "Videos"),
+    ] {
+        let raw = registry_string(HKEY_CURRENT_USER, SHELL_FOLDERS, Some(value)).unwrap_or_else(|| format!(r"{profile}\{fallback}"));
+        let path = super::fs::absolute_path(&raw).map(|p| p.display().to_string()).unwrap_or(raw);
+        out.push((label, path));
+    }
+    out.push(("Temp", std::env::temp_dir().display().to_string().trim_end_matches('\\').to_string()));
+    out
+}
+
+/// Open a URL, file or folder with its default handler (ShellExecute "open").
+pub fn shell_open(target: &str) -> std::io::Result<()> {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    let (verb, file) = (wide("open"), wide(target));
+    // SAFETY: valid NUL-terminated UTF-16 strings; no parent window.
+    let result = unsafe { ShellExecuteW(std::ptr::null_mut(), verb.as_ptr(), file.as_ptr(), std::ptr::null(), std::ptr::null(), SW_SHOWNORMAL) };
+    // ShellExecute returns a value greater than 32 on success.
+    if result as isize > 32 {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!("ShellExecute failed with code {}", result as isize)))
+    }
+}
+
 pub fn is_admin() -> bool {
     // SAFETY: IsUserAnAdmin has no preconditions.
     unsafe { windows_sys::Win32::UI::Shell::IsUserAnAdmin() != 0 }

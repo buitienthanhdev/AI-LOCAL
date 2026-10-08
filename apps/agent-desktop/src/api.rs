@@ -31,6 +31,7 @@ const MAX_TASKS_LISTED: usize = 100;
 const MAX_EVENTS_PER_POLL: usize = 500;
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 const VALID_MODES: [&str; 3] = ["normal", "trusted", "full_access"];
+const GEMINI_API_KEY_SECRET: &str = "LGA_GEMINI_API_KEY";
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 pub const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
@@ -119,13 +120,15 @@ impl Api {
             (&Method::POST, ["api", "tasks"]) => self.start_task(&body),
             (&Method::GET, ["api", "artifact"]) => Ok(self.artifact(request.uri())),
             (&Method::POST, ["api", "reveal"]) => self.reveal(&body),
+            (&Method::GET, ["api", "settings"]) => Ok(json_reply(StatusCode::OK, self.settings())),
+            (&Method::POST, ["api", "settings"]) => self.save_settings(&body),
             (&Method::GET, ["api", "tasks", id]) if valid_task_id(id) => Ok(self.get_task(id)),
             (&Method::GET, ["api", "tasks", id, "events"]) if valid_task_id(id) => {
                 let after = query_param(request.uri(), "after").and_then(|v| v.parse().ok()).unwrap_or(0);
                 Ok(json_reply(StatusCode::OK, self.events(id, after)))
             }
             (&Method::POST, ["api", "tasks", id, "respond"]) if valid_task_id(id) => self.respond(id, &body),
-            (&Method::POST, ["api", "tasks", id, action]) if valid_task_id(id) => self.control(id, action),
+            (&Method::POST, ["api", "tasks", id, action]) if valid_task_id(id) => self.control(id, action, &body),
             _ => return error(StatusCode::NOT_FOUND, "not found"),
         };
         result.unwrap_or_else(|e| error(StatusCode::BAD_REQUEST, e.to_string()))
@@ -138,7 +141,46 @@ impl Api {
             "knowledge": s.knowledge,
             "vision": s.vision,
             "default_mode": self.config.agent.mode.as_str(),
+            "brains": if s.gateway { services::brains(&self.config) } else { json!([]) },
         })
+    }
+
+    fn settings(&self) -> Value {
+        json!({"gemini_api_key_set": lga_core::secrets::resolve_secret(&self.config.root, GEMINI_API_KEY_SECRET).is_some()})
+    }
+
+    /// Save (or with an empty value remove) the Gemini API key in the repository's git-ignored `.env`, then
+    /// restart the gateway so it uses the key.
+    fn save_settings(&self, body: &Value) -> Result<Reply> {
+        let Some(key) = body.get("gemini_api_key").and_then(Value::as_str) else {
+            return Err(anyhow!("nothing to save"));
+        };
+        let key = key.trim();
+        if !key.is_empty() && (key.len() < 20 || key.len() > 200 || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
+            return Err(anyhow!("Khóa API không hợp lệ (dán đúng chuỗi bắt đầu bằng AIza... từ Google AI Studio)"));
+        }
+        let env_path = self.config.root.join(".env");
+        let existing = fs::read_to_string(&env_path).unwrap_or_default();
+        let mut lines: Vec<String> = existing
+            .lines()
+            .filter(|l| l.split_once('=').is_none_or(|(k, _)| k.trim() != GEMINI_API_KEY_SECRET))
+            .map(String::from)
+            .collect();
+        if !key.is_empty() {
+            lines.push(format!("{GEMINI_API_KEY_SECRET}={key}"));
+        }
+        fs::write(&env_path, lines.join("\n") + "\n")?;
+        let agent = self.agent_exe.clone();
+        let root = self.config.root.clone();
+        std::thread::spawn(move || {
+            for action in ["stop", "start"] {
+                let _ = run_with_timeout(&agent, &["gateway", action], &root, Duration::from_secs(90));
+                if action == "stop" {
+                    std::thread::sleep(Duration::from_secs(3));
+                }
+            }
+        });
+        Ok(json_reply(StatusCode::OK, json!({"ok": true, "gemini_api_key_set": !key.is_empty()})))
     }
 
     fn list_tasks(&self) -> Value {
@@ -176,7 +218,12 @@ impl Api {
         };
         let pending = read_json(&request_path(&self.tasks_dir(), id));
         let paused = self.tasks_dir().join(format!("{id}.pause")).exists();
-        json_reply(StatusCode::OK, json!({"task": task, "pending_request": pending, "pause_requested": paused}))
+        // A task that is not finished but whose runner process is gone (crash, reboot, killed) will never
+        // move again on its own: the UI offers to run it again instead of showing it as busy forever.
+        let status = task["status"].as_str().unwrap_or("");
+        let unfinished = !matches!(status, "completed" | "failed" | "cancelled" | "needs_user");
+        let interrupted = unfinished && task["runner_pid"].as_u64().is_some_and(|pid| !process_alive(pid as u32));
+        json_reply(StatusCode::OK, json!({"task": task, "pending_request": pending, "pause_requested": paused, "interrupted": interrupted}))
     }
 
     /// Audit events after line `after`. A line still being written (invalid JSON) ends the read; it is
@@ -227,14 +274,26 @@ impl Api {
             return Err(anyhow!("chế độ không hợp lệ"));
         }
         let task_id = new_task_id();
-        self.spawn_agent(&["run", "--ui-channel", "--task-id", &task_id, "--mode", mode, task], &format!("{task_id}.out.log"))?;
+        let mut args = vec!["run", "--ui-channel", "--task-id", &task_id, "--mode", mode];
+        let context = body["context"].as_str().unwrap_or("").trim();
+        if !context.is_empty() {
+            args.extend(["--context", context]);
+        }
+        // "--" so a request that starts with "-" is never read as an option.
+        args.extend(["--", task]);
+        self.spawn_agent(&args, &format!("{task_id}.out.log"))?;
         Ok(json_reply(StatusCode::OK, json!({"task_id": task_id})))
     }
 
-    fn control(&self, id: &str, action: &str) -> Result<Reply> {
+    fn control(&self, id: &str, action: &str, body: &Value) -> Result<Reply> {
         match action {
             "resume" => {
-                self.spawn_agent(&["resume", "--ui-channel", id], &format!("{id}.resume.log"))?;
+                let mut args = vec!["resume", "--ui-channel", id];
+                let answer = body["answer"].as_str().unwrap_or("").trim();
+                if !answer.is_empty() {
+                    args.extend(["--answer", answer]);
+                }
+                self.spawn_agent(&args, &format!("{id}.resume.log"))?;
                 Ok(json_reply(StatusCode::OK, json!({"ok": true, "output": "resuming"})))
             }
             "cancel" | "pause" | "unpause" => {
@@ -293,6 +352,22 @@ impl Api {
         let arg = if target.is_file() { format!("/select,{}", target.display()) } else { target.display().to_string() };
         Command::new("explorer.exe").raw_arg(arg).spawn()?;
         Ok(json_reply(StatusCode::OK, json!({"ok": true})))
+    }
+}
+
+fn process_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: the handle is checked and closed; GetExitCodeProcess writes into a local.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let alive = GetExitCodeProcess(handle, &mut code) != 0 && code == STILL_ACTIVE as u32;
+        CloseHandle(handle);
+        alive
     }
 }
 

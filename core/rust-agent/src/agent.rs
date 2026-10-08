@@ -163,6 +163,26 @@ pub struct TaskRunner<'a> {
     latest_observation: Option<String>,
     latest_screenshots: Vec<PathBuf>,
     pending_failures: Vec<(String, ErrorCode, String)>,
+    /// "This computer" section of the planner prompt (user, real folder paths), built once per run.
+    environment: String,
+    /// task.complete attempts rejected so far in this run.
+    completion_rejections: u32,
+}
+
+/// After this many rejected completions the task is completed anyway, with the unmet checks reported to
+/// the user, instead of failing work that was actually done because a check was phrased badly.
+const MAX_COMPLETION_REJECTIONS: u32 = 2;
+
+/// Facts about this PC the planner must not guess (user name, real folder locations).
+fn describe_computer() -> String {
+    let user = std::env::var("USERNAME").unwrap_or_default();
+    let computer = std::env::var("COMPUTERNAME").unwrap_or_default();
+    let admin = if crate::native::env::is_admin() { "elevated" } else { "normal user rights, not elevated" };
+    let mut out = format!("Windows user: {user} on {computer} ({admin}).\nFolders:\n");
+    for (label, path) in crate::native::env::known_folders() {
+        out.push_str(&format!("- {label}: {path}\n"));
+    }
+    out
 }
 
 fn now_ms(started: Instant) -> u64 {
@@ -207,6 +227,8 @@ impl<'a> TaskRunner<'a> {
             latest_observation: None,
             latest_screenshots: Vec::new(),
             pending_failures: Vec::new(),
+            environment: String::new(),
+            completion_rejections: 0,
         })
     }
 
@@ -295,54 +317,69 @@ impl<'a> TaskRunner<'a> {
                 self.set_status(record, TaskStatus::Planning, Some("unpaused"))?;
             }
 
-            let Some(action) = self.plan_next(record).await? else { continue };
-            if let Some(plan) = &action.plan {
-                record.plan = plan.clone();
-                self.audit.record(AuditEvent { kind: "plan", detail: json!({"plan": plan}), ..Default::default() })?;
-                self.ui.event(RunEvent::Plan(&record.plan));
-            }
-            let (_, step_id) = record.next_step_id();
-            self.audit.record(AuditEvent {
-                kind: "step_started",
-                step_id: Some(step_id.clone()),
-                tool: Some(action.tool.clone()),
-                detail: json!({"thought": action.thought, "args": action.args}),
-                ..Default::default()
-            })?;
-            self.ui.event(RunEvent::Thinking { step_id: &step_id, thought: &action.thought, tool: &action.tool, args: &action.args });
+            let Some(actions) = self.plan_next(record).await? else { continue };
+            // A reply may hold several independent actions; they run in order and the batch stops at the
+            // first one that does not succeed, so the planner always sees that failure next.
+            for action in actions {
+                if self.cancel.is_cancelled() || record.steps.len() as u32 >= max_steps {
+                    break;
+                }
+                // The previous action of the batch may have left the task Observing/Executing.
+                if record.status != TaskStatus::Planning {
+                    self.set_status(record, TaskStatus::Planning, None)?;
+                }
+                if let Some(plan) = &action.plan {
+                    record.plan = plan.clone();
+                    self.audit.record(AuditEvent { kind: "plan", detail: json!({"plan": plan}), ..Default::default() })?;
+                    self.ui.event(RunEvent::Plan(&record.plan));
+                }
+                let (_, step_id) = record.next_step_id();
+                self.audit.record(AuditEvent {
+                    kind: "step_started",
+                    step_id: Some(step_id.clone()),
+                    tool: Some(action.tool.clone()),
+                    detail: json!({"thought": action.thought, "args": action.args}),
+                    ..Default::default()
+                })?;
+                self.ui.event(RunEvent::Thinking { step_id: &step_id, thought: &action.thought, tool: &action.tool, args: &action.args });
 
-            match action.tool.as_str() {
-                "task.complete" => {
-                    if self.verify_completion(record, &action).await? {
-                        return Ok(());
-                    }
-                }
-                "task.fail" => {
-                    let reason = action.args.get("reason").and_then(Value::as_str).unwrap_or("planner gave up").to_string();
-                    record.final_summary = Some(reason.clone());
-                    return self.finish(record, TaskStatus::Failed, &reason);
-                }
-                "task.ask_user" => {
-                    let question = action.args.get("question").and_then(Value::as_str).unwrap_or_default().to_string();
-                    self.set_status(record, TaskStatus::NeedsUser, Some(&question))?;
-                    match self.ui.ask(&question) {
-                        Some(answer) => {
-                            self.notices.push(format!("You asked: {question} The user answered: {answer}"));
-                            record.pending_question = None;
-                            self.set_status(record, TaskStatus::Planning, None)?;
+                match action.tool.as_str() {
+                    "task.complete" => {
+                        if self.verify_completion(record, &action).await? {
+                            return Ok(());
                         }
-                        None => {
-                            record.pending_question = Some(question);
-                            self.save(record)?;
-                            return Ok(()); // paused: `agent resume <id>` continues after the user answers
+                        break;
+                    }
+                    "task.fail" => {
+                        let reason = action.args.get("reason").and_then(Value::as_str).unwrap_or("planner gave up").to_string();
+                        record.final_summary = Some(reason.clone());
+                        return self.finish(record, TaskStatus::Failed, &reason);
+                    }
+                    "task.ask_user" => {
+                        let question = action.args.get("question").and_then(Value::as_str).unwrap_or_default().to_string();
+                        record.pending_question = Some(question.clone());
+                        self.set_status(record, TaskStatus::NeedsUser, Some(&question))?;
+                        match self.ui.ask(&question) {
+                            Some(answer) => {
+                                record.conversation.push(format!("You asked the user: {question}"));
+                                record.conversation.push(format!("The user answered: {answer}"));
+                                record.pending_question = None;
+                                self.set_status(record, TaskStatus::Planning, None)?;
+                                break;
+                            }
+                            None => return Ok(()), // `agent resume <id> --answer ...` continues after the user answers
                         }
                     }
-                }
-                _ => {
-                    let outcome = self.execute_step(record, &action).await?;
-                    self.after_step(record, outcome)?;
-                    if record.status.is_terminal() {
-                        return Ok(());
+                    _ => {
+                        let outcome = self.execute_step(record, &action).await?;
+                        let succeeded = outcome.record.status == StepStatus::Succeeded;
+                        self.after_step(record, outcome)?;
+                        if record.status.is_terminal() {
+                            return Ok(());
+                        }
+                        if !succeeded {
+                            break;
+                        }
                     }
                 }
             }
@@ -350,12 +387,16 @@ impl<'a> TaskRunner<'a> {
     }
 
     /// Ask the planner for the next action. Returns None when the reply was unusable (counted as a failure).
-    async fn plan_next(&mut self, record: &mut TaskRecord) -> Result<Option<PlannerAction>> {
+    async fn plan_next(&mut self, record: &mut TaskRecord) -> Result<Option<Vec<PlannerAction>>> {
         let agent_cfg = self.rt.config.agent.clone();
         let llm_cfg = self.rt.config.llm.clone();
         let max_recalled = self.rt.config.memory.max_recalled_items;
         let available: Vec<String> = self.rt.worker().await?.tools().to_vec();
-        let system = system_prompt(&self.rt.catalog.render_for_prompt(&available), self.rt.policy.mode(), &agent_cfg.language);
+        if self.environment.is_empty() {
+            self.environment = describe_computer();
+        }
+        let system = system_prompt(&self.rt.catalog.render_for_prompt(&available), self.rt.policy.mode(), &agent_cfg.language, &self.environment);
+        let now = chrono::Local::now().format("%A %Y-%m-%d %H:%M (UTC%:z)").to_string();
         let recall = self.rt.memory.recall(&record.goal, max_recalled)?.render();
         let mut attachments = Vec::new();
         for path in self.latest_screenshots.iter().rev().take(agent_cfg.history_images) {
@@ -375,6 +416,8 @@ impl<'a> TaskRunner<'a> {
                 recall: &recall,
                 latest_observation: self.latest_observation.as_deref(),
                 notices: &self.notices,
+                now: &now,
+                conversation: &record.conversation,
             });
             let mut user = ChatMessage::text("user", turn);
             user.content.extend(attachments.iter().map(|id| Part::Image { attachment_id: id.clone() }));
@@ -383,13 +426,14 @@ impl<'a> TaskRunner<'a> {
                 model: llm_cfg.model.clone(),
                 timeout: Duration::from_millis(llm_cfg.request_timeout_ms),
                 metadata: HashMap::from([("task_id".into(), record.task_id.clone())]),
+                json: true,
             };
             let reply = self.chat_with_retry(record, request).await?;
             match parse_reply(&reply) {
-                Ok(action) => {
+                Ok(actions) => {
                     self.notices.clear();
                     self.latest_screenshots.clear();
-                    return Ok(Some(action));
+                    return Ok(Some(actions));
                 }
                 Err(problem) => {
                     self.notices.push(format!(
@@ -565,7 +609,11 @@ impl<'a> TaskRunner<'a> {
                     }
                     self.ui.event(RunEvent::Notice(&format!("worker {err}; restarting it")));
                     self.rt.restart_worker().await?;
-                    if !spec.idempotent || attempt >= self.backoff.max_attempts {
+                    // A call that hung will most likely hang again (a browser that does not start, a dialog
+                    // blocking the app): report it at once so the planner changes approach, instead of
+                    // spending another full timeout on the same call.
+                    let hung = matches!(err, WorkerError::Hung(_));
+                    if hung || !spec.idempotent || attempt >= self.backoff.max_attempts {
                         // A non-idempotent action may or may not have happened: report it instead of repeating it.
                         break ToolResponse {
                             request_id: call.request_id,
@@ -717,6 +765,7 @@ impl<'a> TaskRunner<'a> {
             model: self.rt.config.llm.model.clone(),
             timeout: Duration::from_millis(self.rt.config.llm.request_timeout_ms),
             metadata: HashMap::from([("task_id".into(), record.task_id.clone()), ("role".into(), "verifier".into())]),
+            json: true,
         };
         let reply = self.chat_with_retry(record, request).await?;
         let verdict = crate::planner::extract_json_value(&reply);
@@ -817,7 +866,17 @@ impl<'a> TaskRunner<'a> {
             }
         }
         let summary = action.args["summary"].as_str().unwrap_or_default().to_string();
-        if failures.is_empty() && self.rt.config.agent.verify_completion_with_llm {
+        // A direct answer (greeting, small talk, general knowledge) touched nothing: there is nothing for
+        // a second opinion to verify, and asking one would only cost another slow LLM call.
+        let direct_answer = record.steps.is_empty() && checks.is_empty();
+        // The second opinion exists for UI work (desktop clicks, web pages), where a check can pass
+        // without proving the goal. Shell, file, AutoCAD and knowledge results are exact data the core
+        // has just re-read itself, so the extra slow LLM call is skipped for them.
+        let ui_work = record.steps.iter().any(|s| {
+            s.status == StepStatus::Succeeded
+                && self.rt.catalog.get(&s.tool).is_some_and(|spec| matches!(spec.category.as_str(), "desktop" | "browser" | "vision"))
+        });
+        if failures.is_empty() && self.rt.config.agent.verify_completion_with_llm && !direct_answer && ui_work {
             if let Err(rejection) = self.llm_verdict(record, &summary, &check_results).await? {
                 failures.push(format!("independent verifier rejected the completion: {rejection}"));
             }
@@ -829,17 +888,32 @@ impl<'a> TaskRunner<'a> {
             detail: json!({"summary": summary, "evidence": evidence, "failures": failures}),
             ..Default::default()
         })?;
-        if failures.is_empty() {
+        let did_work = record.steps.iter().any(|s| s.status == StepStatus::Succeeded);
+        let accept_anyway = !failures.is_empty() && did_work && self.completion_rejections >= MAX_COMPLETION_REJECTIONS;
+        if failures.is_empty() || accept_anyway {
+            let summary = if accept_anyway {
+                let note = if self.rt.config.agent.language.starts_with("vi") {
+                    "Lưu ý: chưa kiểm chứng được đầy đủ kết quả"
+                } else {
+                    "Note: the result could not be fully verified"
+                };
+                format!("{summary}\n\n⚠ {note} ({}).", clip_text(&failures.join("; "), 400))
+            } else {
+                summary
+            };
             record.final_summary = Some(summary);
             if let Some(artifacts) = action.args.get("artifacts").and_then(Value::as_array) {
                 record.artifacts.extend(artifacts.iter().filter_map(Value::as_str).map(String::from));
             }
             let procedure: Vec<String> = record.steps.iter().filter(|s| s.status == StepStatus::Succeeded).map(|s| s.tool.clone()).collect();
             self.rt.memory.record_procedure(&record.goal, &procedure.join(" -> "))?;
-            self.finish(record, TaskStatus::Completed, "all completion checks passed")?;
+            let reason = if accept_anyway { "completed; some completion checks could not be confirmed" } else { "all completion checks passed" };
+            self.finish(record, TaskStatus::Completed, reason)?;
             return Ok(true);
         }
-        record.consecutive_failures += 1;
+        // Rejections are bounded by MAX_COMPLETION_REJECTIONS, not by the consecutive-failure limit, so
+        // finished work is not thrown away because its checks were phrased badly.
+        self.completion_rejections += 1;
         self.notices.push(format!(
             "task.complete was REJECTED because these checks failed: {}. The task is not done; fix it or adjust the checks to what the user actually asked.",
             failures.join(" | ")

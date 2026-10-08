@@ -28,6 +28,12 @@ pub struct Route {
     pub breaker: Mutex<CircuitBreaker>,
     pub process: Option<ManagedProcess>,
     pub startup_timeout: Duration,
+    /// Upper bound for one attempt on this backend, so a hanging Gemini Web call still leaves time for
+    /// the next backend (None: the request's remaining time).
+    pub attempt_timeout: Option<Duration>,
+    /// A server that is started only when a request needs it and it is not running (the local Ollama,
+    /// which the user may have quit). Not supervised: it keeps running after the gateway exits.
+    on_demand: Option<OnDemand>,
     health: Mutex<Option<BackendHealth>>,
     restart_lock: tokio::sync::Mutex<()>,
 }
@@ -39,9 +45,25 @@ impl Route {
             breaker: Mutex::new(breaker),
             process,
             startup_timeout,
+            attempt_timeout: None,
+            on_demand: None,
             health: Mutex::new(None),
             restart_lock: tokio::sync::Mutex::new(()),
         }
+    }
+
+    pub fn with_on_demand_start(mut self, program: std::path::PathBuf, args: Vec<String>) -> Self {
+        self.on_demand = Some(OnDemand { program, args, last_start: Mutex::new(None) });
+        self
+    }
+
+    pub fn with_attempt_timeout(mut self, timeout: Duration) -> Self {
+        self.attempt_timeout = Some(timeout).filter(|t| !t.is_zero());
+        self
+    }
+
+    fn attempt_budget(&self, remaining: Duration) -> Duration {
+        self.attempt_timeout.map_or(remaining, |t| t.min(remaining))
     }
 
     pub fn breaker_state(&self) -> BreakerState {
@@ -50,6 +72,47 @@ impl Route {
 
     fn breaker(&self) -> std::sync::MutexGuard<'_, CircuitBreaker> {
         self.breaker.lock().expect("breaker lock")
+    }
+}
+
+pub struct OnDemand {
+    program: std::path::PathBuf,
+    args: Vec<String>,
+    last_start: Mutex<Option<Instant>>,
+}
+
+/// Start attempts of an on-demand server are at least this far apart.
+const ON_DEMAND_RETRY: Duration = Duration::from_secs(60);
+/// How long a request waits for an on-demand server to come up.
+const ON_DEMAND_STARTUP: Duration = Duration::from_secs(45);
+
+/// Start the route's on-demand server when it is down, and wait until it answers. Returns quickly when
+/// the server is already up or was started less than `ON_DEMAND_RETRY` ago.
+async fn ensure_on_demand(route: &Route) {
+    let Some(on_demand) = &route.on_demand else { return };
+    if matches!(route.backend.probe().await, Ok(p) if p.state != BackendState::Unavailable) {
+        return;
+    }
+    {
+        let mut last = on_demand.last_start.lock().expect("on-demand lock");
+        if last.is_some_and(|t| t.elapsed() < ON_DEMAND_RETRY) {
+            return;
+        }
+        *last = Some(Instant::now());
+    }
+    let name = &route.backend.name;
+    if let Err(e) = crate::supervisor::spawn_independent(&on_demand.program, &on_demand.args) {
+        crate::log::error(&format!("cannot start {name} server {}: {e}", on_demand.program.display()));
+        return;
+    }
+    crate::log::info(&format!("started {name} server {} on demand", on_demand.program.display()));
+    let deadline = Instant::now() + ON_DEMAND_STARTUP;
+    while Instant::now() < deadline {
+        tokio::time::sleep(STARTUP_POLL_INTERVAL).await;
+        if matches!(route.backend.probe().await, Ok(p) if p.state != BackendState::Unavailable) {
+            route.breaker().record_success();
+            return;
+        }
     }
 }
 
@@ -123,7 +186,7 @@ impl Gateway {
         };
         {
             let mut breaker = route.breaker();
-            if state == BackendState::Unavailable && breaker.state() == BreakerState::Closed {
+            if state == BackendState::Unavailable && breaker.state() == BreakerState::Closed && route.on_demand.is_none() {
                 breaker.record_failure();
             }
         }
@@ -209,6 +272,7 @@ impl Gateway {
         let mut last_error: Option<BackendError> = None;
         for route in &self.routes {
             let name = route.backend.name.clone();
+            ensure_on_demand(route).await;
             {
                 let mut breaker = route.breaker();
                 if !breaker.allow() {
@@ -230,7 +294,7 @@ impl Gateway {
                     return Err(GatewayError::new(ErrorKind::BackendDown, "request deadline exceeded", attempts));
                 }
                 let t0 = Instant::now();
-                match route.backend.chat(request, remaining).await {
+                match route.backend.chat(request, route.attempt_budget(remaining)).await {
                     Ok(reply) => {
                         route.breaker().record_success();
                         attempts.push(Attempt { backend: name.clone(), ok: true, error_kind: None, message: None, duration_ms: millis(t0), status: Some(200) });
@@ -278,6 +342,7 @@ impl Gateway {
         let mut last_error: Option<BackendError> = None;
         for route in &self.routes {
             let name = route.backend.name.clone();
+            ensure_on_demand(route).await;
             if !route.breaker().allow() {
                 attempts.push(Attempt {
                     backend: name,
@@ -300,7 +365,8 @@ impl Gateway {
                     }
                 }
             });
-            let (emitted, result) = route.backend.stream(request, deadline.saturating_duration_since(Instant::now()), &inner_tx).await;
+            let budget = route.attempt_budget(deadline.saturating_duration_since(Instant::now()));
+            let (emitted, result) = route.backend.stream(request, budget, &inner_tx).await;
             drop(inner_tx);
             let _ = forward.await;
             match result {

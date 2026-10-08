@@ -152,6 +152,22 @@ async fn pump(mut stream: impl tokio::io::AsyncRead + Unpin, limit: usize) -> (V
     }
 }
 
+/// The exit code follows what a person at a prompt would call success: an explicit `exit N`, a failing
+/// native program (`$LASTEXITCODE`) or a terminating error (exit 1) fail; non-terminating errors that
+/// were reported on stderr (e.g. "access denied" on a few folders during a recursive search) do not turn a
+/// useful result into a failure. Without this, `powershell -Command` exits 1 whenever any error record
+/// was written, even with `-ErrorAction SilentlyContinue`.
+fn wrap_script(script: &str) -> String {
+    format!(
+        "{UTF8_PREAMBLE}$global:LASTEXITCODE = 0
+try {{
+{script}
+}} catch {{ [Console]::Error.WriteLine(($_ | Out-String)); exit 1 }}
+if ($LASTEXITCODE -is [int]) {{ exit $LASTEXITCODE }} else {{ exit 0 }}
+"
+    )
+}
+
 pub async fn run_powershell(
     script: &str,
     executable: &Path,
@@ -160,7 +176,7 @@ pub async fn run_powershell(
     max_output_bytes: usize,
     cancel: Arc<Notify>,
 ) -> std::io::Result<ShellResult> {
-    let utf16: Vec<u8> = format!("{UTF8_PREAMBLE}{script}").encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let utf16: Vec<u8> = wrap_script(script).encode_utf16().flat_map(u16::to_le_bytes).collect();
     let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
     let started = Instant::now();
     let job = JobObject::kill_on_close_strict()?;
@@ -254,6 +270,22 @@ mod tests {
         let r = run_powershell("'x' * 5000", &shell(), None, Duration::from_secs(60), 100, Arc::new(Notify::new())).await.unwrap();
         assert!(r.truncated);
         assert_eq!(r.stdout.len(), 100);
+    }
+
+    #[tokio::test]
+    async fn exit_codes_follow_prompt_semantics() {
+        let run = |s: &'static str| async move {
+            run_powershell(s, &shell(), None, Duration::from_secs(60), 1 << 20, Arc::new(Notify::new())).await.unwrap()
+        };
+        let r = run("Get-Item C:/definitely-missing -ErrorAction SilentlyContinue; Write-Output found-nothing").await;
+        assert_eq!(r.exit_code, 0, "{r:?}");
+        let r = run("Get-Item C:/definitely-missing; Write-Output after").await;
+        assert_eq!(r.exit_code, 0, "non-terminating error is reported, not fatal: {r:?}");
+        assert!(r.stderr.contains("definitely-missing"));
+        assert_eq!(run("throw 'boom'").await.exit_code, 1);
+        assert_eq!(run("Get-Item C:/definitely-missing -ErrorAction Stop").await.exit_code, 1);
+        assert_eq!(run("cmd /c exit 5").await.exit_code, 5);
+        assert_eq!(run("Write-Output x; exit 7").await.exit_code, 7);
     }
 
     #[test]

@@ -38,6 +38,37 @@ pub fn http_ok(url: &str) -> bool {
     line.starts_with("HTTP/1.") && line.as_bytes().get(9) == Some(&b'2')
 }
 
+/// `GET <url>` on loopback with a bearer token; the JSON body when the server answers 2xx.
+fn http_get_json(url: &str, bearer: &str, timeout: Duration) -> Option<serde_json::Value> {
+    let rest = url.strip_prefix("http://")?;
+    let (authority, path) = rest.split_once('/').map_or((rest, "/".to_string()), |(a, p)| (a, format!("/{p}")));
+    let addr: SocketAddr = authority.to_socket_addrs().ok()?.next()?;
+    let mut stream = TcpStream::connect_timeout(&addr, PROBE_TIMEOUT).ok()?;
+    stream.set_read_timeout(Some(timeout)).ok()?;
+    let request = format!("GET {path} HTTP/1.0\r\nHost: {authority}\r\nAuthorization: Bearer {bearer}\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes()).ok()?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response).ok()?;
+    let text = String::from_utf8_lossy(&response);
+    let (head, body) = text.split_once("\r\n\r\n")?;
+    (head.starts_with("HTTP/1.") && head.as_bytes().get(9) == Some(&b'2')).then(|| serde_json::from_str(body).ok())?
+}
+
+/// State of each brain behind the gateway: [{"name", "state", "detail"}] (empty when the gateway is down).
+pub fn brains(config: &Config) -> serde_json::Value {
+    let Some(key) = lga_core::secrets::resolve_secret(&config.root, &config.gateway.api_key_secret) else {
+        return serde_json::json!([]);
+    };
+    let health = http_get_json(&join(&config.llm.gateway_url, "/v1/health"), &key, Duration::from_secs(5));
+    let backends = health.as_ref().and_then(|h| h.get("backends")).and_then(|b| b.as_array()).cloned().unwrap_or_default();
+    serde_json::Value::Array(
+        backends
+            .iter()
+            .map(|b| serde_json::json!({"name": b["name"], "state": b["state"], "breaker": b["breaker"], "detail": b["detail"]}))
+            .collect(),
+    )
+}
+
 fn join(base: &str, path: &str) -> String {
     format!("{}{}", base.trim_end_matches('/'), path)
 }

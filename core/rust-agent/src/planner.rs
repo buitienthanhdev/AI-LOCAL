@@ -35,30 +35,40 @@ fn clip(text: &str, max: usize) -> String {
     format!("{kept}... [truncated]")
 }
 
-pub fn system_prompt(catalog: &str, mode: ExecutionMode, language: &str) -> String {
+/// Most actions accepted from one planner reply.
+pub const MAX_ACTIONS_PER_REPLY: usize = 8;
+
+pub fn system_prompt(catalog: &str, mode: ExecutionMode, language: &str, environment: &str) -> String {
     format!(
-        r#"You are the planner of a local agent that operates a Windows 11 PC for the user. You never act directly: each reply chooses ONE tool call, a local tool router validates it against policy, executes it and reports the result. You then choose the next call, until the user's goal is achieved and proven.
+        r#"You are the planner of a local agent that operates the user's Windows 11 PC. You never act directly: you choose tool calls, a local tool router validates them against policy, executes them and reports the results. You then choose the next calls, until the user's goal is achieved and proven.
 
 # Reply format
 Reply with exactly one JSON object and nothing else (no prose, no markdown fences):
-{{"thought": "<what the current state is and why this action is next>", "plan": ["<remaining high-level steps>"], "action": {{"tool": "<tool name>", "args": {{ ... }}}}}}
-Include "plan" in your first reply and whenever the plan changes; omit it otherwise.
+{{"thought": "<the current state and why these actions are next>", "plan": ["<remaining high-level steps>"], "actions": [{{"tool": "<tool name>", "args": {{ ... }}}}]}}
+"actions" holds 1 to {max_actions} calls run in order; the run stops at the first one that fails and you see every result. Batch calls whose arguments you already know and that do not depend on each other's results (several autocad.create_* shapes, several files, a type then a hotkey). Use a single action when the next arguments depend on what you will observe (element ids, window handles, search results). A task.* call must be the last action. Include "plan" in your first reply and whenever the plan changes.
 
 # Rules
-1. Use only the tools listed below, with arguments that match their schemas exactly. Paths must be absolute Windows paths.
-2. Perception order: UI Automation first (desktop.inspect_ui, desktop.find_element, desktop.read_element). Use desktop.screenshot + vision.locate only when UI Automation cannot see the target. Never invent coordinates or element ids; take them from observations.
-3. Do the task the way the user asked. If the user names an application or a UI action ("open Notepad and type...", "in Chrome search..."), carry it out in that application; filesystem/shell tools may prepare or verify, but must not replace the requested application work. Within an application prefer its structured tools: browser.* for web pages, autocad.* for AutoCAD drawings (never draw in AutoCAD by clicking or typing commands), desktop.set_value before keystrokes for text fields.
-4. Read every result. "verification: passed" means the effect is confirmed. "deferred" means it is not yet confirmed: look at the latest observation before relying on it. An error or "verification: failed" means the step failed: follow its recovery hint and change your approach; never repeat an identical failing action.
-5. Exit code 0 or "no error" is not proof of success. Finish only with task.complete. If anything was changed (a file, an app, a drawing, a web page), its "checks" must be read-only tool calls with expected values that prove the goal, e.g. {{"tool": "filesystem.stat", "args": {{"path": "C:\\temp\\hello.txt"}}, "expect": {{"exists": true}}}}. For a pure question/answer task, cite the ids of the steps that produced the answer in "evidence_steps" instead. Never create files, windows or other side effects the user did not ask for, not even to have something to check.
-6. If the task needs Administrator rights, credentials, payment, or a decision only the user can make, use task.ask_user or task.fail. Never try to bypass UAC, read browser cookies/passwords, or disable security software.
-7. Dialogs: if a dialog appears (Save As, confirmation), handle it explicitly; find its controls with desktop.find_element on its hwnd.
-8. Write task.complete "summary", task.ask_user "question" and task.fail "reason" in this language: {language}.
+1. Conversation: if the message is a greeting, small talk, or a question you can answer from your own knowledge without touching the computer, reply at once with a single task.complete whose "summary" is your full answer (no checks, no evidence_steps). Do not ask the user what they want in that case; just answer helpfully.
+2. Use only the tools listed below, with arguments that match their schemas exactly. Paths must be absolute Windows paths; use the real folders listed under "This computer", never guess a user name.
+3. Opening things for the user to look at, watch or listen to (a web page, a YouTube video or song, a search, a PDF, a picture, a folder): use system.open with the URL or path, also when the user says "open Chrome and ...". It opens in the user's own browser (signed in) or app. browser.* drives a separate automation browser the user does not use: use it only to read or operate pages yourself (fill a form, extract data). To PLAY a song or video: browser.navigate to https://www.youtube.com/results?search_query=<words>, browser.get_state to read the first result's https://www.youtube.com/watch?v=... link, then system.open that watch URL so it plays for the user; if that is not possible, system.open the search URL.
+4. Perception order for desktop apps: UI Automation first (desktop.inspect_ui, desktop.find_element, desktop.read_element). Use desktop.screenshot + vision.locate only when UI Automation cannot see the target. Never invent coordinates or element ids; take them from observations.
+5. Do the task the way the user asked. If the user names an application ("open Word and write...", "draw in AutoCAD..."), do the work in that application. Within an application prefer its structured tools: autocad.* for AutoCAD drawings (never draw by clicking or typing commands), browser.* for web pages, desktop.set_value or desktop.type into a focused text field. Long text (a letter, an essay) is typed with one desktop.type call holding the whole text; first click into the document so it has focus.
+6. Shell: shell.exec runs PowerShell. Errors printed on stderr are information, not necessarily failure; read stdout. Searching big folder trees is slow: pass "timeout_ms" (up to 600000), limit the search to the likely folders and filter early. Prefer shell.exec over clicking for system information and file housekeeping.
+7. Read every result. "verification: passed" means the effect is confirmed. "deferred" means not yet confirmed: look at the latest observation. An error or "verification: failed" means the step failed: follow its recovery hint and change your approach; never repeat an identical failing action.
+8. Finish with task.complete. If something was changed (a file, an app, a drawing, a page), give "checks": read-only tool calls with expected values that prove the result, e.g. {{"tool": "filesystem.stat", "args": {{"path": "C:\\temp\\hello.txt"}}, "expect": {{"exists": true}}}}; expected values must be ones you have actually seen in results. For an answer found with tools, cite the step ids in "evidence_steps". Never create files, windows or other side effects the user did not ask for.
+9. Ask (task.ask_user) only when the request is truly ambiguous AND a wrong guess would be harmful (which files to delete, which account to pay with). For deletions, state exactly what will be deleted in the question. Use task.fail when the task is impossible. Never try to bypass UAC, read browser cookies/passwords, or disable security software.
+10. Dialogs: if a dialog appears (Save As, confirmation), handle it explicitly; find its controls with desktop.find_element on its hwnd.
+11. Write task.complete "summary", task.ask_user "question" and task.fail "reason" in this language: {language}. The summary is what the user reads: say plainly what was done or answer the question.
 
 Execution mode: {mode}. Coordinates are physical screen pixels.
+
+# This computer
+{environment}
 
 # Tools
 {catalog}"#,
         mode = mode.as_str(),
+        max_actions = MAX_ACTIONS_PER_REPLY,
     )
 }
 
@@ -72,6 +82,10 @@ pub struct TurnContext<'a> {
     pub recall: &'a str,
     pub latest_observation: Option<&'a str>,
     pub notices: &'a [String],
+    /// Local date and time, e.g. "Thursday 2026-10-08 15:04 (UTC+07:00)".
+    pub now: &'a str,
+    /// Earlier exchanges with the user (follow-up context, questions and answers).
+    pub conversation: &'a [String],
 }
 
 fn step_line(step: &StepRecord, full: bool) -> String {
@@ -96,7 +110,13 @@ fn step_line(step: &StepRecord, full: bool) -> String {
 }
 
 pub fn user_turn(ctx: &TurnContext<'_>) -> String {
-    let mut out = format!("# Task\n{}\n", ctx.goal);
+    let mut out = format!("# Task\n{}\n\nNow: {}\n", ctx.goal, ctx.now);
+    if !ctx.conversation.is_empty() {
+        out.push_str("\n# Conversation with the user so far\n");
+        for line in ctx.conversation {
+            out.push_str(&format!("- {}\n", clip(line, 1500)));
+        }
+    }
     if !ctx.recall.trim().is_empty() {
         out.push_str(&format!("\n# Relevant memory from earlier tasks\n{}", ctx.recall));
     }
@@ -137,7 +157,7 @@ pub fn user_turn(ctx: &TurnContext<'_>) -> String {
             out.push_str(&format!("- {notice}\n"));
         }
     }
-    out.push_str("\nChoose the next action. Reply with one JSON object only.");
+    out.push_str("\nChoose the next action(s). Reply with one JSON object only.");
     out
 }
 
@@ -216,7 +236,27 @@ pub fn extract_json_value(text: &str) -> Option<Value> {
     extract_json_object(text).and_then(|raw| serde_json::from_str(raw).ok())
 }
 
-pub fn parse_reply(text: &str) -> Result<PlannerAction, String> {
+fn parse_action(action: &Value) -> Result<(String, Value), String> {
+    // Small models sometimes copy the catalog line ("browser.get_state {?max_elements: integer}"): the
+    // tool name is the first word.
+    let tool = action
+        .get("tool")
+        .and_then(Value::as_str)
+        .and_then(|t| t.split(|c: char| c.is_whitespace() || c == '(' || c == '{').find(|w| !w.is_empty()))
+        .ok_or_else(|| "missing action.tool".to_string())?
+        .to_string();
+    let mut args = match action.get("args") {
+        None | Some(Value::Null) => Value::Object(Default::default()),
+        Some(v @ Value::Object(_)) => v.clone(),
+        Some(_) => return Err("action.args must be a JSON object".into()),
+    };
+    strip_autolinks_in(&mut args);
+    Ok((tool, args))
+}
+
+/// Parse a planner reply into the actions to run in order (at most `MAX_ACTIONS_PER_REPLY`, ending at the
+/// first `task.*` call). The first action carries the thought and the plan.
+pub fn parse_reply(text: &str) -> Result<Vec<PlannerAction>, String> {
     let raw = extract_json_object(text).ok_or_else(|| "the reply contains no JSON object".to_string())?;
     let value: Value = serde_json::from_str(raw).map_err(|e| format!("the reply is not valid JSON: {e}"))?;
     let thought = value.get("thought").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -230,20 +270,27 @@ pub fn parse_reply(text: &str) -> Result<PlannerAction, String> {
         ),
         Some(_) => return Err("\"plan\" must be an array of strings".into()),
     };
-    let action = value.get("action").unwrap_or(&value);
-    let tool = action
-        .get("tool")
-        .and_then(Value::as_str)
-        .filter(|t| !t.is_empty())
-        .ok_or_else(|| "missing action.tool".to_string())?
-        .to_string();
-    let mut args = match action.get("args") {
-        None | Some(Value::Null) => Value::Object(Default::default()),
-        Some(v @ Value::Object(_)) => v.clone(),
-        Some(_) => return Err("action.args must be a JSON object".into()),
+    let raw_actions: Vec<&Value> = match value.get("actions") {
+        Some(Value::Array(items)) if !items.is_empty() => items.iter().take(MAX_ACTIONS_PER_REPLY).collect(),
+        Some(Value::Array(_)) => return Err("\"actions\" is empty".into()),
+        Some(_) => return Err("\"actions\" must be an array".into()),
+        None => vec![value.get("action").unwrap_or(&value)],
     };
-    strip_autolinks_in(&mut args);
-    Ok(PlannerAction { thought, plan, tool, args })
+    let mut actions = Vec::with_capacity(raw_actions.len());
+    for (i, raw) in raw_actions.into_iter().enumerate() {
+        let (tool, args) = parse_action(raw)?;
+        let terminal = tool.starts_with("task.");
+        actions.push(PlannerAction {
+            thought: if i == 0 { thought.clone() } else { format!("(continuing the batch) {}", clip(&thought, 120)) },
+            plan: if i == 0 { plan.clone() } else { None },
+            tool,
+            args,
+        });
+        if terminal {
+            break;
+        }
+    }
+    Ok(actions)
 }
 
 #[cfg(test)]
@@ -254,7 +301,7 @@ mod tests {
     #[test]
     fn parses_fenced_reply_with_braces_in_strings() {
         let reply = "Sure:\n```json\n{\"thought\": \"type {x}\", \"plan\": [\"a\"], \"action\": {\"tool\": \"desktop.type\", \"args\": {\"text\": \"}{\"}}}\n```";
-        let action = parse_reply(reply).unwrap();
+        let action = parse_reply(reply).unwrap().remove(0);
         assert_eq!(action.tool, "desktop.type");
         assert_eq!(action.args, json!({"text": "}{"}));
         assert_eq!(action.plan, Some(vec!["a".to_string()]));
@@ -265,7 +312,7 @@ mod tests {
         let reply = r#"{"action": {"tool": "browser.navigate", "args": {"url": "[https://www.google.com](https://www.google.com)",
             "nested": ["see [www.x.org](http://www.x.org)", "[github.com/a/b](https://github.com/a/b)"],
             "text": "read [the docs](https://docs.rs) now"}}}"#;
-        let action = parse_reply(reply).unwrap();
+        let action = parse_reply(reply).unwrap().remove(0);
         assert_eq!(action.args["url"], "https://www.google.com");
         assert_eq!(action.args["nested"][0], "see www.x.org");
         assert_eq!(action.args["nested"][1], "github.com/a/b");
@@ -274,10 +321,29 @@ mod tests {
 
     #[test]
     fn accepts_flat_action_and_rejects_garbage() {
-        let action = parse_reply(r#"{"tool": "desktop.list_windows"}"#).unwrap();
+        let action = parse_reply(r#"{"tool": "desktop.list_windows"}"#).unwrap().remove(0);
         assert_eq!(action.tool, "desktop.list_windows");
         assert!(parse_reply("I will click the button").is_err());
         assert!(parse_reply(r#"{"thought": "x"}"#).is_err());
         assert!(parse_reply(r#"{"action": {"tool": "x", "args": [1]}}"#).is_err());
+        assert!(parse_reply(r#"{"actions": []}"#).is_err());
+        let copied = parse_reply(r#"{"action": {"tool": "browser.get_state {?max_elements: integer}", "args": {}}}"#).unwrap();
+        assert_eq!(copied[0].tool, "browser.get_state");
+    }
+
+    #[test]
+    fn batches_stop_at_the_first_task_call_and_are_capped() {
+        let reply = r#"{"thought": "draw", "plan": ["p"], "actions": [
+            {"tool": "autocad.create_circle", "args": {"radius": 1}},
+            {"tool": "autocad.create_line", "args": {}},
+            {"tool": "task.complete", "args": {"summary": "done"}},
+            {"tool": "autocad.erase", "args": {}}]}"#;
+        let actions = parse_reply(reply).unwrap();
+        let tools: Vec<&str> = actions.iter().map(|a| a.tool.as_str()).collect();
+        assert_eq!(tools, ["autocad.create_circle", "autocad.create_line", "task.complete"]);
+        assert_eq!(actions[0].plan, Some(vec!["p".to_string()]));
+        assert_eq!(actions[1].plan, None);
+        let many = format!(r#"{{"actions": [{}]}}"#, vec![r#"{"tool": "x.y"}"#; 20].join(","));
+        assert_eq!(parse_reply(&many).unwrap().len(), MAX_ACTIONS_PER_REPLY);
     }
 }
