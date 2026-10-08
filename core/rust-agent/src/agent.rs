@@ -36,6 +36,28 @@ use crate::worker::{ToolCall, ToolResponse, WorkerClient, WorkerError};
 const OBSERVE_MAX_ELEMENTS: u64 = 80;
 const OBSERVE_TIMEOUT: Duration = Duration::from_secs(30);
 const MIN_TOOL_TIMEOUT: Duration = Duration::from_secs(1);
+/// Characters of each completion check's result data shown to the verifier.
+const VERIFIER_DATA_CHARS: usize = 1500;
+const VERIFIER_OBSERVATION_CHARS: usize = 600;
+const VERIFIER_RECENT_STEPS: usize = 6;
+const VERIFIER_PROMPT: &str = "You are a strict, independent verifier for a Windows automation agent. You receive the user's goal, the agent's claimed summary, the completion checks it ran (with the ACTUAL result data) and its recent steps. Decide whether this evidence proves that the goal was achieved as the user asked. Reject when: the evidence is generic and would also pass if the goal were not achieved (e.g. only 'URL contains github.com' for 'open the Windows-Use repository'); the actual data contradicts the summary (wrong page, wrong file, wrong value); a part of the goal has no evidence at all. Accept only when every part of the goal is supported by the actual data. Reply with exactly one JSON object: {\"verdict\": \"accept\" | \"reject\", \"reason\": \"<one or two sentences; for reject, say what is wrong or what evidence is missing>\"}";
+
+fn clip_text(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        text.to_string()
+    } else {
+        format!("{}...", text.chars().take(max).collect::<String>())
+    }
+}
+
+fn clip_json(value: &Value, max: usize) -> Value {
+    let text = value.to_string();
+    if text.chars().count() <= max {
+        value.clone()
+    } else {
+        Value::String(clip_text(&text, max))
+    }
+}
 
 /// What the user interface (CLI, future UI) must provide to the runner.
 pub trait Interaction: Send + Sync {
@@ -671,6 +693,53 @@ impl<'a> TaskRunner<'a> {
         self.save(record)
     }
 
+    /// Second opinion on a completion whose checks passed: a separate LLM call in a strict verifier role
+    /// judges whether the evidence actually proves the user's goal (generic checks such as "the URL
+    /// contains github.com" do not prove "the Windows-Use repository page is open").
+    /// Returns Ok(Ok(())) to accept, Ok(Err(reason)) to reject.
+    async fn llm_verdict(&mut self, record: &mut TaskRecord, summary: &str, checks: &[Value]) -> Result<Result<(), String>> {
+        let recent: Vec<Value> = record
+            .steps
+            .iter()
+            .rev()
+            .take(VERIFIER_RECENT_STEPS)
+            .rev()
+            .map(|s| json!({"step": s.step_id, "tool": s.tool, "args": s.args, "status": s.status,
+                            "verification": s.verification, "observation": clip_text(&s.observation, VERIFIER_OBSERVATION_CHARS),
+                            "error": s.error.as_ref().map(|e| e.to_string())}))
+            .collect();
+        let evidence = json!({"goal": record.goal, "claimed_summary": summary, "completion_checks": checks, "recent_steps": recent});
+        let request = ChatRequest {
+            messages: vec![
+                ChatMessage::text("system", VERIFIER_PROMPT),
+                ChatMessage::text("user", serde_json::to_string_pretty(&evidence)?),
+            ],
+            model: self.rt.config.llm.model.clone(),
+            timeout: Duration::from_millis(self.rt.config.llm.request_timeout_ms),
+            metadata: HashMap::from([("task_id".into(), record.task_id.clone()), ("role".into(), "verifier".into())]),
+        };
+        let reply = self.chat_with_retry(record, request).await?;
+        let verdict = crate::planner::extract_json_value(&reply);
+        let decision = verdict.as_ref().and_then(|v| v.get("verdict")).and_then(Value::as_str).unwrap_or("");
+        let reason = verdict
+            .as_ref()
+            .and_then(|v| v.get("reason"))
+            .and_then(Value::as_str)
+            .unwrap_or("no reason given")
+            .to_string();
+        self.audit.record(AuditEvent {
+            kind: "completion_verifier",
+            verification_result: Some(decision.to_string()),
+            detail: json!({"reply": clip_text(&reply, VERIFIER_OBSERVATION_CHARS)}),
+            ..Default::default()
+        })?;
+        Ok(match decision {
+            "accept" => Ok(()),
+            "reject" => Err(reason),
+            _ => Err(format!("verifier reply was not a verdict: {}", clip_text(&reply, 200))),
+        })
+    }
+
     /// VERIFY: run the planner's completion checks; complete only if all pass.
     async fn verify_completion(&mut self, record: &mut TaskRecord, action: &PlannerAction) -> Result<bool> {
         let violations = self.rt.catalog.validate_args("task.complete", &action.args);
@@ -683,6 +752,7 @@ impl<'a> TaskRunner<'a> {
         let checks = action.args["checks"].as_array().cloned().unwrap_or_default();
         let mut failures = Vec::new();
         let mut evidence = Vec::new();
+        let mut check_results: Vec<Value> = Vec::new();
         let state_changing: Vec<String> = record
             .steps
             .iter()
@@ -735,6 +805,8 @@ impl<'a> TaskRunner<'a> {
             match worker.call(&call).await {
                 Ok(response) if response.is_ok() => {
                     let data = response.result.map(|r| r.data).unwrap_or(Value::Null);
+                    check_results.push(json!({"tool": tool, "args": args, "expect": check["expect"],
+                                              "actual": clip_json(&data, VERIFIER_DATA_CHARS)}));
                     match json_matches(&data, &check["expect"]) {
                         Ok(()) => evidence.push(format!("{tool} {} -> {}", args, check["expect"])),
                         Err(problem) => failures.push(format!("check {i} ({tool}): {problem}")),
@@ -745,6 +817,11 @@ impl<'a> TaskRunner<'a> {
             }
         }
         let summary = action.args["summary"].as_str().unwrap_or_default().to_string();
+        if failures.is_empty() && self.rt.config.agent.verify_completion_with_llm {
+            if let Err(rejection) = self.llm_verdict(record, &summary, &check_results).await? {
+                failures.push(format!("independent verifier rejected the completion: {rejection}"));
+            }
+        }
         self.audit.record(AuditEvent {
             kind: "completion_check",
             tool: Some("task.complete".into()),

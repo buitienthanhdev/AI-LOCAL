@@ -50,6 +50,7 @@ pub struct AgentCfg {
     pub history_images: usize,
     pub history_steps: usize,
     pub language: String,
+    pub verify_completion_with_llm: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
