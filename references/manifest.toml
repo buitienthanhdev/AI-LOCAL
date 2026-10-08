@@ -9,7 +9,7 @@ commit = "582a5669e9251372beb63baf39dac453693ff0d8"
 [[repo]]
 name = "gemini-web2api-go"
 url = "https://github.com/zexadev/gemini-web2api-go"
-commit = "2158ea0bce6f5ae9cd7e8e9c04d4fd58b7986195"
+commit = "bc09c7171915deb7406a4b14344692cfa330388e"
 
 [[repo]]
 name = "webai-to-api"
@@ -34,4 +34,4 @@ commit = "11f7c47e5038796a20451b38b23032e625b5aa26"
 [[repo]]
 name = "agent-tars"
 url = "https://github.com/bytedance/UI-TARS-desktop"
-commit = "2ff41a9e515828c5bd5b276e493d73aa0bdf4a3a"
+commit = "20b2dfe85e0a84eb2fe7b2f5db1c2807a4c8d829"

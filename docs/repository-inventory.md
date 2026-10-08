@@ -9,12 +9,12 @@ Line references below point into those pinned trees.
 | repo | commit | license | language | entry point | role here | integration mode |
 |---|---|---|---|---|---|---|
 | [Jeomon/Windows-Use](https://github.com/Jeomon/Windows-Use) | `582a566` (v0.8.1) | MIT (+ vendored `uia/` is Apache-2.0, from yinkaisheng/Python-UIAutomation-for-Windows) | Python ≥3.10 | `windows_use.Agent`, CLI `windows-use`; primitives in `windows_use.agent.desktop.service.Desktop` and `windows_use.uia` | Windows execution layer (first `WindowsControlProvider` implementation) | **Dependency** (pinned git commit), with trimmed dependency metadata and an import shim; no fork |
-| [zexadev/gemini-web2api-go](https://github.com/zexadev/gemini-web2api-go) | `2158ea0` (v4.20.1) | MIT | Go 1.26.1 | `main.go` → `internal/app.Run()` | Primary Gemini Web backend | **Separate process**, built from the pinned source; called over its OpenAI-compatible HTTP API |
+| [zexadev/gemini-web2api-go](https://github.com/zexadev/gemini-web2api-go) | `bc09c71` (v4.20.2) | MIT | Go 1.26.8 | `main.go` → `internal/app.Run()` | Primary Gemini Web backend | **Separate process**, built from the pinned source; called over its OpenAI-compatible HTTP API |
 | [Amm1rr/WebAI-to-API](https://github.com/Amm1rr/WebAI-to-API) | `dd85ae0` (v0.7.1) | MIT | Python ≥3.11,<3.13 | `src/run.py` (FastAPI/uvicorn) | Fallback Gemini Web backend | **Separate process** in its own uv venv; called over HTTP |
 | [bytedance/UI-TARS](https://github.com/bytedance/UI-TARS) | `582f3a7` | Apache-2.0 | Python ≥3.10 (no runtime deps) | `codes/ui_tars/action_parser.py` | Grounding output parser + prompt formats for `VisionProvider` | **Vendored & modified** (~150 lines) with Apache header + modification notice |
 | [browser-use/browser-use](https://github.com/browser-use/browser-use) | `c75e847` (v0.13.11) | MIT | Python ≥3.11 | `browser_use.browser.BrowserSession` | Browser runtime for `BrowserProvider` | **Dependency** (pinned version); event-bus primitives only, never its LLM `Agent` or `Tools` |
 | [beiming183-cloud/AutoCAD-MCP](https://github.com/beiming183-cloud/AutoCAD-MCP) | `11f7c47` (v4.0.0) | MIT | Python ≥3.10 | `autocad_mcp.server:main` (FastMCP stdio) | AutoCAD COM patterns | **Reference + small vendored pieces** with MIT notice; our own thin COM layer |
-| [bytedance/UI-TARS-desktop](https://github.com/bytedance/UI-TARS-desktop) | `2ff41a9` | Apache-2.0 | TypeScript monorepo | `packages/ui-tars/sdk/src/GUIAgent.ts` | Agent-loop architecture reference | **Reference only** — no code copied |
+| [bytedance/UI-TARS-desktop](https://github.com/bytedance/UI-TARS-desktop) | `20b2dfe` | Apache-2.0 | TypeScript monorepo | `packages/ui-tars/sdk/src/GUIAgent.ts` | Agent-loop architecture reference | **Reference only** — no code copied |
 
 ## Per-repository detail
 
