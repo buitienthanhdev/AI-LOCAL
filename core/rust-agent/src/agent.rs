@@ -172,6 +172,8 @@ pub struct TaskRunner<'a> {
 /// After this many rejected completions the task is completed anyway, with the unmet checks reported to
 /// the user, instead of failing work that was actually done because a check was phrased badly.
 const MAX_COMPLETION_REJECTIONS: u32 = 2;
+/// Pauses before retrying a planner call that found no brain available.
+const LLM_RETRY_DELAYS: [Duration; 3] = [Duration::from_secs(5), Duration::from_secs(20), Duration::from_secs(45)];
 
 /// Facts about this PC the planner must not guess (user name, real folder locations).
 fn describe_computer() -> String {
@@ -483,10 +485,12 @@ impl<'a> TaskRunner<'a> {
                         error: Some(json!(err.to_string())),
                         ..Default::default()
                     })?;
-                    if !err.retryable() || attempt >= self.backoff.max_attempts {
+                    // Brain outages (Gemini "high demand", Google throttling) usually pass within a minute or
+                    // two: wait it out with growing pauses rather than failing work that is half done.
+                    if !err.retryable() || attempt as usize > LLM_RETRY_DELAYS.len() {
                         return Err(anyhow!("planner unavailable: {err}"));
                     }
-                    let delay = self.backoff.delay(attempt);
+                    let delay = LLM_RETRY_DELAYS[attempt as usize - 1];
                     self.ui.event(RunEvent::Notice(&format!("LLM unavailable ({err}); retrying in {delay:?}")));
                     tokio::time::sleep(delay).await;
                 }

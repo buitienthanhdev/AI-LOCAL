@@ -182,7 +182,9 @@ pub async fn run_powershell(
     let job = JobObject::kill_on_close_strict()?;
     let mut command = Command::new(executable);
     command
-        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded])
+        // -OutputFormat Text: with redirected streams PowerShell otherwise writes errors as CLIXML, which
+        // neither the planner nor a person can read.
+        .args(["-NoLogo", "-NoProfile", "-NonInteractive", "-OutputFormat", "Text", "-EncodedCommand", &encoded])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

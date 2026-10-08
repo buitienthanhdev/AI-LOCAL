@@ -156,8 +156,8 @@ impl Api {
             return Err(anyhow!("nothing to save"));
         };
         let key = key.trim();
-        if !key.is_empty() && (key.len() < 20 || key.len() > 200 || !key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')) {
-            return Err(anyhow!("Khóa API không hợp lệ (dán đúng chuỗi bắt đầu bằng AIza... từ Google AI Studio)"));
+        if !key.is_empty() && (key.len() < 20 || key.len() > 200 || !key.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))) {
+            return Err(anyhow!("Khóa API không hợp lệ (dán đúng chuỗi khóa từ Google AI Studio)"));
         }
         let env_path = self.config.root.join(".env");
         let existing = fs::read_to_string(&env_path).unwrap_or_default();
