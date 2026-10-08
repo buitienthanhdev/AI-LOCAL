@@ -1,0 +1,75 @@
+[project]
+name = "lga-worker"
+version = "0.1.0"
+description = "Local Gemini Agent - Python execution worker (Windows, browser, vision, AutoCAD tools)"
+license = "MIT"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    # Windows execution layer. Pinned to the audited commit; see [[tool.uv.dependency-metadata]].
+    "windows-use",
+    # Dependencies actually imported by windows_use.agent.desktop / agent.tree / uia / vdm.
+    "pywin32>=308",
+    "comtypes>=1.4.8",
+    "pillow>=11.0",
+    "psutil>=6.0",
+    "fuzzywuzzy>=0.18",
+    "python-levenshtein>=0.26",
+    "markdownify>=0.13",
+    "tabulate>=0.9",
+    "requests>=2.32",
+    # Worker infrastructure.
+    "jsonschema>=4.23",
+]
+
+[project.optional-dependencies]
+browser = ["browser-use==0.13.11"]
+
+[project.scripts]
+lga-worker = "lga_worker.__main__:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3", "pytest-asyncio>=0.24"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lga_worker"]
+
+[tool.uv]
+python-preference = "managed"
+
+[tool.uv.sources]
+windows-use = { git = "https://github.com/Jeomon/Windows-Use", rev = "582a5669e9251372beb63baf39dac453693ff0d8" }
+
+# Windows-Use declares 39 runtime dependencies (every LLM SDK, chat-bot SDKs, telemetry, datasets).
+# We only use its primitive layer, so its dependency metadata is overridden with exactly the
+# packages that layer imports. See docs/repository-inventory.md.
+[[tool.uv.dependency-metadata]]
+name = "windows-use"
+version = "0.8.1"
+requires-dist = [
+    "pywin32",
+    "comtypes",
+    "pillow",
+    "psutil",
+    "fuzzywuzzy",
+    "markdownify",
+    "tabulate",
+    "requests",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "desktop: drives the real Windows desktop (opens windows, moves the mouse)",
+    "autocad: requires AutoCAD to be installed",
+    "browser: launches Chrome",
+    "gateway: requires a running Gemini gateway",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
