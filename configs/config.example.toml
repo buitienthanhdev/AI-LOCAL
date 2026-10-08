@@ -164,8 +164,11 @@ poll_interval_ms = 200
 text_excerpt_chars = 2_000
 # Upper bound of the browser.get_state observation text the planner reads.
 observation_max_chars = 8_000
-# Graceful Chrome shutdown (CDP Browser.close) before the process is killed on worker exit.
+# Graceful Chrome shutdown (CDP Browser.close) before the process is killed.
 close_timeout_ms = 5_000
+# Keep the automation Chrome open when the agent exits (the user sees the result; the next run re-attaches).
+# false: close it with the worker.
+keep_open = true
 
 [vision]
 # "gemini" (image input through the gateway), "ui_tars" (OpenAI-compatible local server) or "none".

@@ -1,0 +1,243 @@
+{
+  "category": "browser",
+  "description": "Web pages in a dedicated automation Chrome profile, driven over the Chrome DevTools Protocol (never the OS mouse/keyboard). Element `index` values come from the latest browser.get_state and are invalid after the page changes.",
+  "$defs": {
+    "tab": {
+      "type": "object", "required": ["tab_id", "url", "title", "active"],
+      "properties": {"tab_id": {"type": "string"}, "url": {"type": "string"}, "title": {"type": "string"}, "active": {"type": "boolean"}}
+    },
+    "element": {
+      "type": "object", "required": ["index", "tag", "text"],
+      "properties": {
+        "index": {"type": "integer"}, "tag": {"type": "string"}, "text": {"type": "string"},
+        "role": {"type": ["string", "null"]},
+        "attributes": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "page": {
+      "type": "object", "required": ["url", "title"],
+      "properties": {"url": {"type": "string"}, "title": {"type": "string"}, "tab_id": {"type": ["string", "null"]}, "restarted": {"type": "boolean"}}
+    }
+  },
+  "tools": [
+    {
+      "name": "browser.status",
+      "description": "Report whether browser automation is available (Chrome installed, browser-use importable) and whether the automation browser is currently connected. Never launches anything.",
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {
+        "type": "object", "required": ["ready", "chrome_path", "chrome_version", "connected"],
+        "properties": {
+          "ready": {"type": "boolean"}, "chrome_path": {"type": ["string", "null"]}, "chrome_version": {"type": ["string", "null"]},
+          "browser_use_version": {"type": ["string", "null"]}, "connected": {"type": "boolean"},
+          "mode": {"type": "string"}, "profile_dir": {"type": "string"}, "cdp_url": {"type": "string"},
+          "tabs": {"type": "array", "items": {"$ref": "#/$defs/tab"}}
+        }
+      },
+      "timeout_ms": 15000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "browser.observe"
+    },
+    {
+      "name": "browser.open",
+      "description": "Make sure the automation Chrome (dedicated profile) is running and attached, launching it if needed; optionally load `url` in the current tab. Verified: CDP connected and, with url, the page host matches. `restarted: true` means the browser had crashed and was relaunched (old tab ids/indices are void).",
+      "input_schema": {"type": "object", "additionalProperties": false, "properties": {"url": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:", "description": "Absolute URL including the scheme, e.g. https://example.com/page."}}},
+      "output_schema": {
+        "type": "object", "required": ["url", "title", "tab_id", "restarted", "launched", "mode"],
+        "properties": {
+          "url": {"type": "string"}, "title": {"type": "string"}, "tab_id": {"type": ["string", "null"]},
+          "restarted": {"type": "boolean"}, "launched": {"type": "boolean"}, "mode": {"type": "string"},
+          "final_url": {"type": "string"}, "redirected": {"type": "boolean"}
+        }
+      },
+      "timeout_ms": 90000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "browser.navigate"
+    },
+    {
+      "name": "browser.navigate",
+      "description": "Load `url` in the current tab (or a new tab) and wait for the page load. Verified: the final URL's host equals the requested host (a redirect to another host is reported in final_url/redirected) and a document with a title or body is present. Starts or recovers the browser automatically.",
+      "input_schema": {
+        "type": "object", "required": ["url"], "additionalProperties": false,
+        "properties": {"url": {"type": "string", "minLength": 1, "pattern": "^[A-Za-z][A-Za-z0-9+.-]*:", "description": "Absolute URL including the scheme, e.g. https://example.com/page."}, "new_tab": {"type": "boolean", "default": false}}
+      },
+      "output_schema": {
+        "type": "object", "required": ["url", "final_url", "title", "tab_id", "redirected", "restarted"],
+        "properties": {
+          "url": {"type": "string"}, "final_url": {"type": "string"}, "title": {"type": "string"},
+          "tab_id": {"type": ["string", "null"]}, "redirected": {"type": "boolean"}, "restarted": {"type": "boolean"},
+          "ready_state": {"type": "string"}
+        }
+      },
+      "timeout_ms": 90000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": true,
+      "verification": "self", "policy_category": "browser.navigate"
+    },
+    {
+      "name": "browser.tabs",
+      "description": "List open tabs (tab_id, url, title, active).",
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["tabs"], "properties": {"tabs": {"type": "array", "items": {"$ref": "#/$defs/tab"}}, "restarted": {"type": "boolean"}}},
+      "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "browser.observe"
+    },
+    {
+      "name": "browser.switch_tab",
+      "description": "Make a tab the active one (tab_id from browser.tabs; a unique suffix of it is accepted). Verified: the tab is focused afterwards.",
+      "input_schema": {"type": "object", "required": ["tab_id"], "additionalProperties": false, "properties": {"tab_id": {"type": "string", "minLength": 4}}},
+      "output_schema": {"$ref": "#/$defs/page"},
+      "timeout_ms": 30000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "browser.navigate"
+    },
+    {
+      "name": "browser.close_tab",
+      "description": "Close a tab (tab_id from browser.tabs). Closing the last tab leaves an empty tab so the browser stays open. Verified: the tab is gone.",
+      "input_schema": {"type": "object", "required": ["tab_id"], "additionalProperties": false, "properties": {"tab_id": {"type": "string", "minLength": 4}}},
+      "output_schema": {"type": "object", "required": ["closed", "tabs"], "properties": {"closed": {"type": "string"}, "tabs": {"type": "array", "items": {"$ref": "#/$defs/tab"}}}},
+      "timeout_ms": 30000, "risk_level": "medium", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "browser.navigate"
+    },
+    {
+      "name": "browser.get_state",
+      "description": "Read the active page: URL, title, tabs, interactive elements with their `index` (use it for click/type/upload/scroll) and a visible-text excerpt (elements are extracted from http(s) pages only). Call again after anything changes the page; indices from older calls may be stale.",
+      "input_schema": {"type": "object", "additionalProperties": false, "properties": {"max_elements": {"type": "integer", "minimum": 1, "maximum": 2000}}},
+      "output_schema": {
+        "type": "object", "required": ["url", "title", "tabs", "elements", "element_count", "truncated", "text_excerpt"],
+        "properties": {
+          "url": {"type": "string"}, "title": {"type": "string"}, "tabs": {"type": "array", "items": {"$ref": "#/$defs/tab"}},
+          "elements": {"type": "array", "items": {"$ref": "#/$defs/element"}}, "element_count": {"type": "integer"},
+          "truncated": {"type": "boolean"}, "text_excerpt": {"type": "string"},
+          "pixels_above": {"type": "integer"}, "pixels_below": {"type": "integer"},
+          "dialogs": {"type": "array", "items": {"type": "string"}}, "restarted": {"type": "boolean"}
+        }
+      },
+      "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "browser.observe"
+    },
+    {
+      "name": "browser.click",
+      "description": "Click the element with `index` from the latest browser.get_state (CDP mouse events inside the page, not the OS mouse). Waits briefly for a resulting navigation and reports the URL afterwards; the core observes the page after this call.",
+      "input_schema": {"type": "object", "required": ["index"], "additionalProperties": false, "properties": {"index": {"type": "integer", "minimum": 1}}},
+      "output_schema": {
+        "type": "object", "required": ["url", "title", "url_changed"],
+        "properties": {
+          "url": {"type": "string"}, "title": {"type": "string"}, "url_changed": {"type": "boolean"},
+          "element": {"$ref": "#/$defs/element"}, "new_tab_id": {"type": ["string", "null"]}, "download": {"type": ["string", "null"]}
+        }
+      },
+      "timeout_ms": 60000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "observe", "policy_category": "browser.input"
+    },
+    {
+      "name": "browser.type",
+      "description": "Type text into the input/textarea/contenteditable with `index` (clears it first unless clear=false); press_enter=true presses Enter afterwards (e.g. to submit a search). Verified: the field's value read back contains the text (read before Enter).",
+      "input_schema": {
+        "type": "object", "required": ["index", "text"], "additionalProperties": false,
+        "properties": {
+          "index": {"type": "integer", "minimum": 1}, "text": {"type": "string"},
+          "clear": {"type": "boolean", "default": true}, "press_enter": {"type": "boolean", "default": false}
+        }
+      },
+      "output_schema": {
+        "type": "object", "required": ["value", "url", "title"],
+        "properties": {"value": {"type": ["string", "null"]}, "url": {"type": "string"}, "title": {"type": "string"}, "url_changed": {"type": "boolean"}}
+      },
+      "timeout_ms": 90000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "self", "policy_category": "browser.input"
+    },
+    {
+      "name": "browser.press_keys",
+      "description": "Send keys to the focused element of the page, e.g. 'Enter', 'Escape', 'Tab', 'ArrowDown', 'Control+a'. The core observes the page afterwards.",
+      "input_schema": {"type": "object", "required": ["keys"], "additionalProperties": false, "properties": {"keys": {"type": "string", "minLength": 1, "maxLength": 200}}},
+      "output_schema": {"type": "object", "required": ["url", "title"], "properties": {"url": {"type": "string"}, "title": {"type": "string"}, "url_changed": {"type": "boolean"}}},
+      "timeout_ms": 60000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "observe", "policy_category": "browser.input"
+    },
+    {
+      "name": "browser.scroll",
+      "description": "Scroll the page (or the scrollable element with `index`) up or down by amount_px (default: about one screen).",
+      "input_schema": {
+        "type": "object", "required": ["direction"], "additionalProperties": false,
+        "properties": {
+          "direction": {"enum": ["up", "down"]}, "amount_px": {"type": "integer", "minimum": 1, "maximum": 100000},
+          "index": {"type": "integer", "minimum": 1}
+        }
+      },
+      "output_schema": {
+        "type": "object", "required": ["scroll_y_before", "scroll_y_after"],
+        "properties": {"scroll_y_before": {"type": "integer"}, "scroll_y_after": {"type": "integer"}, "page_height": {"type": "integer"}}
+      },
+      "timeout_ms": 30000, "risk_level": "low", "requires_confirmation": false, "idempotent": false, "supports_rollback": true,
+      "verification": "observe", "policy_category": "browser.input"
+    },
+    {
+      "name": "browser.upload",
+      "description": "Attach a local file (absolute `path`) to the file input with `index` (or the file input next to that upload button). Verified: the input's file list contains the file. Does not submit the form.",
+      "input_schema": {
+        "type": "object", "required": ["index", "path"], "additionalProperties": false,
+        "properties": {"index": {"type": "integer", "minimum": 1}, "path": {"type": "string", "minLength": 1, "description": "Absolute path of an existing file."}}
+      },
+      "output_schema": {
+        "type": "object", "required": ["path", "files"],
+        "properties": {"path": {"type": "string"}, "files": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "size": {"type": "integer"}}}}}
+      },
+      "timeout_ms": 60000, "risk_level": "high", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "browser.upload"
+    },
+    {
+      "name": "browser.wait_for",
+      "description": "Wait until the active page satisfies every given condition (case-insensitive substring of the visible text, URL or title). Fails with TIMEOUT otherwise. Use after actions whose effect appears asynchronously.",
+      "input_schema": {
+        "type": "object", "additionalProperties": false, "minProperties": 1,
+        "properties": {
+          "text_contains": {"type": "string", "minLength": 1}, "url_contains": {"type": "string", "minLength": 1},
+          "title_contains": {"type": "string", "minLength": 1},
+          "timeout_ms": {"type": "integer", "minimum": 100, "maximum": 300000, "default": 10000}
+        }
+      },
+      "output_schema": {"type": "object", "required": ["url", "title", "waited_ms"], "properties": {"url": {"type": "string"}, "title": {"type": "string"}, "waited_ms": {"type": "integer"}}},
+      "timeout_ms": 310000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "browser.observe"
+    },
+    {
+      "name": "browser.page_matches",
+      "description": "Check, without waiting, whether the active page satisfies every given condition (case-insensitive substring of the visible text, URL or title). Read-only; use in task.complete checks, e.g. expect {\"matches\": true}.",
+      "input_schema": {
+        "type": "object", "additionalProperties": false, "minProperties": 1,
+        "properties": {"text_contains": {"type": "string", "minLength": 1}, "url_contains": {"type": "string", "minLength": 1}, "title_contains": {"type": "string", "minLength": 1}}
+      },
+      "output_schema": {
+        "type": "object", "required": ["matches", "url", "title"],
+        "properties": {"matches": {"type": "boolean"}, "url": {"type": "string"}, "title": {"type": "string"}, "details": {"type": "array", "items": {"type": "string"}}}
+      },
+      "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "browser.observe"
+    },
+    {
+      "name": "browser.screenshot",
+      "description": "Save a PNG of the active tab (viewport, or full_page=true for the whole page) under artifacts/screenshots. Verified: the file exists and is a PNG.",
+      "input_schema": {"type": "object", "additionalProperties": false, "properties": {"full_page": {"type": "boolean", "default": false}}},
+      "output_schema": {"type": "object", "required": ["path", "width", "height", "url"], "properties": {"path": {"type": "string"}, "width": {"type": "integer"}, "height": {"type": "integer"}, "url": {"type": "string"}}},
+      "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "browser.observe"
+    },
+    {
+      "name": "browser.go_back",
+      "description": "Go back one entry in the active tab's history. The core observes the page afterwards.",
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["url", "title", "url_changed"], "properties": {"url": {"type": "string"}, "title": {"type": "string"}, "url_changed": {"type": "boolean"}}},
+      "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "observe", "policy_category": "browser.navigate"
+    },
+    {
+      "name": "browser.downloads",
+      "description": "List files downloaded by the automation browser in this worker session (saved under the configured downloads directory).",
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {
+        "type": "object", "required": ["downloads_dir", "files"],
+        "properties": {
+          "downloads_dir": {"type": "string"},
+          "files": {"type": "array", "items": {"type": "object", "required": ["path", "file_name", "size"], "properties": {"path": {"type": "string"}, "file_name": {"type": "string"}, "size": {"type": ["integer", "null"]}, "exists": {"type": "boolean"}}}}
+        }
+      },
+      "timeout_ms": 10000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "browser.observe"
+    }
+  ]
+}
