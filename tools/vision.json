@@ -1,0 +1,38 @@
+{
+  "category": "vision",
+  "description": "Screen perception fallback when UI Automation cannot see or identify a target. Perceives only; actions go through desktop.* tools.",
+  "tools": [
+    {
+      "name": "vision.status",
+      "description": "Report whether the vision backend (Gemini image input or local UI-TARS) and Windows OCR are usable.",
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["ready", "backend"], "properties": {"ready": {"type": "boolean"}, "backend": {"type": "string"}, "ocr_languages": {"type": "array", "items": {"type": "string"}}}},
+      "timeout_ms": 40000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "vision.observe"
+    },
+    {
+      "name": "vision.ocr",
+      "description": "Read the text visible on screen (or in one window / region) with Windows OCR. Returns lines with screen boxes and centers; with find_text, returns only the lines containing that text (case-insensitive) so they can be clicked with desktop.click x/y.",
+      "input_schema": {"type": "object", "additionalProperties": false, "properties": {"hwnd": {"type": "integer"}, "region": {"type": "object", "required": ["left", "top", "right", "bottom"], "properties": {"left": {"type": "integer"}, "top": {"type": "integer"}, "right": {"type": "integer"}, "bottom": {"type": "integer"}}}, "find_text": {"type": "string", "minLength": 1}, "max_lines": {"type": "integer", "minimum": 1, "maximum": 500, "default": 120}}},
+      "output_schema": {"type": "object", "required": ["language", "lines", "screenshot"], "properties": {"language": {"type": "string"}, "screenshot": {"type": "string"}, "lines": {"type": "array", "items": {"type": "object", "required": ["text", "left", "top", "right", "bottom", "center_x", "center_y"], "properties": {"text": {"type": "string"}, "left": {"type": "integer"}, "top": {"type": "integer"}, "right": {"type": "integer"}, "bottom": {"type": "integer"}, "center_x": {"type": "integer"}, "center_y": {"type": "integer"}}}}}},
+      "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "vision.observe"
+    },
+    {
+      "name": "vision.locate",
+      "description": "Find a UI target described in words (e.g. 'the blue Sign in button at the top right') on a fresh screenshot and return its screen point. Also reports which UI Automation element lies under that point, so you can check the match before clicking. Use only when desktop.find_element and vision.ocr cannot find the target.",
+      "input_schema": {"type": "object", "required": ["description"], "additionalProperties": false, "properties": {"description": {"type": "string", "minLength": 3}, "hwnd": {"type": "integer", "description": "Limit the screenshot to this window."}}},
+      "output_schema": {"type": "object", "required": ["x", "y", "backend", "screenshot"], "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "label": {"type": "string"}, "confidence": {"type": ["number", "null"]}, "backend": {"type": "string"}, "screenshot": {"type": "string"}, "box": {"type": ["object", "null"], "properties": {"left": {"type": "integer"}, "top": {"type": "integer"}, "right": {"type": "integer"}, "bottom": {"type": "integer"}}}, "element_under_point": {"type": ["object", "null"]}}},
+      "timeout_ms": 180000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "side_effects": "none", "policy_category": "vision.observe"
+    },
+    {
+      "name": "vision.describe",
+      "description": "Ask the vision model a question about the current screen (or one window), e.g. 'Is a circle drawn in the AutoCAD canvas?'. Answers come from a screenshot taken now.",
+      "input_schema": {"type": "object", "required": ["question"], "additionalProperties": false, "properties": {"question": {"type": "string", "minLength": 3}, "hwnd": {"type": "integer"}}},
+      "output_schema": {"type": "object", "required": ["answer", "backend", "screenshot"], "properties": {"answer": {"type": "string"}, "backend": {"type": "string"}, "screenshot": {"type": "string"}}},
+      "timeout_ms": 180000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "vision.observe"
+    }
+  ]
+}
