@@ -1,0 +1,37 @@
+# Pinned upstream references. Contents are fetched by scripts/fetch-references.ps1
+# and are never modified or committed. See docs/repository-inventory.md.
+
+[[repo]]
+name = "windows-use"
+url = "https://github.com/Jeomon/Windows-Use"
+commit = "582a5669e9251372beb63baf39dac453693ff0d8"
+
+[[repo]]
+name = "gemini-web2api-go"
+url = "https://github.com/zexadev/gemini-web2api-go"
+commit = "2158ea0bce6f5ae9cd7e8e9c04d4fd58b7986195"
+
+[[repo]]
+name = "webai-to-api"
+url = "https://github.com/Amm1rr/WebAI-to-API"
+commit = "dd85ae0357720b486cdf193ce37b3134fe65ed38"
+
+[[repo]]
+name = "ui-tars"
+url = "https://github.com/bytedance/UI-TARS"
+commit = "582f3a7ea5d285ee8ed9e2e84048d1ab01453c49"
+
+[[repo]]
+name = "browser-use"
+url = "https://github.com/browser-use/browser-use"
+commit = "c75e8476e26d18b7617643bc2ae082fae8eae431"
+
+[[repo]]
+name = "autocad-mcp"
+url = "https://github.com/beiming183-cloud/AutoCAD-MCP"
+commit = "11f7c47e5038796a20451b38b23032e625b5aa26"
+
+[[repo]]
+name = "agent-tars"
+url = "https://github.com/bytedance/UI-TARS-desktop"
+commit = "2ff41a9e515828c5bd5b276e493d73aa0bdf4a3a"

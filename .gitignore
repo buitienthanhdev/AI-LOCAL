@@ -1,0 +1,54 @@
+# Upstream reference clones are pinned in references/manifest.toml and fetched by
+# scripts/fetch-references.ps1. Their contents are never committed here.
+references/*
+!references/manifest.toml
+!references/README.md
+
+# Secrets: never commit
+.env
+.env.*
+!.env.example
+*.cookie
+*.cookies
+cookies*.json
+**/secrets/
+configs/config.toml
+configs/*.local.toml
+
+# Runtime output
+logs/*
+!logs/.gitkeep
+artifacts/*
+!artifacts/.gitkeep
+!artifacts/screenshots/
+artifacts/screenshots/*
+!artifacts/screenshots/.gitkeep
+memory/*.db
+memory/*.db-*
+memory/tasks/
+memory/persistent/
+!memory/.gitkeep
+
+# Build output
+target/
+bin/
+*.exe
+*.pdb
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Node
+node_modules/
+
+# Editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
