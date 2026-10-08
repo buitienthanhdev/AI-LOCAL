@@ -4,7 +4,11 @@ version = "0.1.0"
 description = "Local Gemini Agent - local web UI (drives the agent CLI; follows task state and audit logs)"
 license = "MIT"
 requires-python = ">=3.12,<3.13"
-dependencies = ["lga-common", "aiohttp>=3.10"]
+dependencies = [
+    "lga-common",
+    "aiohttp>=3.10",
+    "pywebview>=5.0",
+]
 
 [project.scripts]
 lga-ui = "lga_ui.__main__:main"
