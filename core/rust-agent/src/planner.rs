@@ -5,6 +5,9 @@
 //! prompt limit, works identically on every backend (they flatten conversations anyway) and makes a
 //! resumed task behave exactly like an uninterrupted one.
 
+use std::sync::OnceLock;
+
+use regex::Regex;
 use serde_json::Value;
 
 use crate::config::ExecutionMode;
@@ -170,6 +173,44 @@ fn extract_json_object(text: &str) -> Option<&str> {
     None
 }
 
+fn markdown_link() -> &'static Regex {
+    static LINK: OnceLock<Regex> = OnceLock::new();
+    LINK.get_or_init(|| Regex::new(r"\[([^\[\]\s]+)\]\(([a-zA-Z][a-zA-Z0-9+.-]*:[^()\s]+)\)").expect("valid regex"))
+}
+
+/// Gemini Web turns text it recognises as a link into markdown (`[text](target)`, where target is the
+/// text with a scheme added). That is undone by restoring exactly what the model wrote (`text`) whenever
+/// the target is just the text plus scheme / trailing slash; real markdown links are left untouched.
+fn is_autolink(label: &str, target: &str) -> bool {
+    let bare = |s: &str| -> String {
+        let s = s.split_once("://").map_or(s, |(_, rest)| rest);
+        let s = s.strip_prefix("mailto:").unwrap_or(s);
+        s.trim_end_matches('/').to_lowercase()
+    };
+    label == target || bare(label) == bare(target)
+}
+
+fn strip_autolinks(text: &str) -> String {
+    markdown_link()
+        .replace_all(text, |caps: &regex::Captures<'_>| {
+            if is_autolink(&caps[1], &caps[2]) { caps[1].to_string() } else { caps[0].to_string() }
+        })
+        .into_owned()
+}
+
+fn strip_autolinks_in(value: &mut Value) {
+    match value {
+        Value::String(s) => {
+            if s.contains("](") {
+                *s = strip_autolinks(s);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(strip_autolinks_in),
+        Value::Object(map) => map.values_mut().for_each(strip_autolinks_in),
+        _ => {}
+    }
+}
+
 /// The first JSON object in a model reply, if any.
 pub fn extract_json_value(text: &str) -> Option<Value> {
     extract_json_object(text).and_then(|raw| serde_json::from_str(raw).ok())
@@ -196,11 +237,12 @@ pub fn parse_reply(text: &str) -> Result<PlannerAction, String> {
         .filter(|t| !t.is_empty())
         .ok_or_else(|| "missing action.tool".to_string())?
         .to_string();
-    let args = match action.get("args") {
+    let mut args = match action.get("args") {
         None | Some(Value::Null) => Value::Object(Default::default()),
         Some(v @ Value::Object(_)) => v.clone(),
         Some(_) => return Err("action.args must be a JSON object".into()),
     };
+    strip_autolinks_in(&mut args);
     Ok(PlannerAction { thought, plan, tool, args })
 }
 
@@ -216,6 +258,18 @@ mod tests {
         assert_eq!(action.tool, "desktop.type");
         assert_eq!(action.args, json!({"text": "}{"}));
         assert_eq!(action.plan, Some(vec!["a".to_string()]));
+    }
+
+    #[test]
+    fn undoes_gemini_web_autolinks_but_keeps_real_markdown() {
+        let reply = r#"{"action": {"tool": "browser.navigate", "args": {"url": "[https://www.google.com](https://www.google.com)",
+            "nested": ["see [www.x.org](http://www.x.org)", "[github.com/a/b](https://github.com/a/b)"],
+            "text": "read [the docs](https://docs.rs) now"}}}"#;
+        let action = parse_reply(reply).unwrap();
+        assert_eq!(action.args["url"], "https://www.google.com");
+        assert_eq!(action.args["nested"][0], "see www.x.org");
+        assert_eq!(action.args["nested"][1], "github.com/a/b");
+        assert_eq!(action.args["text"], "read [the docs](https://docs.rs) now");
     }
 
     #[test]
