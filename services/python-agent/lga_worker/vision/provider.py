@@ -153,5 +153,5 @@ class VisionProvider:
     async def read_text(self, directory: Path, stem: str, hwnd: int | None,
                         region: Rect | None) -> tuple[list[ocr.OcrLine], str, ScreenshotResult]:
         shot = await self.capture(directory, stem, hwnd, region)
-        lines, language = await ocr.recognize(shot.path)
+        lines, language = await ocr.recognize(shot.path, float(self._config.get("vision.ocr_scale")))
         return lines, language, shot

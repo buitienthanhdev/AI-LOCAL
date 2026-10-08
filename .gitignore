@@ -55,4 +55,3 @@ desktop.ini
 
 # Local runtime state (built binaries, venvs, browser profile, backend databases)
 runtime/
-target/

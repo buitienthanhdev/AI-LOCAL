@@ -20,6 +20,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 import types
+import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -34,6 +35,8 @@ class UpstreamImportError(ImportError):
 
 
 def _register_namespace_parents() -> None:
+    if all(getattr(sys.modules.get(name), "__lga_shim__", False) for name in _PARENT_PACKAGES):
+        return  # already registered by an earlier provider in this process
     spec = importlib.util.find_spec("windows_use")
     if spec is None or not spec.submodule_search_locations:
         raise UpstreamImportError(
@@ -63,7 +66,11 @@ def _register_namespace_parents() -> None:
 def load() -> tuple[ModuleType, ModuleType]:
     """Return `(desktop_service_module, uia_module)` from Windows-Use without its package side effects."""
     _register_namespace_parents()
-    import windows_use.agent.desktop.service as desktop_service
-    import windows_use.uia as uia
+    with warnings.catch_warnings():
+        # Windows-Use imports fuzzywuzzy, which warns when python-Levenshtein (GPL) is absent. We do not
+        # install it; this worker's own fuzzy matching uses rapidfuzz.
+        warnings.filterwarnings("ignore", message="Using slow pure-python SequenceMatcher")
+        import windows_use.agent.desktop.service as desktop_service
+        import windows_use.uia as uia
 
     return desktop_service, uia

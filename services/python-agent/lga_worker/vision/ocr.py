@@ -6,6 +6,7 @@ language > Language). Results carry word boxes in image pixels; the provider map
 
 from __future__ import annotations
 
+import io
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -51,8 +52,22 @@ def available_languages() -> list[str]:
     return [lang.language_tag for lang in engine_cls.available_recognizer_languages]
 
 
-async def recognize(image: Path) -> tuple[list[OcrLine], str]:
-    """Recognise text in a PNG/JPEG file. Returns (lines, recogniser language tag)."""
+def _upscaled_png(image: Path, scale: float) -> bytes:
+    from PIL import Image
+
+    with Image.open(image) as source:
+        size = (max(1, round(source.width * scale)), max(1, round(source.height * scale)))
+        buffer = io.BytesIO()
+        source.convert("RGB").resize(size, Image.Resampling.LANCZOS).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+
+async def recognize(image: Path, scale: float = 1.0) -> tuple[list[OcrLine], str]:
+    """Recognise text in a PNG/JPEG file. Returns (lines, recogniser language tag).
+
+    With `scale` > 1 the image is upscaled first (small UI text is recognised far more reliably); word boxes
+    are returned in the ORIGINAL image's pixels.
+    """
     decoder_cls, engine_cls, writer_cls, stream_cls = _import_winrt()
     engine = engine_cls.try_create_from_user_profile_languages()
     if engine is None:
@@ -60,7 +75,8 @@ async def recognize(image: Path) -> tuple[list[OcrLine], str]:
                         "no Windows OCR language is installed for the user's profile languages")
     stream = stream_cls()
     writer = writer_cls(stream)
-    writer.write_bytes(image.read_bytes())
+    data = _upscaled_png(image, scale) if scale != 1.0 else image.read_bytes()
+    writer.write_bytes(data)
     await writer.store_async()
     await writer.flush_async()
     writer.detach_stream()
@@ -70,8 +86,8 @@ async def recognize(image: Path) -> tuple[list[OcrLine], str]:
     result = await engine.recognize_async(bitmap)
     lines: list[OcrLine] = []
     for line in result.lines:
-        words = [OcrWord(w.text, w.bounding_rect.x, w.bounding_rect.y, w.bounding_rect.width, w.bounding_rect.height)
-                 for w in line.words]
+        words = [OcrWord(w.text, w.bounding_rect.x / scale, w.bounding_rect.y / scale, w.bounding_rect.width / scale,
+                         w.bounding_rect.height / scale) for w in line.words]
         if words:
             lines.append(OcrLine(line.text, words))
     return lines, engine.recognizer_language.language_tag

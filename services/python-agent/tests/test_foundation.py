@@ -166,3 +166,11 @@ def test_powershell_output_has_no_ansi_escapes() -> None:
     shell = resolve_powershell("pwsh")
     result = run_powershell("$PSVersionTable.PSVersion", executable=shell, cwd=None, timeout_s=60, max_output_bytes=10_000)
     assert "[" not in result.stdout and "Major" in result.stdout
+
+
+def test_upstream_shim_can_load_twice_in_one_process() -> None:
+    from lga_worker.windows import _upstream
+
+    first = _upstream.load()
+    second = _upstream.load()
+    assert first[0] is second[0]

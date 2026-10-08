@@ -183,6 +183,8 @@ ui_tars_min_free_vram_mb = 9_000
 # Pixel budget for screenshots sent to a grounding model (UI-TARS smart_resize: 1280*28*28).
 max_pixels = 1_003_520
 grounding_timeout_ms = 120_000
+# Windows OCR misses small UI text (menu labels at 9 pt); captures are upscaled by this factor before OCR.
+ocr_scale = 2.0
 
 [autocad]
 prog_id = "AutoCAD.Application"
