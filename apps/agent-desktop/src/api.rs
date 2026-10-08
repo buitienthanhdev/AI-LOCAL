@@ -206,6 +206,7 @@ impl Api {
                     "task_id": r["task_id"], "goal": r["goal"], "status": r["status"], "mode": r["mode"],
                     "updated_at": r["updated_at"], "created_at": r["created_at"],
                     "steps": r["steps"].as_array().map_or(0, Vec::len),
+                    "interrupted": interrupted(&r),
                 })
             })
             .collect();
@@ -220,9 +221,7 @@ impl Api {
         let paused = self.tasks_dir().join(format!("{id}.pause")).exists();
         // A task that is not finished but whose runner process is gone (crash, reboot, killed) will never
         // move again on its own: the UI offers to run it again instead of showing it as busy forever.
-        let status = task["status"].as_str().unwrap_or("");
-        let unfinished = !matches!(status, "completed" | "failed" | "cancelled" | "needs_user");
-        let interrupted = unfinished && task["runner_pid"].as_u64().is_some_and(|pid| !process_alive(pid as u32));
+        let interrupted = interrupted(&task);
         json_reply(StatusCode::OK, json!({"task": task, "pending_request": pending, "pause_requested": paused, "interrupted": interrupted}))
     }
 
@@ -353,6 +352,13 @@ impl Api {
         Command::new("explorer.exe").raw_arg(arg).spawn()?;
         Ok(json_reply(StatusCode::OK, json!({"ok": true})))
     }
+}
+
+/// Not finished, but its runner process is gone (crash, reboot, killed): it will never move on its own.
+fn interrupted(task: &Value) -> bool {
+    let status = task["status"].as_str().unwrap_or("");
+    let unfinished = !matches!(status, "completed" | "failed" | "cancelled" | "needs_user");
+    unfinished && task["runner_pid"].as_u64().is_some_and(|pid| !process_alive(pid as u32))
 }
 
 fn process_alive(pid: u32) -> bool {

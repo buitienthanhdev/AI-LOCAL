@@ -286,8 +286,8 @@ function drawHistory() {
     if (!list.length) continue;
     out.push(el("div", { class: "group" }, name));
     for (const t of list) out.push(el("button", { class: `item ${t.task_id === selected ? "sel" : ""}`, title: t.goal, onclick: () => select(t.task_id) },
-      el("span", { class: `dot ${dotClass(t.status)}` }),
-      el("div", { style: "flex:1;min-width:0" }, el("div", { class: "g" }, t.goal), el("div", { class: "t" }, `${when(t.updated_at)} · ${STATUS[t.status] || t.status}`))));
+      el("span", { class: `dot ${t.interrupted ? "warn" : dotClass(t.status)}` }),
+      el("div", { style: "flex:1;min-width:0" }, el("div", { class: "g" }, t.goal), el("div", { class: "t" }, `${when(t.updated_at)} · ${t.interrupted ? "Bị gián đoạn" : STATUS[t.status] || t.status}`))));
   }
   if (!out.length) out.push(el("div", { class: "group" }, q ? "Không tìm thấy" : "Chưa có việc nào"));
   $("history").replaceChildren(...out);
