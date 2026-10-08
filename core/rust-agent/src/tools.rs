@@ -41,9 +41,21 @@ pub struct ToolSpec {
     pub supports_rollback: bool,
     pub verification: VerificationMode,
     pub policy_category: String,
+    /// "none" | "possible" | "yes". Defaults from `verification`: read-only tools have none.
+    #[serde(default)]
+    pub side_effects: Option<String>,
 }
 
 impl ToolSpec {
+    /// True when a successful call definitely changed state (files, apps, documents, pages).
+    pub fn changes_state(&self) -> bool {
+        match self.side_effects.as_deref() {
+            Some("none") | Some("possible") => false,
+            Some(_) => true,
+            None => self.verification != VerificationMode::None,
+        }
+    }
+
     /// Executed by the core itself rather than the worker.
     pub fn is_core_tool(&self) -> bool {
         self.name.starts_with("task.")
@@ -92,15 +104,15 @@ fn core_tools() -> Vec<ToolSpec> {
         supports_rollback: false,
         verification: VerificationMode::SelfCheck,
         policy_category: "task".into(),
+        side_effects: Some("none".into()),
     };
     vec![
         base(
             "task.complete",
-            "Declare the task finished. List read-only `checks` (tool calls such as filesystem.stat, \
-             desktop.find_element, browser.get_state, autocad.verify_geometry) that prove the result; the core \
-             runs them and accepts completion only if every check passes. Never complete without evidence.",
+            "Declare the task finished. If any step changed state (files, apps, drawings, web forms), give              `checks`: read-only tool calls (filesystem.stat, desktop.find_element, browser.get_state,              autocad.verify_geometry, ...) with the values they must return; the core re-runs them and              accepts completion only if every check passes. For pure information requests you may instead              cite `evidence_steps`: ids of earlier successful read-only steps whose results contain the answer.",
             json!({
-                "type": "object", "required": ["summary", "checks"], "additionalProperties": false,
+                "type": "object", "required": ["summary"], "additionalProperties": false,
+                "anyOf": [{"required": ["checks"]}, {"required": ["evidence_steps"]}],
                 "properties": {
                     "summary": {"type": "string", "minLength": 1},
                     "checks": {"type": "array", "minItems": 1, "items": {
@@ -108,9 +120,10 @@ fn core_tools() -> Vec<ToolSpec> {
                         "properties": {
                             "tool": {"type": "string"},
                             "args": {"type": "object"},
-                            "expect": {"type": "object", "description": "JSON fields that must equal these values in the check's result data, e.g. {\"exists\": true}."}
+                            "expect": {"type": "object", "minProperties": 1, "description": "Fields of the check's result data that must equal these values, e.g. {\"exists\": true}; dotted keys reach nested fields."}
                         }
                     }},
+                    "evidence_steps": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^s[0-9]{3,}$"}},
                     "artifacts": {"type": "array", "items": {"type": "string"}}
                 }
             }),

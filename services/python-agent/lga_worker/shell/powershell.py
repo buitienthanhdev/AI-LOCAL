@@ -44,6 +44,8 @@ _UTF8_PREAMBLE = (
     "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
     "$OutputEncoding = [System.Text.UTF8Encoding]::new($false); "
     "$ProgressPreference = 'SilentlyContinue'; "
+    # PowerShell 7 colours formatted output with ANSI escapes; captured output must be plain text.
+    "if ($PSStyle) { $PSStyle.OutputRendering = 'PlainText' }; "
 )
 
 

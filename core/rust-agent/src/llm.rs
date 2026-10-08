@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -21,9 +20,6 @@ use crate::secrets::resolve_secret;
 
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(5);
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(500);
-const DETACHED_PROCESS: u32 = 0x0000_0008;
-const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -225,30 +221,15 @@ fn spawn_gateway(config: &Config) -> Result<(), LlmError> {
             python.display()
         )));
     }
-    let build = |flags: u32| {
-        let mut command = std::process::Command::new(&python);
-        command
-            .args(["-X", "utf8", "-m", "lga_gateway"])
-            .current_dir(&config.root)
-            .env("LGA_ROOT", &config.root)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(flags);
-        }
-        let _ = flags;
-        command
-    };
-    // The gateway must outlive this CLI process, so it leaves our job when the job allows it.
-    let detached = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP;
-    build(detached | CREATE_BREAKAWAY_FROM_JOB)
-        .spawn()
-        .or_else(|_| build(detached).spawn())
-        .map(|_| ())
-        .map_err(|e| LlmError::Config(format!("starting gateway: {e}")))
+    let root = config.root.to_string_lossy().into_owned();
+    crate::process::spawn_detached(
+        &python,
+        &["-X", "utf8", "-m", "lga_gateway"],
+        &config.root,
+        &[("LGA_ROOT", root.as_str()), ("PYTHONIOENCODING", "utf-8")],
+    )
+    .map(|_| ())
+    .map_err(|e| LlmError::Config(format!("starting gateway: {e}")))
 }
 
 #[async_trait]

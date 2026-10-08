@@ -662,6 +662,32 @@ impl<'a> TaskRunner<'a> {
         let checks = action.args["checks"].as_array().cloned().unwrap_or_default();
         let mut failures = Vec::new();
         let mut evidence = Vec::new();
+        let state_changing: Vec<String> = record
+            .steps
+            .iter()
+            .filter(|s| s.status == StepStatus::Succeeded)
+            .filter(|s| self.rt.catalog.get(&s.tool).is_some_and(|spec| spec.changes_state()))
+            .map(|s| format!("{} {}", s.step_id, s.tool))
+            .collect();
+        if checks.is_empty() && !state_changing.is_empty() {
+            failures.push(format!(
+                "this task changed state ({}); evidence_steps are not enough - give read-only checks that prove the result",
+                state_changing.join(", ")
+            ));
+        }
+        for step_id in action.args["evidence_steps"].as_array().cloned().unwrap_or_default() {
+            let id = step_id.as_str().unwrap_or_default();
+            match record.steps.iter().find(|s| s.step_id == id) {
+                None => failures.push(format!("evidence step {id} does not exist")),
+                Some(step) if step.status != StepStatus::Succeeded => {
+                    failures.push(format!("evidence step {id} did not succeed ({:?})", step.status))
+                }
+                Some(step) if !matches!(step.verification.as_deref(), Some("passed" | "not_applicable")) => failures.push(
+                    format!("evidence step {id} is not verified (verification {})", step.verification.as_deref().unwrap_or("none")),
+                ),
+                Some(step) => evidence.push(format!("{id} {} succeeded (verification {})", step.tool, step.verification.as_deref().unwrap_or("?"))),
+            }
+        }
         for (i, check) in checks.iter().enumerate() {
             let tool = check["tool"].as_str().unwrap_or_default();
             let Some(spec) = self.rt.catalog.get(tool).cloned() else {

@@ -64,7 +64,8 @@
       "idempotent": false,
       "supports_rollback": false,
       "verification": "observe",
-      "policy_category": "shell"
+      "policy_category": "shell",
+      "side_effects": "possible"
     },
     {
       "name": "filesystem.read",
