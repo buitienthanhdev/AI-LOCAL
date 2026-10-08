@@ -9,7 +9,8 @@ use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
 
 use lga_core::agent::{Interaction, RunEvent, Runtime, TaskRunner};
-use lga_core::cancel::request_cancel;
+use lga_core::cancel::{clear_pause, request_cancel, request_pause};
+use lga_core::interaction::FileInteraction;
 use lga_core::config::{Config, ExecutionMode};
 use lga_core::doctor;
 use lga_core::llm::{ChatProvider, GatewayProvider};
@@ -35,13 +36,25 @@ enum Command {
         /// Approve actions the policy marks "confirm" without asking (never overrides "deny").
         #[arg(long)]
         yes: bool,
+        /// Answer confirmations/questions through memory/tasks/<id>.request.json (used by apps/agent-ui).
+        #[arg(long)]
+        ui_channel: bool,
+        /// Use this task id instead of generating one (lets a front-end know the id in advance).
+        #[arg(long)]
+        task_id: Option<String>,
     },
     /// Continue a stopped, failed or interrupted task from its saved state.
     Resume {
         task_id: String,
         #[arg(long)]
         yes: bool,
+        #[arg(long)]
+        ui_channel: bool,
     },
+    /// Pause a running task before its next step.
+    Pause { task_id: String },
+    /// Let a paused task continue.
+    Unpause { task_id: String },
     /// Show running and recent tasks, or one task in detail.
     Status { task_id: Option<String> },
     /// Request cancellation of a running task.
@@ -192,11 +205,17 @@ fn print_summary(record: &TaskRecord) {
     }
 }
 
-async fn run_task(config: Config, mut record: TaskRecord, yes: bool) -> Result<ExitCode> {
+async fn run_task(config: Config, mut record: TaskRecord, yes: bool, ui_channel: bool) -> Result<ExitCode> {
     let llm = gateway(&config, true).await?;
+    let tasks_dir = config.tasks_dir();
     let mut rt = Runtime::new(config, record.mode, llm)?;
-    let ui = ConsoleUi { auto_approve: yes, interactive: std::io::stdin().is_terminal() };
-    let mut runner = TaskRunner::new(&mut rt, &ui, &record)?;
+    let console = ConsoleUi { auto_approve: yes, interactive: !ui_channel && std::io::stdin().is_terminal() };
+    let ui: Box<dyn Interaction> = if ui_channel && !yes {
+        Box::new(FileInteraction::new(&tasks_dir, &record.task_id, console))
+    } else {
+        Box::new(console)
+    };
+    let mut runner = TaskRunner::new(&mut rt, ui.as_ref(), &record)?;
     let token = runner.cancel_token();
     tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -235,15 +254,37 @@ async fn main_inner() -> Result<ExitCode> {
     let cli = Cli::parse();
     let config = Config::load()?;
     match cli.command {
-        Command::Run { task, mode, yes } => {
+        Command::Run { task, mode, yes, ui_channel, task_id } => {
             let mode = match mode {
                 Some(m) => ExecutionMode::parse(&m)?,
                 None => config.agent.mode,
             };
-            let record = TaskRecord::new(new_task_id(), task, mode);
-            run_task(config, record, yes).await
+            let task_id = match task_id {
+                Some(id) if id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') && !id.is_empty() => id,
+                Some(id) => bail!("invalid task id {id:?} (letters, digits and '-' only)"),
+                None => new_task_id(),
+            };
+            if store(&config).load(&task_id).is_ok() {
+                bail!("task {task_id} already exists; use `agent resume {task_id}`");
+            }
+            let record = TaskRecord::new(task_id, task, mode);
+            run_task(config, record, yes, ui_channel).await
         }
-        Command::Resume { task_id, yes } => {
+        Command::Pause { task_id } => {
+            let (record, _) = store(&config).load(&task_id)?;
+            if record.status.is_terminal() {
+                bail!("task {task_id} already {}", record.status.as_str());
+            }
+            request_pause(&config.tasks_dir(), &task_id)?;
+            println!("Pause requested for {task_id}; it pauses before its next step.");
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Unpause { task_id } => {
+            clear_pause(&config.tasks_dir(), &task_id)?;
+            println!("{task_id} may continue.");
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Resume { task_id, yes, ui_channel } => {
             let (mut record, source) = store(&config).load(&task_id)?;
             match source {
                 LoadSource::Primary => {}
@@ -252,7 +293,7 @@ async fn main_inner() -> Result<ExitCode> {
             }
             record.resume()?;
             println!("Resuming {} at step {} ({})", record.task_id, record.steps.len() + 1, record.goal);
-            run_task(config, record, yes).await
+            run_task(config, record, yes, ui_channel).await
         }
         Command::Status { task_id } => {
             let store = store(&config);

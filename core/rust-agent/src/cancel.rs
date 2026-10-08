@@ -14,15 +14,44 @@ pub const POLL_INTERVAL: Duration = Duration::from_millis(500);
 pub struct CancelToken {
     flag: Arc<AtomicBool>,
     marker: PathBuf,
+    pause_marker: PathBuf,
 }
 
 pub fn marker_path(tasks_dir: &Path, task_id: &str) -> PathBuf {
     tasks_dir.join(format!("{task_id}.cancel"))
 }
 
+pub fn pause_marker_path(tasks_dir: &Path, task_id: &str) -> PathBuf {
+    tasks_dir.join(format!("{task_id}.pause"))
+}
+
+/// Ask a running task to pause before its next step (`agent pause`).
+pub fn request_pause(tasks_dir: &Path, task_id: &str) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(tasks_dir)?;
+    let path = pause_marker_path(tasks_dir, task_id);
+    std::fs::write(&path, chrono::Utc::now().to_rfc3339())?;
+    Ok(path)
+}
+
+/// Let a paused task continue (`agent unpause`).
+pub fn clear_pause(tasks_dir: &Path, task_id: &str) -> std::io::Result<()> {
+    match std::fs::remove_file(pause_marker_path(tasks_dir, task_id)) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
 impl CancelToken {
     pub fn new(tasks_dir: &Path, task_id: &str) -> Self {
-        Self { flag: Arc::new(AtomicBool::new(false)), marker: marker_path(tasks_dir, task_id) }
+        Self {
+            flag: Arc::new(AtomicBool::new(false)),
+            marker: marker_path(tasks_dir, task_id),
+            pause_marker: pause_marker_path(tasks_dir, task_id),
+        }
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.pause_marker.exists()
     }
 
     pub fn cancel(&self) {

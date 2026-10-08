@@ -26,6 +26,7 @@ pub enum TaskStatus {
     Verifying,
     Recovering,
     NeedsUser,
+    Paused,
     Completed,
     Failed,
     Cancelled,
@@ -45,6 +46,7 @@ impl TaskStatus {
             TaskStatus::Verifying => "verifying",
             TaskStatus::Recovering => "recovering",
             TaskStatus::NeedsUser => "needs_user",
+            TaskStatus::Paused => "paused",
             TaskStatus::Completed => "completed",
             TaskStatus::Failed => "failed",
             TaskStatus::Cancelled => "cancelled",
@@ -78,6 +80,8 @@ impl TaskStatus {
                 | (Verifying, Completed)
                 | (Verifying, Planning)
                 | (NeedsUser, Planning)
+                | (Planning, Paused)
+                | (Paused, Planning)
         )
     }
 }
