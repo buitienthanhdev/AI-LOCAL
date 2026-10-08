@@ -22,6 +22,8 @@ use crate::attachments::AttachmentStore;
 use crate::errors::{BackendError, ErrorKind};
 use crate::types::{BackendState, Capabilities, ChatRequest, Message, ModelInfo, Part, StreamDelta};
 
+/// Longest wait for one Gemini API model before trying the next candidate.
+const API_MODEL_ATTEMPT: Duration = Duration::from_secs(25);
 /// Upstream error bodies are truncated before they are logged or returned.
 pub const MAX_ERROR_BODY_CHARS: usize = 500;
 const PRIMARY_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -42,7 +44,9 @@ pub enum Kind {
     WebAiToApi { discovered_default: Mutex<Option<String>> },
     Ollama { num_ctx: u32 },
     /// The official Gemini API through its OpenAI-compatible endpoint (optional; needs the user's key).
-    GeminiApi { api_key: String, discovered_default: Mutex<Option<String>> },
+    /// `discovered_default` is the model that last answered (or the best candidate); `candidates` are the
+    /// usable Flash models, best first, tried in turn when one is overloaded.
+    GeminiApi { api_key: String, discovered_default: Mutex<Option<String>>, candidates: Mutex<Vec<String>> },
     /// A local OpenAI-compatible server (llama.cpp's llama-server, LM Studio, ...).
     OpenAiServer { discovered_default: Mutex<Option<String>> },
 }
@@ -104,7 +108,7 @@ impl Backend {
 
     pub fn gemini_api(name: &str, base_url: &str, model: &str, api_key: String, store: Arc<AttachmentStore>, connect: Duration) -> Self {
         // The API is remote: unlike the loopback backends it honours the system proxy settings.
-        let mut backend = Self::new(name, base_url, model, Kind::GeminiApi { api_key, discovered_default: Mutex::new(None) }, store, connect);
+        let mut backend = Self::new(name, base_url, model, Kind::GeminiApi { api_key, discovered_default: Mutex::new(None), candidates: Mutex::new(Vec::new()) }, store, connect);
         backend.client = reqwest::Client::builder().connect_timeout(connect).build().expect("HTTP client with static settings");
         backend
     }
@@ -349,6 +353,46 @@ impl Backend {
     }
 
     pub async fn chat(&self, request: &ChatRequest, timeout: Duration) -> Result<Reply, BackendError> {
+        // Gemini API with model "auto": a model that is overloaded (503 "high demand"), rate limited or gone
+        // is skipped for the next candidate; the one that answers becomes the default.
+        if let Kind::GeminiApi { discovered_default, candidates, .. } = &self.kind {
+            let auto = request.model.is_empty() || request.model == "auto";
+            let mut order: Vec<String> = candidates.lock().expect("model lock").clone();
+            if let Some(current) = discovered_default.lock().expect("model lock").clone() {
+                order.retain(|m| *m != current);
+                order.insert(0, current);
+            }
+            if auto && order.len() > 1 {
+                let deadline = std::time::Instant::now() + timeout;
+                let mut last = None;
+                let tries = order.len().min(5);
+                for (i, model) in order.into_iter().take(tries).enumerate() {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    // While other models remain, one that hangs must not use up the whole budget.
+                    let budget = if i + 1 < tries { remaining.min(API_MODEL_ATTEMPT) } else { remaining };
+                    let mut attempt = request.clone();
+                    attempt.model = model.clone();
+                    match self.chat_once(&attempt, budget).await {
+                        Ok(reply) => {
+                            *discovered_default.lock().expect("model lock") = Some(model);
+                            return Ok(reply);
+                        }
+                        Err(e) if matches!(e.status, Some(404 | 429 | 500 | 503)) || e.message.ends_with("request timed out") => {
+                            last = Some(e)
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                return Err(last.unwrap_or_else(|| BackendError::new(ErrorKind::BackendDown, format!("{}: request timed out", self.name))));
+            }
+        }
+        self.chat_once(request, timeout).await
+    }
+
+    async fn chat_once(&self, request: &ChatRequest, timeout: Duration) -> Result<Reply, BackendError> {
         let model = self.resolve_model(&request.model);
         let response = self.post(request, false, timeout).await?;
         let text = response.text().await.map_err(|e| self.transport_error(&e))?;
@@ -595,28 +639,38 @@ impl Backend {
                 *slot = models.first().map(|m| m.id.clone());
             }
         }
-        if let Kind::GeminiApi { discovered_default, .. } = &self.kind {
+        if let Kind::GeminiApi { discovered_default, candidates, .. } = &self.kind {
+            let ranked = ranked_flash_models(models.iter().map(|m| m.id.as_str()));
             let mut slot = discovered_default.lock().expect("model lock");
             if slot.is_none() {
-                *slot = best_flash_model(models.iter().map(|m| m.id.as_str()));
+                *slot = ranked.first().cloned();
             }
+            *candidates.lock().expect("model lock") = ranked;
         }
         Ok(models)
     }
 }
 
-/// The newest general-purpose Flash model of a Gemini API model list (fast and generous on the free tier).
-pub fn best_flash_model<'a>(ids: impl Iterator<Item = &'a str>) -> Option<String> {
-    const EXCLUDE: [&str; 8] = ["lite", "image", "tts", "audio", "live", "embedding", "thinking", "exp"];
-    ids.map(|id| id.trim_start_matches("models/"))
+/// General-purpose Flash models of a Gemini API model list, best first: newer versions first, and at equal
+/// version a stable model before a preview (fast and generous on the free tier).
+pub fn ranked_flash_models<'a>(ids: impl Iterator<Item = &'a str>) -> Vec<String> {
+    const EXCLUDE: [&str; 13] = ["image", "tts", "audio", "live", "embedding", "thinking", "exp", "omni", "robotics",
+                                 "computer-use", "transcribe", "customtools", "nano"];
+    // Lite models come last: weaker planners, but still far better than none when the others are overloaded.
+    let mut ranked: Vec<(bool, f64, bool, String)> = ids
+        .map(|id| id.trim_start_matches("models/"))
         .filter(|id| id.starts_with("gemini-") && id.contains("flash") && !EXCLUDE.iter().any(|x| id.contains(x)))
         .map(|id| {
             let version: f64 = id["gemini-".len()..].split('-').next().and_then(|v| v.parse().ok()).unwrap_or(0.0);
-            // Newer versions first; at equal version a stable model beats a preview.
-            (version, !id.contains("preview"), id.to_string())
+            (!id.contains("lite"), version, !id.contains("preview"), id.to_string())
         })
-        .max_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)))
-        .map(|(_, _, id)| id)
+        .collect();
+    ranked.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.total_cmp(&a.1)).then(b.2.cmp(&a.2)));
+    ranked.into_iter().map(|(_, _, _, id)| id).collect()
+}
+
+pub fn best_flash_model<'a>(ids: impl Iterator<Item = &'a str>) -> Option<String> {
+    ranked_flash_models(ids).into_iter().next()
 }
 
 #[cfg(test)]
@@ -628,6 +682,10 @@ mod tests {
         let ids = ["models/gemini-2.5-flash", "models/gemini-3.1-flash-preview-05", "models/gemini-3.1-flash", "models/gemini-3.1-flash-lite",
                    "models/gemini-3.5-pro", "models/gemini-3.1-flash-image", "models/text-embedding-004"];
         assert_eq!(best_flash_model(ids.into_iter()).as_deref(), Some("gemini-3.1-flash"));
+        assert_eq!(super::ranked_flash_models(ids.into_iter()).last().map(String::as_str), Some("gemini-3.1-flash-lite"));
         assert_eq!(best_flash_model(["models/gemma-3"].into_iter()), None);
+        let ranked = super::ranked_flash_models(["models/gemini-3.5-flash", "models/gemini-3.8-flash", "models/gemini-flash-latest",
+                                                 "models/gemini-omni-1.1-flash", "models/gemini-3-flash-preview"].into_iter());
+        assert_eq!(ranked, ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-3-flash-preview", "gemini-flash-latest"]);
     }
 }
