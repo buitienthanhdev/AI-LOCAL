@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from lga_worker.config import Config
+from lga_common.config import Config
 from lga_worker.windows.provider import ElementQuery
 from lga_worker.windows.windows_use_provider import WindowsUseProvider
 

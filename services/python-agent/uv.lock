@@ -810,6 +810,17 @@ wheels = [
 ]
 
 [[package]]
+name = "lga-common"
+version = "0.1.0"
+source = { editable = "../lga-common" }
+dependencies = [
+    { name = "pywin32" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pywin32", specifier = ">=308" }]
+
+[[package]]
 name = "lga-worker"
 version = "0.1.0"
 source = { editable = "." }
@@ -817,6 +828,7 @@ dependencies = [
     { name = "comtypes" },
     { name = "fuzzywuzzy" },
     { name = "jsonschema" },
+    { name = "lga-common" },
     { name = "markdownify" },
     { name = "pillow" },
     { name = "psutil" },
@@ -844,6 +856,7 @@ requires-dist = [
     { name = "comtypes", specifier = ">=1.4.8" },
     { name = "fuzzywuzzy", specifier = ">=0.18" },
     { name = "jsonschema", specifier = ">=4.23" },
+    { name = "lga-common", editable = "../lga-common" },
     { name = "markdownify", specifier = ">=0.13" },
     { name = "pillow", specifier = ">=11.0" },
     { name = "psutil", specifier = ">=6.0" },

@@ -18,6 +18,7 @@ dependencies = [
     "tabulate>=0.9",
     "requests>=2.32",
     # Worker infrastructure.
+    "lga-common",
     "jsonschema>=4.23",
 ]
 
@@ -41,6 +42,7 @@ packages = ["lga_worker"]
 python-preference = "managed"
 
 [tool.uv.sources]
+lga-common = { path = "../lga-common", editable = true }
 windows-use = { git = "https://github.com/Jeomon/Windows-Use", rev = "582a5669e9251372beb63baf39dac453693ff0d8" }
 
 # Windows-Use declares 39 runtime dependencies (every LLM SDK, chat-bot SDKs, telemetry, datasets).
