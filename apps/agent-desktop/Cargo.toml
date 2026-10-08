@@ -1,0 +1,22 @@
+[package]
+name = "agent-desktop"
+description = "Local Gemini Agent desktop chat window (native WebView2, no Python)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "agent-desktop"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+http = "1.5.0"
+lga-core = { path = "../../core/rust-agent" }
+serde.workspace = true
+serde_json.workspace = true
+tao = "0.37"
+uuid.workspace = true
+windows-sys = { workspace = true, features = ["Win32_UI_WindowsAndMessaging"] }
+wry = "0.57"

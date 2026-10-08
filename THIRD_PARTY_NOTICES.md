@@ -16,7 +16,7 @@ This project integrates or adapts code from the projects below. Full license tex
 
 ## Other runtime dependencies (installed from PyPI / crates.io, not redistributed)
 
-All are locked in `services/*/uv.lock`, `apps/agent-ui/uv.lock` and `Cargo.lock`. Notable ones:
+All are locked in `services/*/uv.lock` and `Cargo.lock`. Notable ones:
 
 | Package | License | Used by |
 |---|---|---|

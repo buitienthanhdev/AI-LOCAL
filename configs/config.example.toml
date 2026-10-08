@@ -223,11 +223,6 @@ tasks_dir = "memory/tasks"
 # Relevant procedures / failure patterns injected into the planner prompt.
 max_recalled_items = 5
 
-[ui]
-# Local web UI (apps/agent-ui). Loopback only.
-listen_host = "127.0.0.1"
-listen_port = 8791
-
 [observability]
 log_level = "info"
 # Values of these environment variables are always redacted from logs, in addition to the built-in

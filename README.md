@@ -28,7 +28,7 @@ pwsh scripts/setup-gateway.ps1
 cargo build --release
 target/release/agent.exe doctor
 target/release/agent.exe run "Mở Notepad, viết hello world và lưu vào C:\temp\hello.txt"
-pwsh scripts/start-ui.ps1          # optional web UI at http://127.0.0.1:8791/
+target/release/agent-desktop.exe   # the chat window (or pwsh scripts/start.ps1)
 ```
 
 Details: [docs/operations.md](docs/operations.md). Connecting a Google account (needed for image input): [docs/operations.md#connecting-gemini-accounts](docs/operations.md#connecting-gemini-accounts).
@@ -51,7 +51,7 @@ Details: [docs/operations.md](docs/operations.md). Connecting a Google account (
 
 ```
 apps/agent-cli        Rust CLI (`agent`)
-apps/agent-ui         local web UI (Python, drives the CLI)
+apps/agent-desktop    desktop chat window (Rust, native WebView2, drives the CLI)
 core/rust-agent       Rust core (lga-core) + policy/
 services/python-agent Python worker (Windows, shell, files, browser, vision, AutoCAD)
 services/gemini-gateway  Gemini Web gateway (primary/fallback, breaker, health)

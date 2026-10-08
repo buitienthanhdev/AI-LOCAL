@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local Gemini Agent</title>
+<style>
+  :root {
+    --bg: #f4f5f8; --panel: #ffffff; --side: #eef0f5; --text: #1b2130; --muted: #6a7385; --border: #e1e4ec;
+    --accent: #4f5fe8; --accent-soft: #eceefe; --ok: #18864b; --ok-soft: #e7f6ee; --warn: #a86a00; --warn-soft: #fff5e0;
+    --bad: #c8312f; --bad-soft: #fdecec; --code: #f2f4f8; --shadow: 0 1px 2px rgba(20,25,40,.06), 0 4px 16px rgba(20,25,40,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12151b; --panel: #1a1e26; --side: #161a21; --text: #e7e9ee; --muted: #9aa2b1; --border: #2a303b;
+      --accent: #8d98ff; --accent-soft: #232846; --ok: #4cc386; --ok-soft: #173126; --warn: #e2b04a; --warn-soft: #33290f;
+      --bad: #f07272; --bad-soft: #3a1c1e; --code: #20252f; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; font: 14.5px/1.5 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--text); display: flex; overflow: hidden; }
+  button { font: inherit; color: inherit; cursor: pointer; border: none; background: none; }
+  button:disabled { opacity: .4; cursor: default; }
+
+  /* Sidebar */
+  aside { width: 272px; flex: none; background: var(--side); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 16px 16px 10px; font-weight: 650; font-size: 15px; }
+  .logo { width: 26px; height: 26px; border-radius: 50%; background: radial-gradient(circle at 50% 50%, #fff 0 22%, transparent 23%), linear-gradient(160deg, #4f6ef0, #9b46f0); flex: none; }
+  .new { margin: 4px 12px 10px; padding: 10px 12px; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 600; display: flex; gap: 8px; align-items: center; justify-content: center; }
+  .new:hover { filter: brightness(1.07); }
+  .search { margin: 0 12px 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit; }
+  #history { flex: 1; overflow-y: auto; padding: 0 8px 8px; }
+  .group { font-size: 12px; color: var(--muted); padding: 10px 8px 4px; font-weight: 600; }
+  .item { display: flex; gap: 8px; align-items: flex-start; width: 100%; text-align: left; padding: 8px; border-radius: 8px; }
+  .item:hover { background: var(--panel); }
+  .item.sel { background: var(--accent-soft); }
+  .item .g { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 13.5px; }
+  .item .t { font-size: 11.5px; color: var(--muted); }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; margin-top: 6px; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); }
+  .dot.run { background: var(--accent); animation: pulse 1.2s infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .health { border-top: 1px solid var(--border); padding: 10px 14px 12px; font-size: 12.5px; color: var(--muted); display: grid; gap: 5px; }
+  .health div { display: flex; gap: 8px; align-items: center; }
+  .health .dot { margin-top: 0; }
+
+  /* Main */
+  main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #scroll { flex: 1; overflow-y: auto; }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 24px 24px 12px; }
+  .topbar { display: none; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
+
+  /* Welcome */
+  .hello { text-align: center; padding: 8vh 0 24px; }
+  .hello h1 { font-size: 28px; margin: 14px 0 6px; font-weight: 650; }
+  .hello p { color: var(--muted); margin: 0; }
+  .hello .logo { width: 52px; height: 52px; margin: 0 auto; }
+  .ideas { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; margin-top: 26px; }
+  .idea { text-align: left; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; box-shadow: var(--shadow); display: flex; gap: 10px; }
+  .idea:hover { border-color: var(--accent); }
+  .idea .ic { font-size: 20px; line-height: 1.2; }
+  .idea b { display: block; font-weight: 600; font-size: 13.5px; }
+  .idea span { color: var(--muted); font-size: 12.5px; }
+
+  /* Conversation */
+  .msg { display: flex; gap: 12px; margin: 18px 0; }
+  .msg.user { justify-content: flex-end; }
+  .bubble { max-width: 80%; padding: 10px 14px; border-radius: 16px; white-space: pre-wrap; word-break: break-word; }
+  .user .bubble { background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+  .avatar { width: 30px; height: 30px; flex: none; }
+  .agent-body { flex: 1; min-width: 0; display: grid; gap: 10px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 12px 16px; box-shadow: var(--shadow); }
+  .live { display: flex; gap: 10px; align-items: center; }
+  .spin { width: 16px; height: 16px; border: 2.5px solid var(--accent-soft); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; flex: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .live .what { font-weight: 600; }
+  .muted { color: var(--muted); }
+  .small { font-size: 12.5px; }
+  .plan { margin: 6px 0 0; padding: 0; list-style: none; display: grid; gap: 3px; }
+  .plan li { display: flex; gap: 8px; }
+  .plan li::before { content: "○"; color: var(--muted); }
+  .result.ok { background: var(--ok-soft); border-color: transparent; }
+  .result.bad { background: var(--bad-soft); border-color: transparent; }
+  .result.warn { background: var(--warn-soft); border-color: transparent; }
+  .result h3 { margin: 0 0 4px; font-size: 14.5px; display: flex; gap: 8px; align-items: center; }
+  .result.ok h3 { color: var(--ok); } .result.bad h3 { color: var(--bad); } .result.warn h3 { color: var(--warn); }
+  .result .txt { white-space: pre-wrap; word-break: break-word; }
+  .files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { display: inline-flex; gap: 6px; align-items: center; padding: 4px 10px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border); font-size: 12.5px; max-width: 100%; }
+  .chip:hover { border-color: var(--accent); }
+  .chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ask { border: 2px solid var(--warn); background: var(--warn-soft); }
+  .ask h3 { margin: 0 0 6px; font-size: 14.5px; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+  .btn { padding: 7px 14px; border-radius: 9px; border: 1px solid var(--border); background: var(--panel); font-weight: 550; }
+  .btn:hover:not(:disabled) { border-color: var(--accent); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.danger { color: var(--bad); }
+  .ask input { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit; }
+  .shot img { max-width: 100%; border-radius: 10px; border: 1px solid var(--border); cursor: zoom-in; display: block; margin-top: 8px; }
+  details > summary { cursor: pointer; color: var(--muted); font-size: 13px; user-select: none; }
+  .step { border-top: 1px solid var(--border); padding: 8px 0; font-size: 13px; }
+  .step:first-of-type { border-top: none; }
+  .step .h { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .tag { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; background: var(--code); color: var(--muted); }
+  .tag.ok { color: var(--ok); background: var(--ok-soft); } .tag.bad { color: var(--bad); background: var(--bad-soft); }
+  code, pre { font-family: "Cascadia Mono", Consolas, monospace; font-size: 12px; }
+  pre { background: var(--code); padding: 8px 10px; border-radius: 8px; white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; max-height: 240px; overflow: auto; }
+  .ctl { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .ctl .btn { padding: 4px 10px; font-size: 12.5px; font-weight: 500; }
+
+  /* Composer */
+  .composer { padding: 10px 24px 18px; }
+  .box { max-width: 820px; margin: 0 auto; background: var(--panel); border: 1px solid var(--border); border-radius: 18px; box-shadow: var(--shadow); padding: 10px 12px 8px; }
+  .box:focus-within { border-color: var(--accent); }
+  textarea { width: 100%; border: none; outline: none; resize: none; background: transparent; color: var(--text); font: inherit; font-size: 15px; min-height: 26px; max-height: 220px; padding: 4px; }
+  .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .seg { display: inline-flex; background: var(--code); border-radius: 9px; padding: 2px; }
+  .seg button { padding: 4px 10px; border-radius: 7px; font-size: 12.5px; color: var(--muted); }
+  .seg button.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow); font-weight: 600; }
+  .seg button.on.full { color: var(--bad); }
+  .hint { color: var(--muted); font-size: 12px; flex: 1; min-width: 120px; }
+  .send { width: 36px; height: 36px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 18px; display: grid; place-items: center; flex: none; }
+  .send:disabled { background: var(--muted); }
+
+  #toast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 10px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 80vw; }
+  #toast.show { opacity: .95; }
+  #lightbox { position: fixed; inset: 0; background: rgba(0,0,0,.8); display: none; place-items: center; z-index: 10; cursor: zoom-out; }
+  #lightbox img { max-width: 95vw; max-height: 95vh; border-radius: 8px; }
+
+  @media (max-width: 760px) {
+    aside { position: fixed; inset: 0 auto 0 0; z-index: 5; transform: translateX(-100%); transition: transform .2s; box-shadow: 0 0 40px rgba(0,0,0,.25); }
+    body.menu aside { transform: none; }
+    .topbar { display: flex; }
+    .wrap, .composer { padding-left: 14px; padding-right: 14px; }
+    .bubble { max-width: 92%; }
+    .hint { display: none; }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <div class="brand"><div class="logo"></div>Trợ lý máy tính</div>
+  <button class="new" id="newBtn">＋ Việc mới</button>
+  <input class="search" id="search" placeholder="Tìm trong lịch sử…">
+  <div id="history"></div>
+  <div class="health" id="health" title="Bấm để kiểm tra lại">
+    <div><span class="dot" id="h-gateway"></span>Gemini (bộ não)</div>
+    <div><span class="dot" id="h-knowledge"></span>Tri thức công ty</div>
+    <div><span class="dot" id="h-vision"></span>Thị giác cục bộ <span class="small">(tùy chọn)</span></div>
+  </div>
+</aside>
+<main>
+  <div class="topbar"><button class="btn" id="menuBtn">☰</button><b>Trợ lý máy tính</b></div>
+  <div id="scroll"><div class="wrap" id="view"></div></div>
+  <div class="composer">
+    <div class="box">
+      <textarea id="input" rows="1" placeholder="Bạn cần tôi làm gì? Ví dụ: Mở Excel và tạo bảng chi phí tháng 10"></textarea>
+      <div class="bar">
+        <div class="seg" id="modes" title="Mức quyền của trợ lý cho việc này">
+          <button data-mode="normal" title="Hỏi bạn trước mọi việc quan trọng (xóa, ghi, chạy lệnh…)">An toàn</button>
+          <button data-mode="trusted" title="Tự làm các việc thường gặp, chỉ hỏi khi có rủi ro cao">Tin cậy</button>
+          <button data-mode="full_access" class="full" title="Tự làm mọi việc không cần hỏi (vẫn không vượt UAC/Administrator)">Toàn quyền</button>
+        </div>
+        <span class="hint">Enter để gửi · Shift+Enter xuống dòng</span>
+        <button class="send" id="sendBtn" title="Gửi">➤</button>
+      </div>
+    </div>
+  </div>
+</main>
+<div id="toast"></div>
+<div id="lightbox"><img alt=""></div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const POLL_MS = 1000;
+const TERMINAL = ["completed", "failed", "cancelled"];
+const STATUS = {
+  pending: "Đang chuẩn bị…", planning: "Đang suy nghĩ…", executing: "Đang thực hiện…", observing: "Đang quan sát kết quả…",
+  verifying: "Đang kiểm tra lại…", recovering: "Gặp lỗi, đang tự khắc phục…", needs_user: "Đang chờ bạn", paused: "Tạm dừng",
+  completed: "Hoàn thành", failed: "Không thành công", cancelled: "Đã dừng",
+};
+const TOOLS = {
+  "desktop.launch_app": "Mở ứng dụng", "desktop.close_app": "Đóng ứng dụng", "desktop.focus_window": "Chuyển sang cửa sổ",
+  "desktop.list_windows": "Xem các cửa sổ đang mở", "desktop.wait_for_window": "Chờ cửa sổ xuất hiện", "desktop.inspect_ui": "Đọc giao diện cửa sổ",
+  "desktop.find_element": "Tìm nút/ô trên màn hình", "desktop.read_element": "Đọc nội dung", "desktop.set_value": "Điền nội dung",
+  "desktop.click": "Bấm chuột", "desktop.move_mouse": "Di chuột", "desktop.drag": "Kéo thả", "desktop.scroll": "Cuộn",
+  "desktop.type": "Gõ chữ", "desktop.press_key": "Bấm phím", "desktop.hotkey": "Bấm tổ hợp phím", "desktop.screenshot": "Chụp màn hình",
+  "browser.open": "Mở trình duyệt", "browser.navigate": "Mở trang web", "browser.get_state": "Đọc trang web", "browser.click": "Bấm trên trang web",
+  "browser.type": "Gõ vào trang web", "browser.screenshot": "Chụp trang web", "browser.page_matches": "Kiểm tra trang web", "browser.wait_for": "Chờ trang tải",
+  "shell.exec": "Chạy lệnh PowerShell", "filesystem.read": "Đọc tệp", "filesystem.write": "Ghi tệp", "filesystem.list": "Xem thư mục",
+  "filesystem.stat": "Kiểm tra tệp", "system.environment": "Xem thông tin máy",
+  "vision.ocr": "Đọc chữ trên màn hình", "vision.locate": "Tìm vị trí trên màn hình", "vision.describe": "Nhìn và mô tả màn hình",
+  "knowledge.search": "Tra cứu tài liệu công ty", "knowledge.get_context": "Tra cứu tài liệu công ty", "knowledge.read_document": "Đọc tài liệu công ty",
+  "autocad.launch": "Mở AutoCAD", "autocad.new_document": "Tạo bản vẽ mới", "autocad.create_circle": "Vẽ hình tròn", "autocad.create_line": "Vẽ đường thẳng",
+  "autocad.create_polyline": "Vẽ đa tuyến", "autocad.create_text": "Ghi chữ trong bản vẽ", "autocad.save": "Lưu bản vẽ", "autocad.export_pdf": "Xuất PDF",
+  "autocad.export_dxf": "Xuất DXF", "autocad.verify_geometry": "Kiểm tra hình vẽ",
+};
+const AREA = { desktop: "Điều khiển Windows", browser: "Trình duyệt", shell: "PowerShell", filesystem: "Tệp tin", system: "Hệ thống",
+  vision: "Nhìn màn hình", knowledge: "Tri thức công ty", autocad: "AutoCAD" };
+const friendly = tool => TOOLS[tool] || AREA[String(tool).split(".")[0]] || tool;
+const IDEAS = [
+  ["📝", "Ghi chú nhanh", "Mở Notepad, viết \"Xin chào\" và lưu vào C:\\temp\\xinchao.txt"],
+  ["📚", "Hỏi tài liệu công ty", "Thông số kỹ thuật của OneCoat Pro là gì? Trích nguồn giúp tôi."],
+  ["🌐", "Làm việc trên web", "Mở Chrome, tìm trang GitHub của Windows-Use và cho tôi biết mô tả của nó"],
+  ["📐", "Vẽ AutoCAD", "Mở AutoCAD, tạo bản vẽ mới và vẽ hình tròn bán kính 100, lưu vào C:\\temp\\tron.dwg"],
+  ["🗂️", "Dọn dẹp tệp", "Liệt kê 10 tệp lớn nhất trong thư mục Downloads của tôi"],
+  ["👁️", "Xem màn hình", "Chụp màn hình và mô tả những gì đang hiển thị"],
+];
+
+let selected = null, events = [], cursor = 0, sig = {}, tasks = [], mode = "normal", openDetails = new Set();
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === null || v === undefined || v === false) continue;
+    if (k === "class") node.className = v; else if (k.startsWith("on")) node.addEventListener(k.slice(2), v); else node.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of children.flat(Infinity)) if (c !== null && c !== undefined && c !== false) node.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  return node;
+}
+const short = (v, n = 400) => { const s = typeof v === "string" ? v : JSON.stringify(v, null, 1); return s && s.length > n ? s.slice(0, n) + "…" : (s || ""); };
+function toast(text) { const t = $("toast"); t.textContent = text; t.classList.add("show"); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove("show"), 3500); }
+async function api(path, body) {
+  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(data.error || data.output || `Lỗi ${r.status}`); e.status = r.status; throw e; }
+  return data;
+}
+function when(iso) {
+  if (!iso) return "";
+  const d = new Date(iso), now = new Date();
+  const hm = d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+  return d.toDateString() === now.toDateString() ? hm : `${d.toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" })} ${hm}`;
+}
+function duration(a, b) {
+  const s = Math.max(0, Math.round((new Date(b) - new Date(a)) / 1000));
+  return s < 60 ? `${s} giây` : `${Math.floor(s / 60)} phút ${s % 60} giây`;
+}
+const dotClass = s => s === "completed" ? "ok" : s === "failed" ? "bad" : s === "cancelled" ? "" : ["needs_user", "paused"].includes(s) ? "warn" : "run";
+function linkify(text) {
+  return String(text || "").split(/(https?:\/\/[^\s)]+)/g).map((p, i) => i % 2 ? el("a", { href: p, target: "_blank" }, p) : p);
+}
+const fileName = p => String(p).split(/[\\/]/).pop();
+
+/* ---------- History ---------- */
+async function refreshHistory() {
+  try { tasks = (await api("/api/tasks")).tasks; } catch { return; }
+  drawHistory();
+}
+function drawHistory() {
+  const q = $("search").value.trim().toLowerCase();
+  const today = new Date().toDateString();
+  const groups = { "Hôm nay": [], "Trước đó": [] };
+  for (const t of tasks) {
+    if (q && !String(t.goal).toLowerCase().includes(q)) continue;
+    groups[new Date(t.created_at || t.updated_at).toDateString() === today ? "Hôm nay" : "Trước đó"].push(t);
+  }
+  const out = [];
+  for (const [name, list] of Object.entries(groups)) {
+    if (!list.length) continue;
+    out.push(el("div", { class: "group" }, name));
+    for (const t of list) out.push(el("button", { class: `item ${t.task_id === selected ? "sel" : ""}`, title: t.goal, onclick: () => select(t.task_id) },
+      el("span", { class: `dot ${dotClass(t.status)}` }),
+      el("div", { style: "flex:1;min-width:0" }, el("div", { class: "g" }, t.goal), el("div", { class: "t" }, `${when(t.updated_at)} · ${STATUS[t.status] || t.status}`))));
+  }
+  if (!out.length) out.push(el("div", { class: "group" }, q ? "Không tìm thấy" : "Chưa có việc nào"));
+  $("history").replaceChildren(...out);
+}
+
+/* ---------- Health ---------- */
+async function refreshHealth() {
+  $("health").style.opacity = .6;
+  try {
+    const s = await api("/api/status");
+    for (const k of ["gateway", "knowledge"]) $(`h-${k}`).className = `dot ${s[k] ? "ok" : "bad"}`;
+    $("h-vision").className = `dot ${s.vision ? "ok" : ""}`;
+    if (!refreshHealth.modeSet) { refreshHealth.modeSet = true; let saved = null; try { saved = localStorage.getItem("lga.mode.v2"); } catch {} setMode(saved || s.default_mode || "normal", false); }
+  } catch { /* the next tick retries */ }
+  $("health").style.opacity = 1;
+}
+
+/* ---------- Composer ---------- */
+function setMode(m, remember = true) {
+  mode = m;
+  if (remember) try { localStorage.setItem("lga.mode.v2", m); } catch {}
+  for (const b of $("modes").children) b.classList.toggle("on", b.dataset.mode === m);
+}
+function grow() { const t = $("input"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 220) + "px"; }
+async function send(text) {
+  text = (text ?? $("input").value).trim();
+  if (!text) return;
+  $("sendBtn").disabled = true;
+  try {
+    const { task_id } = await api("/api/tasks", { task: text, mode });
+    $("input").value = ""; grow();
+    select(task_id, text);
+    refreshHistory();
+  } catch (e) { toast(e.message); }
+  $("sendBtn").disabled = false;
+}
+
+/* ---------- Views ---------- */
+function showWelcome() {
+  selected = null; drawHistory();
+  $("view").replaceChildren(el("div", { class: "hello" },
+    el("div", { class: "logo" }), el("h1", {}, "Bạn cần tôi làm gì?"),
+    el("p", {}, "Tôi điều khiển máy tính này giúp bạn: Windows, Chrome, AutoCAD, tệp tin, PowerShell — và tra cứu tài liệu công ty. Mỗi bước đều được kiểm tra lại."),
+    el("div", { class: "ideas" }, IDEAS.map(([ic, title, text]) => el("button", { class: "idea", onclick: () => { $("input").value = text; grow(); $("input").focus(); } },
+      el("div", { class: "ic" }, ic), el("div", {}, el("b", {}, title), el("span", {}, text)))))));
+  $("input").focus();
+}
+
+function select(id, goal) {
+  selected = id; events = []; cursor = 0; sig = {}; openDetails = new Set();
+  document.body.classList.remove("menu");
+  drawHistory();
+  $("view").replaceChildren(
+    el("div", { class: "msg user" }, el("div", { class: "bubble", id: "v-goal" }, goal || "…")),
+    el("div", { class: "msg" }, el("div", { class: "logo avatar" }),
+      el("div", { class: "agent-body" },
+        el("div", { id: "v-ctl", class: "ctl" }), el("div", { id: "v-ask" }), el("div", { id: "v-live" }),
+        el("div", { id: "v-result" }), el("div", { id: "v-shot" }), el("div", { id: "v-steps" }))));
+  $("v-live").replaceChildren(el("div", { class: "card live" }, el("div", { class: "spin" }), el("span", { class: "what" }, "Đang khởi động…")));
+  poll();
+}
+
+/** Re-render one region only when its data changed (keeps typed answers and opened sections intact). */
+function region(id, key, build) {
+  const s = JSON.stringify(key);
+  if (sig[id] === s) return;
+  sig[id] = s;
+  const node = $(id);
+  if (node) node.replaceChildren(...[build()].flat().filter(Boolean));
+}
+function keepOpen(key, details) {
+  if (openDetails.has(key)) details.open = true;
+  details.addEventListener("toggle", () => details.open ? openDetails.add(key) : openDetails.delete(key));
+  return details;
+}
+
+async function control(action) {
+  try { await api(`/api/tasks/${selected}/${action}`, {}); toast({ pause: "Đã yêu cầu tạm dừng", unpause: "Tiếp tục chạy", cancel: "Đã dừng", resume: "Đang chạy lại" }[action]); }
+  catch (e) { toast(e.message); }
+  poll();
+}
+async function respond(body) {
+  try { await api(`/api/tasks/${selected}/respond`, body); } catch (e) { toast(e.message); }
+  poll();
+}
+async function reveal(path) { try { await api("/api/reveal", { path }); } catch (e) { toast(e.message); } }
+
+function latestShot(task) {
+  for (let i = task.steps.length - 1; i >= 0; i--) {
+    const shots = (task.steps[i].artifacts || []).filter(a => /\.png$/i.test(a));
+    if (shots.length) return shots[shots.length - 1];
+  }
+  return null;
+}
+
+function render(data) {
+  const task = data.task, pending = data.pending_request, st = task.status;
+  const done = TERMINAL.includes(st);
+  $("v-goal").textContent = task.goal;
+
+  region("v-ctl", [st, data.pause_requested], () => [
+    el("span", { class: "muted small", style: "margin-right:auto" }, `${when(task.created_at)} · ${modeName(task.mode)}`),
+    !done && !data.pause_requested && el("button", { class: "btn", onclick: () => control("pause") }, "⏸ Tạm dừng"),
+    !done && data.pause_requested && el("button", { class: "btn", onclick: () => control("unpause") }, "▶ Tiếp tục"),
+    !done && el("button", { class: "btn danger", onclick: () => control("cancel") }, "■ Dừng"),
+    st !== "completed" && (done || st === "needs_user") && el("button", { class: "btn", onclick: () => control("resume") }, "↻ Chạy lại"),
+    done && el("button", { class: "btn", onclick: () => { $("input").value = task.goal; grow(); $("input").focus(); } }, "✎ Sửa & gửi lại"),
+  ]);
+
+  region("v-ask", pending, () => {
+    if (!pending) return null;
+    if (pending.kind === "confirm") {
+      return el("div", { class: "card ask" },
+        el("h3", {}, "🔐 Trợ lý xin phép: ", friendly(pending.tool)),
+        (pending.reasons || []).length ? el("div", { class: "small" }, "Lý do cần hỏi: ", pending.reasons.join("; ")) : null,
+        keepOpen("ask", el("details", {}, el("summary", {}, "Xem chi tiết"), el("pre", {}, `${pending.tool}\n${short(pending.args, 2000)}`))),
+        el("div", { class: "actions" },
+          el("button", { class: "btn primary", onclick: () => respond({ approve: true }) }, "✓ Cho phép"),
+          el("button", { class: "btn", onclick: () => respond({ approve: false }) }, "✗ Không cho phép")));
+    }
+    const input = el("input", { type: "text", placeholder: "Nhập câu trả lời…", onkeydown: e => { if (e.key === "Enter") respond({ answer: input.value }); } });
+    setTimeout(() => input.focus(), 0);
+    return el("div", { class: "card ask" }, el("h3", {}, "💬 Trợ lý hỏi bạn"), el("div", { style: "margin-bottom:8px" }, pending.question), input,
+      el("div", { class: "actions" }, el("button", { class: "btn primary", onclick: () => respond({ answer: input.value }) }, "Trả lời")));
+  });
+
+  const started = events.filter(e => e.kind === "step_started");
+  const finished = new Set(task.steps.map(s => s.step_id));
+  const current = started.length && !finished.has(started[started.length - 1].step_id) ? started[started.length - 1] : null;
+  region("v-live", [st, current && current.step_id, task.plan, task.steps.length, done], () => {
+    if (done) return null;
+    const what = current ? friendly(current.tool) : (STATUS[st] || st);
+    const thought = current && current.detail && current.detail.thought;
+    return el("div", { class: "card" },
+      el("div", { class: "live" }, ["paused", "needs_user"].includes(st) ? el("span", {}, "⏸") : el("div", { class: "spin" }),
+        el("span", { class: "what" }, what), el("span", { class: "muted small" }, `· bước ${task.steps.length + (current ? 1 : 0)}`)),
+      thought ? el("div", { class: "muted small", style: "margin-top:4px" }, thought) : null,
+      task.plan && task.plan.length ? el("ul", { class: "plan" }, task.plan.map(p => el("li", {}, p))) : null);
+  });
+
+  region("v-result", [st, task.final_summary, task.failure_reason, task.artifacts, task.escalation, task.updated_at && done], () => {
+    if (!done && !task.escalation) return null;
+    const files = [...new Set(task.artifacts || [])].filter(a => !/\.png$/i.test(a));
+    const kind = st === "completed" ? "ok" : st === "failed" ? "bad" : "warn";
+    const head = { ok: "✓ Hoàn thành", bad: "✗ Chưa làm được", warn: "■ Đã dừng" }[kind];
+    return el("div", { class: `card result ${kind}` },
+      el("h3", {}, head, el("span", { class: "muted small", style: "font-weight:400" }, `${duration(task.created_at, task.updated_at)} · ${task.steps.length} bước`)),
+      task.final_summary ? el("div", { class: "txt" }, linkify(task.final_summary)) : null,
+      task.failure_reason ? el("div", { class: "txt" }, "Lý do: ", task.failure_reason) : null,
+      task.escalation ? el("div", { class: "txt", style: "margin-top:6px" }, "⚠ Việc này cần quyền Administrator. Trợ lý không tự vượt UAC — hãy tự chạy với quyền quản trị nếu bạn đồng ý.") : null,
+      files.length ? el("div", { class: "files" }, files.map(f => el("button", { class: "chip", title: `Mở thư mục chứa ${f}`, onclick: () => reveal(f) }, "📄", el("span", {}, fileName(f))))) : null);
+  });
+
+  const shot = latestShot(task);
+  region("v-shot", shot, () => shot ? el("div", { class: "card shot" },
+    keepOpen("shot", el("details", { open: !done }, el("summary", {}, "Ảnh màn hình gần nhất"),
+      el("img", { src: `/api/artifact?path=${encodeURIComponent(shot)}`, alt: "Ảnh màn hình", onclick: e => zoom(e.target.src) })))) : null);
+
+  const checks = events.filter(e => e.kind === "completion_check" || e.kind === "completion_verifier");
+  region("v-steps", [task.steps.length, task.updated_at, checks.length], () => task.steps.length ? el("div", { class: "card" },
+    keepOpen("steps", el("details", {}, el("summary", {}, `Chi tiết kỹ thuật · ${task.steps.length} bước`),
+      [...task.steps].reverse().map(s => el("div", { class: "step" },
+        el("div", { class: "h" }, el("b", {}, friendly(s.tool)), el("code", { class: "muted" }, s.tool),
+          el("span", { class: `tag ${s.status === "succeeded" ? "ok" : "bad"}` }, s.status === "succeeded" ? "thành công" : s.status),
+          s.verification ? el("span", { class: `tag ${s.verification === "passed" ? "ok" : s.verification === "failed" ? "bad" : ""}` }, `kiểm tra: ${s.verification}`) : null,
+          el("span", { class: "muted small" }, `${(s.duration_ms / 1000).toFixed(1)}s${s.retry_count ? ` · thử lại ${s.retry_count}` : ""}`)),
+        s.thought ? el("div", { class: "muted" }, s.thought) : null,
+        el("pre", {}, short(s.args, 600)),
+        s.error ? el("div", { style: "color:var(--bad)" }, `${s.error.code}: ${s.error.message}`) : null,
+        s.observation ? el("pre", {}, short(s.observation, 1500)) : null)),
+      checks.length ? [el("div", { class: "group", style: "padding-left:0" }, "Kiểm tra hoàn thành"), checks.map(v => el("pre", {}, `${v.kind} → ${v.verification_result}\n${short(v.detail, 1500)}`))] : null))) : null);
+}
+const modeName = m => ({ normal: "An toàn", trusted: "Tin cậy", full_access: "Toàn quyền" }[m] || m);
+
+function zoom(src) { const lb = $("lightbox"); lb.querySelector("img").src = src; lb.style.display = "grid"; }
+$("lightbox").onclick = () => { $("lightbox").style.display = "none"; };
+
+async function poll() {
+  if (!selected) return;
+  const id = selected;
+  try {
+    const data = await api(`/api/tasks/${id}`);
+    const fresh = await api(`/api/tasks/${id}/events?after=${cursor}`);
+    if (id !== selected) return;
+    events.push(...fresh.events); cursor = fresh.next;
+    const sc = $("scroll"), atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 60;
+    render(data);
+    if (atBottom) sc.scrollTop = sc.scrollHeight;
+    const listed = tasks.find(t => t.task_id === id);
+    if (listed && listed.status !== data.task.status) { listed.status = data.task.status; drawHistory(); }
+  } catch (e) { /* 404 while the runner creates the record */ }
+}
+
+/* ---------- Wiring ---------- */
+$("newBtn").onclick = showWelcome;
+$("menuBtn").onclick = () => document.body.classList.toggle("menu");
+$("search").oninput = drawHistory;
+$("health").onclick = refreshHealth;
+$("sendBtn").onclick = () => send();
+$("input").addEventListener("input", grow);
+$("input").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+for (const b of $("modes").children) b.onclick = () => setMode(b.dataset.mode);
+document.addEventListener("keydown", e => { if (e.key === "Escape") $("lightbox").style.display = "none"; if (e.ctrlKey && e.key.toLowerCase() === "n") { e.preventDefault(); showWelcome(); } });
+
+setMode("normal", false);
+const linked = location.hash.match(/^#task=([A-Za-z0-9-]+)$/);
+if (linked) select(linked[1]); else showWelcome();
+refreshHistory(); refreshHealth();
+setInterval(poll, POLL_MS);
+setInterval(refreshHistory, POLL_MS * 4);
+setInterval(refreshHealth, 15000);
+</script>
+</body>
+</html>

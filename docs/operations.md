@@ -74,12 +74,24 @@ Exit codes of `agent run` / `agent resume`:
 | 3 | waiting for the user (`task.ask_user` with no terminal) |
 | 130 | cancelled |
 
-## Popup (floating button)
+## Chat window (agent-desktop)
 
-`pwsh scripts/start-widget.ps1` puts a small always-on-top **● Agent** button at the bottom-right of the
-screen (drag to move it). Click it to open a chat panel: type a task in Vietnamese or English, pick the
-mode, and watch each step, confirmations and questions inline. It drives the same agent CLI as everything
-else. It runs with `pythonw` (no console window).
+`target/release/agent-desktop.exe` (or `pwsh scripts/start.ps1`, or the desktop shortcut) opens the one chat
+for the whole agent: a native window (Rust, tao + wry over WebView2; no Python, no console, no TCP port).
+On open it starts whatever is down — the Gemini gateway and the Company Brain knowledge backend — and shows
+their health at the bottom-left. A second launch only brings the existing window to the front;
+`agent-desktop.exe --task <id>` opens a task directly.
+
+- Type a task (Enter sends, Shift+Enter new line) or pick a suggestion. Choose the permission level per task:
+  **An toàn** (`normal`), **Tin cậy** (`trusted`), **Toàn quyền** (`full_access`).
+- While it runs: what it is doing in plain words, the plan, the latest screenshot (click to enlarge),
+  confirmations (**Cho phép / Không cho phép**) and questions inline; pause, continue, stop, run again.
+- When done: the result, files produced (click to show them in Explorer) and, folded, the technical
+  details of every step and the completion checks.
+- History on the left, searchable. Tasks run in the `agent` CLI, so they keep running if the window is closed.
+
+The page reaches the app only through the webview's private `lga://` scheme; navigation to any other origin
+opens in your browser instead. Screenshots are served only from inside the artifacts directory.
 
 ## Local vision (offline, no Google account)
 
@@ -97,17 +109,6 @@ EasyOCR + CPU PyTorch, Apache-2.0). Then `vision.ocr {"vietnamese": true}` reads
 model downloads on first use into `runtime/models/easyocr/`. Windows' built-in OCR still handles English and
 Latin text with no install. Note: real application text is read through UI Automation (perfect for
 Vietnamese, no OCR); OCR is only for pixels (images, canvas, games).
-
-## Web UI
-
-`pwsh scripts/start-ui.ps1`, then open the printed URL (default `http://127.0.0.1:8791/`). The UI starts tasks through the
-CLI (`agent run --ui-channel`) and shows:
-- the plan and the current action;
-- the latest screenshot;
-- every tool call with its verification;
-- errors and the completion verdicts.
-
-You can answer confirmation prompts and questions, and pause, unpause, cancel or resume tasks. It binds to loopback only and requires a per-start token, so web pages cannot drive it.
 
 ## Modes and confirmations
 
@@ -129,7 +130,8 @@ You can answer confirmation prompts and questions, and pause, unpause, cancel or
 ## Tests
 
 ```powershell
-cargo test --workspace                                   # Rust core
+cargo test --workspace                                   # Rust core + desktop app
+cargo test --release -p agent-desktop -- --ignored       # desktop API drives a real task end to end
 cd services/python-agent;  uv run pytest -q              # worker unit + protocol tests
 uv run pytest -m desktop --run-desktop -v                # real desktop (Notepad, Character Map, OCR click)
 uv run pytest -m browser --run-browser -v                # real Chrome (TEST 2, TEST 7)

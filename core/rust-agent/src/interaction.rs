@@ -1,4 +1,4 @@
-//! File-based interaction channel for front-ends without a terminal (apps/agent-ui).
+//! File-based interaction channel for front-ends without a terminal (apps/agent-desktop).
 //!
 //! A confirmation or question is written to `memory/tasks/<id>.request.json`; the runner then waits for
 //! `memory/tasks/<id>.response.json` (`{"id", "approve": bool}` or `{"id", "answer": "..."}`). Unanswered
