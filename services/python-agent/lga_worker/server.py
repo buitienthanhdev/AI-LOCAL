@@ -41,6 +41,7 @@ def build_registry(tools_dir) -> ToolRegistry:
     registry = ToolRegistry(load_specs(tools_dir))
     desktop.register(registry)
     system.register(registry)
+    system.register_environment(registry)
     for optional in ("browser", "vision", "autocad"):
         try:
             module = __import__(f"lga_worker.tools.{optional}", fromlist=["register"])
