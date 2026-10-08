@@ -1,5 +1,9 @@
 # Local Gemini Agent
 
+**One agent.** Company Brain (company RAG knowledge) and the computer-use agent are unified: a single
+chat, a single orchestrator, a single Gemini brain. Company knowledge is just more tools
+(`knowledge.*`) the planner can use. See [docs/unification.md](docs/unification.md).
+
 A local Windows agent that takes a task in natural language and completes it on this PC, checking its own work at every step:
 
 > look → understand → plan → act → check → fix → continue → complete
@@ -52,7 +56,8 @@ core/rust-agent       Rust core (lga-core) + policy/
 services/python-agent Python worker (Windows, shell, files, browser, vision, AutoCAD)
 services/gemini-gateway  Gemini Web gateway (primary/fallback, breaker, health)
 services/lga-common   shared config / secrets / redaction / logging
-tools/                tool contract (the only thing Gemini sees)
+tools/                tool contract (the only thing Gemini sees), incl. knowledge.*
+../brain             Company Brain = the knowledge subsystem (RAG), reached over HTTP
 configs/ scripts/ tests/e2e/ docs/ references/ (pinned upstreams, git-ignored)
 memory/ logs/ artifacts/ runtime/   (local state, git-ignored)
 ```
@@ -73,6 +78,8 @@ The tests below ran on the audited machine: Windows 11 Pro 26200, AutoCAD 2023, 
 | TEST 8: destroy task state mid-run → resume | **PASS** (state file and backup destroyed, rebuilt from the audit log) | `run-e2e.ps1 -Test 8` |
 | Acceptance 1: "Mở Chrome, tìm trang GitHub của Windows-Use, sau đó mở AutoCAD và tạo một bản vẽ mới." | **PASS**. The verifier rejected a first, too-generic completion; the planner then opened Jeomon/Windows-Use. Chrome and AutoCAD were checked externally after the agent exited. | `run-e2e.ps1 -Test A1` |
 | Acceptance 2: "Mở AutoCAD và vẽ một hình tròn bán kính 100." (+ save) | **PASS**. The circle was verified by handle read-back, and the artifact path `C:\temp\circle.dwg` was reported. | `run-e2e.ps1 -Test A2` |
+| Unified: "tìm tỷ lệ rắn OneCoat Pro trong tri thức rồi vẽ hình tròn bán kính đó trong AutoCAD" | **PASS** — one task: knowledge.search → 61% → autocad.create_circle r=61 → verified by handle | acceptance |
+| Knowledge: "thông số OneCoat Pro?" | **PASS** — answered from TDS with citation | `knowledge.*` |
 | Unit / integration suites | Rust 23 · worker 123 (+ desktop/browser/AutoCAD live) · gateway 9 (+ live) · UI 5 | see [operations.md](docs/operations.md#tests) |
 
 `agent doctor` on this machine: every subsystem PASS except `vision` and `gemini-gateway`. Both are WARN, and both are caused by the missing Google sign-in.

@@ -39,6 +39,13 @@ This opens a Playwright browser for you to sign in. The session is stored under 
 
 The agent never reads your browser's cookies itself.
 
+## Start everything (one command)
+
+`pwsh scripts/start.ps1` starts the Gemini gateway, the Company Brain knowledge backend (headless) and the
+`● Agent` popup — the single chat for everything. Add `-Vision` to also start the local UI-TARS vision
+server. This replaces `Company Brain.bat`: there is now one agent and one chat; Company Brain runs only as
+the knowledge subsystem (the agent uses `knowledge.*` tools; it never runs Company Brain's own chat loop).
+
 ## Everyday use
 
 ```powershell
