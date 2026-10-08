@@ -36,7 +36,7 @@ enum Command {
         /// Approve actions the policy marks "confirm" without asking (never overrides "deny").
         #[arg(long)]
         yes: bool,
-        /// Answer confirmations/questions through memory/tasks/<id>.request.json (used by apps/agent-ui).
+        /// Answer confirmations/questions through memory/tasks/<id>.request.json (used by apps/agent-desktop).
         #[arg(long)]
         ui_channel: bool,
         /// Use this task id instead of generating one (lets a front-end know the id in advance).

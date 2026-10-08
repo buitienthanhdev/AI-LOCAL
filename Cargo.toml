@@ -1,5 +1,5 @@
 [workspace]
-members = ["core/rust-agent", "apps/agent-cli"]
+members = ["core/rust-agent", "apps/agent-cli", "apps/agent-desktop"]
 resolver = "2"
 
 [workspace.package]

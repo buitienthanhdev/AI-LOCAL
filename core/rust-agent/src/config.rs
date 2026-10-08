@@ -123,6 +123,21 @@ pub struct VisionCfg {
     pub ui_tars_base_url: String,
 }
 
+/// Company Brain knowledge subsystem (only what the core and the desktop app need; the worker reads the rest).
+#[derive(Debug, Clone, Deserialize)]
+pub struct KnowledgeCfg {
+    pub base_url: String,
+    pub autostart: bool,
+    pub python: String,
+    pub source_dir: String,
+}
+
+impl Default for KnowledgeCfg {
+    fn default() -> Self {
+        Self { base_url: "http://127.0.0.1:8765".into(), autostart: false, python: "python".into(), source_dir: "..".into() }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct AutocadCfg {
     pub prog_id: String,
@@ -141,6 +156,8 @@ struct RawConfig {
     browser: BrowserCfg,
     vision: VisionCfg,
     autocad: AutocadCfg,
+    #[serde(default)]
+    knowledge: KnowledgeCfg,
 }
 
 #[derive(Debug, Clone)]
@@ -157,6 +174,7 @@ pub struct Config {
     pub browser: BrowserCfg,
     pub vision: VisionCfg,
     pub autocad: AutocadCfg,
+    pub knowledge: KnowledgeCfg,
 }
 
 fn deep_merge(base: &mut toml::Value, overlay: toml::Value) {
@@ -235,6 +253,7 @@ impl Config {
             browser: raw.browser,
             vision: raw.vision,
             autocad: raw.autocad,
+            knowledge: raw.knowledge,
         })
     }
 
