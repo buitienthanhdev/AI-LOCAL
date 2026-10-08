@@ -12,8 +12,16 @@ Design
   deterministic `ToolError` code. Crash recovery: if our Chrome process exited or the CDP websocket is no
   longer open, the old session is killed, Chrome is relaunched on the same profile and a new session is
   started; the caller is told (`Attached.restarted` / `notice`) that tab ids and element indices are void.
-* Element indices come from the latest DOM state. Every index-based action refreshes the state first and
-  fails with STALE_ELEMENT when the index is not on the current page.
+* Element indices are only honoured against the page the planner last saw: `browser.get_state` records a
+  snapshot (tab, a per-document JS token, a fingerprint per index). Index-based actions refresh the DOM and
+  refuse with STALE_ELEMENT - without acting - when the document was replaced, the index is unknown, or the
+  node at that index no longer matches. Once a click has been dispatched it is never reported as STALE.
+* After an input action `settle()` watches a Navigation-API probe armed before the action: a navigation that
+  has *started* (link click, form submit) is waited for until it commits and loads, even when the server is
+  slower than `post_action_settle_ms`; without one, only the short settle window is spent.
+* Detaching (`close(keep_open=True)`, or a dropped websocket while Chrome lives) only disconnects
+  (`BrowserSession.stop()` after the event bus drained): Chrome and its tabs stay. Attaching verifies a usable
+  page with a real JS call; a kept-open Chrome that cannot be attached is closed and relaunched.
 * JavaScript dialogs are auto-accepted by browser-use's PopupsWatchdog; their messages are surfaced in
   `browser.get_state`.
 """
@@ -25,9 +33,10 @@ import logging
 import os
 import tempfile
 import time
+import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -38,6 +47,7 @@ from lga_common.config import Config
 from lga_worker import inventory
 from lga_worker.browser import chrome as chrome_mod
 from lga_worker.browser.chrome import ChromeProcess
+from lga_worker.browser.state import describe_fingerprint, element_fingerprint
 from lga_worker.errors import ErrorCode, ToolError
 
 logger = logging.getLogger(__name__)
@@ -57,6 +67,10 @@ LIBRARY_LOGGERS = ("browser_use", "bubus", "cdp_use")
 LIBRARY_LOG_LEVEL = logging.WARNING
 
 SESSION_TEARDOWN_TIMEOUT_S = 10.0
+# Let queued browser-use events (focus changes, tab events) finish before disconnecting, so none runs
+# against a torn-down session manager.
+EVENT_DRAIN_TIMEOUT_S = 2.0
+ATTACH_VERIFY_TIMEOUT_S = 5.0
 # Extra time granted around a bubus event so its own `event_timeout` fires first with a precise error.
 EVENT_GRACE_S = 2.0
 MIN_CALL_TIMEOUT_S = 0.5
@@ -73,11 +87,29 @@ PAGE_TEXT_JS = f"(document.body ? document.body.innerText : '').slice(0, {PAGE_T
 SCROLL_POS_JS = "({x: window.scrollX, y: window.scrollY, h: document.documentElement.scrollHeight})"
 NODE_VALUE_FN = ("function() { if (this.isContentEditable) return this.innerText; "
                  "return ('value' in this) ? String(this.value) : null; }")
+DOC_TOKEN_READ_JS = "window.__lgaDocToken || null"
+DOC_TOKEN_ENSURE_JS = ("(() => {{ if (!window.__lgaDocToken) window.__lgaDocToken = '{token}';"
+                       " return window.__lgaDocToken; }})()")
+# Armed before an input action. The Navigation API `navigate` event fires synchronously when the document
+# starts a navigation (link click, form submit, location change), long before the URL commits.
+NAV_ARM_JS = (
+    "(() => {{ const w = window; if (!w.__lgaNavHooked && w.navigation) {{"
+    " w.navigation.addEventListener('navigate', e => {{ if (e.downloadRequest) return;"
+    " w.__lgaNav = {{url: e.destination.url, same: !!e.destination.sameDocument}}; }});"
+    " w.navigation.addEventListener('navigateerror', () => {{ w.__lgaNav = null; }}); w.__lgaNavHooked = true; }}"
+    " w.__lgaNav = null; w.__lgaActToken = '{token}';"
+    " return {{url: location.href, title: document.title, ready: document.readyState}}; }})()"
+)
+NAV_PROBE_JS = ("({url: location.href, title: document.title, ready: document.readyState,"
+                " token: window.__lgaActToken || null, nav: window.__lgaNav || null})")
 NODE_FILES_FN = ("function() { return this.files ? Array.from(this.files).map(f => ({name: f.name, size: f.size}))"
                  " : null; }")
 
 RESTART_NOTICE = ("Browser was restarted ({reason}); earlier tab ids and element indices are invalid - "
                   "call browser.get_state before using indices.")
+REATTACH_FAILED_NOTICE = ("The Chrome left open earlier could not be attached ({reason}); it was closed and "
+                          "relaunched - earlier tab ids and element indices are invalid.")
+NOTHING_DONE = "Nothing was done."
 RECONNECT_NOTICE = ("Browser connection was re-established ({reason}); element indices are invalid - "
                     "call browser.get_state before using indices.")
 
@@ -140,6 +172,25 @@ class PageInfo:
     url: str
     title: str
     ready_state: str
+    pending_url: str | None = None  # a navigation started by the action but not committed yet
+
+
+@dataclass
+class ActionProbe:
+    """Page before an input action plus the token of the navigation probe armed in that document."""
+
+    before: PageInfo
+    token: str | None
+
+
+@dataclass
+class StateSnapshot:
+    """What the planner saw in its last browser.get_state: indices are only valid against this."""
+
+    target_id: str | None
+    doc_token: str | None
+    url: str
+    fingerprints: dict[int, tuple[str, ...]] = field(default_factory=dict)
 
 
 _BU: SimpleNamespace | None = None
@@ -247,6 +298,8 @@ class BrowserProvider:
         self._chrome: ChromeProcess | None = None
         self._mode = ""  # launched | reused | attached
         self._downloads: dict[str, str] = {}  # path -> source url ("" when unknown)
+        self._snapshot: StateSnapshot | None = None
+        self._start_notice = ""  # set by _start when a kept-open Chrome had to be replaced
         self.restarts = 0
 
     # ----------------------------------------------------------------- lifecycle
@@ -299,64 +352,113 @@ class BrowserProvider:
         if reason is None:
             return Attached(self._session)
         had_session = self._session is not None
+        chrome_alive = self._chrome is not None and self._chrome.is_alive()
         if had_session:
             logger.warning("browser session unusable (%s); recovering", reason)
             self._collect_downloads()
-            await self._drop_session()
-        chrome_alive = self._chrome is not None and self._chrome.is_alive()
+            await self._drop_session(detach=chrome_alive)
         if had_session and not chrome_alive and self._chrome is not None:
             await asyncio.to_thread(self._chrome.kill)  # strays (renderers) holding the profile
             self._chrome = None
         launched = await self._start(timeout_s, reuse_chrome=chrome_alive)
+        start_notice, self._start_notice = self._start_notice, ""
         if not had_session:
+            if start_notice:
+                return Attached(self._session, launched=launched, restarted=True, notice=start_notice)
             return Attached(self._session, launched=launched)
         self.restarts += 1
         template = RESTART_NOTICE if launched else RECONNECT_NOTICE
-        return Attached(self._session, launched=launched, restarted=True, notice=template.format(reason=reason))
+        notice = start_notice or template.format(reason=reason)
+        return Attached(self._session, launched=launched, restarted=True, notice=notice)
 
     async def _start(self, timeout_s: float, reuse_chrome: bool) -> bool:
-        """Start a session (launching Chrome if needed). Returns True when a new Chrome was launched."""
+        """Start a session, launching Chrome if needed. Returns True when a new Chrome was launched.
+
+        A running Chrome of ours (kept open by an earlier run, or still alive after a websocket drop) is
+        re-attached first; if that fails it is closed and replaced rather than failing the tool call.
+        """
+        deadline = time.monotonic() + timeout_s
+
+        def remaining() -> float:
+            return max(MIN_CALL_TIMEOUT_S, deadline - time.monotonic())
+
+        if self.settings.cdp_url:
+            self._session = await self._attach(self.settings.cdp_url, remaining(), ensure_page=False)
+            self._mode = "attached"
+            return False
+        if not (reuse_chrome and self._chrome is not None):
+            self._chrome = await asyncio.to_thread(chrome_mod.find_running, self.settings.profile_dir)
+            if self._chrome is not None:
+                self._mode = "reused"
+        if self._chrome is not None:
+            try:
+                self._session = await self._attach(self._chrome.cdp_url, remaining(), ensure_page=True)
+                self._mode = self._mode or "reused"
+                return False
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - recovered below by relaunching; reason reported to the planner
+                reason = f"{type(exc).__name__}: {exc}"
+                logger.warning("could not attach to running Chrome pid %s (%s); relaunching", self._chrome.pid, reason)
+                await asyncio.to_thread(self._chrome.kill)
+                self._chrome = None
+                self._start_notice = REATTACH_FAILED_NOTICE.format(reason=reason)
+        executable = inventory.find_chrome(self.settings.chrome_path)
+        if executable is None:
+            raise ToolError(ErrorCode.BACKEND_UNAVAILABLE,
+                            "Chrome is not installed (set browser.chrome_path in configs/config.toml)")
+        self._chrome = await asyncio.to_thread(
+            chrome_mod.launch, executable, self.settings.profile_dir, self.settings.headless,
+            min(self.settings.launch_timeout_s, remaining()), self.settings.log_dir)
+        try:
+            self._session = await self._attach(self._chrome.cdp_url, remaining(), ensure_page=True)
+        except BaseException:
+            await asyncio.to_thread(self._chrome.kill)
+            self._chrome = None
+            raise
+        self._mode = "launched"
+        return True
+
+    async def _attach(self, cdp_url: str, timeout_s: float, ensure_page: bool) -> Any:
+        """Connect a new browser-use session to `cdp_url` and prove it can run JS in a page."""
         deadline = time.monotonic() + timeout_s
         bu = load_browser_use(self.settings.state_dir)
-        launched = False
-        if self.settings.cdp_url:
-            cdp_url, mode = self.settings.cdp_url, "attached"
-        else:
-            if not (reuse_chrome and self._chrome is not None):
-                self._chrome = await asyncio.to_thread(chrome_mod.find_running, self.settings.profile_dir)
-                mode = "reused"
-            else:
-                mode = self._mode or "launched"
-            if self._chrome is None:
-                executable = inventory.find_chrome(self.settings.chrome_path)
-                if executable is None:
-                    raise ToolError(ErrorCode.BACKEND_UNAVAILABLE,
-                                    "Chrome is not installed (set browser.chrome_path in configs/config.toml)")
-                self._chrome = await asyncio.to_thread(
-                    chrome_mod.launch, executable, self.settings.profile_dir, self.settings.headless,
-                    min(self.settings.launch_timeout_s, max(MIN_CALL_TIMEOUT_S, deadline - time.monotonic())),
-                    self.settings.log_dir)
-                mode, launched = "launched", True
-            cdp_url = self._chrome.cdp_url
+        if ensure_page:
+            # A Chrome kept open by an earlier run may have no tab left; browser-use's focus logic needs one.
+            await asyncio.to_thread(chrome_mod.ensure_page_target, cdp_url)
         self.settings.downloads_dir.mkdir(parents=True, exist_ok=True)
         host = (urlsplit(cdp_url).hostname or "").lower()
         session = bu.BrowserSession(
             cdp_url=cdp_url, is_local=host in LOCAL_HOSTS, keep_alive=True, highlight_elements=False,
             enable_default_extensions=False, downloads_path=str(self.settings.downloads_dir),
-            headless=self.settings.headless if mode != "attached" else False,
+            headless=self.settings.headless if not self.settings.cdp_url else False,
         )
         discard_empty_temp_dir(session.browser_profile.user_data_dir)  # unused when attaching over CDP
         try:
             await asyncio.wait_for(session.start(), timeout=max(MIN_CALL_TIMEOUT_S, deadline - time.monotonic()))
+            if session.agent_focus_target_id is None or session.session_manager is None:
+                raise RuntimeError("attached, but browser-use has no focused tab")
+            self._session = session
+            await self.evaluate(PAGE_INFO_JS, ATTACH_VERIFY_TIMEOUT_S)  # the focused tab really answers
         except BaseException:
-            await self._kill_session(session)
-            if self._chrome is not None:
-                await asyncio.to_thread(self._chrome.kill)
-                self._chrome = None
+            self._session = None
+            await self._detach_session(session)
             raise
-        self._session, self._mode = session, mode
-        logger.info("browser session ready (%s, %s)", mode, cdp_url)
-        return launched
+        logger.info("browser session ready (%s)", cdp_url)
+        return session
+
+    async def _detach_session(self, session: Any) -> None:
+        """Disconnect without touching Chrome or its tabs (keep_alive session: stop() never closes the browser)."""
+        try:
+            await session.event_bus.wait_until_idle(timeout=EVENT_DRAIN_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 - draining is best effort before a disconnect; logged
+            logger.debug("event bus did not drain before detach", exc_info=True)
+        try:
+            await asyncio.wait_for(session.stop(), timeout=SESSION_TEARDOWN_TIMEOUT_S)
+        except TimeoutError:
+            logger.warning("browser session detach timed out; abandoning it")
+        except Exception:  # noqa: BLE001 - disconnecting a broken session; logged with traceback, caller continues
+            logger.warning("browser session detach failed", exc_info=True)
 
     async def _kill_session(self, session: Any) -> None:
         try:
@@ -366,40 +468,37 @@ class BrowserProvider:
         except Exception:  # noqa: BLE001 - teardown of a dead session; logged with traceback, caller continues
             logger.warning("browser session teardown failed", exc_info=True)
 
-    async def _drop_session(self) -> None:
+    async def _drop_session(self, detach: bool) -> None:
         session, self._session = self._session, None
-        if session is not None:
+        self._snapshot = None
+        if session is None:
+            return
+        if detach:
+            await self._detach_session(session)
+        else:
             await self._kill_session(session)
 
     async def close(self, keep_open: bool | None = None) -> None:
-        """Called by Services.close(). Always disconnects. Closes the Chrome we launched (gracefully, then
-        kill) unless `keep_open` (default: [browser] keep_open), in which case it stays open for the user and
-        the next run re-attaches to it through the profile's DevToolsActivePort."""
+        """Called by Services.close(). Always disconnects first (so browser-use never reacts to the browser
+        going away). Closes the Chrome we own (CDP Browser.close, then kill) unless `keep_open` (default:
+        [browser] keep_open): then it stays open and the next run re-attaches via DevToolsActivePort."""
         keep = self.settings.keep_open if keep_open is None else keep_open
         async with self._lock:
             self._collect_downloads()
-            if keep:
-                await self._drop_session()
-                if self._chrome is not None:
-                    self._chrome.close_log()
-                    logger.info("leaving Chrome pid %s open (browser.keep_open)", self._chrome.pid)
-                self._chrome, self._mode = None, ""
+            await self._drop_session(detach=True)
+            chrome, self._chrome, self._mode = self._chrome, None, ""
+            if chrome is None:
                 return
-            session = self._session
-            if session is not None and self._chrome is not None and session.is_cdp_connected:
-                try:
-                    await asyncio.wait_for(session.cdp_client.send.Browser.close(),
-                                           timeout=self.settings.close_timeout_s)
-                except Exception:  # noqa: BLE001 - graceful close is best effort; the process is killed below
-                    logger.info("Browser.close over CDP failed; killing Chrome", exc_info=True)
-            await self._drop_session()
-            if self._chrome is not None:
-                chrome, self._chrome = self._chrome, None
-                deadline = time.monotonic() + self.settings.close_timeout_s
-                while chrome.is_alive() and time.monotonic() < deadline:
-                    await asyncio.sleep(self.settings.poll_interval_s)
-                await asyncio.to_thread(chrome.kill)
-            self._mode = ""
+            if keep:
+                chrome.close_log()
+                logger.info("leaving Chrome pid %s open (browser.keep_open)", chrome.pid)
+                return
+            if chrome.is_alive():
+                await chrome_mod.close_gracefully(chrome.cdp_url, self.settings.close_timeout_s)
+            deadline = time.monotonic() + self.settings.close_timeout_s
+            while chrome.is_alive() and time.monotonic() < deadline:
+                await asyncio.sleep(self.settings.poll_interval_s)
+            await asyncio.to_thread(chrome.kill)
 
     # ----------------------------------------------------------------- low-level helpers
 
@@ -485,18 +584,66 @@ class BrowserProvider:
             info = await self.page_info()
         return info
 
-    async def settle(self, before: PageInfo, timeout_s: float) -> PageInfo:
-        """After an input action: wait briefly for a URL change; if one happens, wait for the load and
-        (within the same short window) for the title to follow - client-side routers update it late."""
-        deadline = time.monotonic() + min(self.settings.post_action_settle_s, timeout_s)
-        info = await self.page_info()
-        while info.url == before.url and time.monotonic() < deadline:
+    async def arm_action(self) -> ActionProbe:
+        """Before an input action: remember the page and arm the navigation probe in its document."""
+        token = uuid.uuid4().hex
+        try:
+            value = await self.evaluate(NAV_ARM_JS.format(token=token), self.settings.action_timeout_s)
+        except (ToolError, asyncio.CancelledError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - page mid-navigation: fall back to URL polling only
+            logger.debug("navigation probe not armed (%s)", exc)
+            return ActionProbe(await self.page_info(), None)
+        if not isinstance(value, dict):
+            return ActionProbe(await self.page_info(), None)
+        url = str(value.get("url", ""))
+        title = "" if url == chrome_mod.INITIAL_URL else str(value.get("title", ""))
+        return ActionProbe(PageInfo(url=url, title=title, ready_state=str(value.get("ready", ""))), token)
+
+    async def _probe_navigation(self) -> dict[str, Any] | None:
+        try:
+            value = await self.evaluate(NAV_PROBE_JS, self.settings.action_timeout_s)
+        except (ToolError, asyncio.CancelledError):
+            raise
+        except Exception:  # noqa: BLE001 - execution context destroyed: a navigation is committing right now
+            return None
+        return value if isinstance(value, dict) else None
+
+    async def settle(self, probe: ActionProbe, timeout_s: float) -> PageInfo:
+        """After an input action, report the page it led to.
+
+        * URL changed or the document was replaced -> wait for the load, then (within the short settle window)
+          for the title to follow, since client-side routers update it late.
+        * A navigation was started (Navigation API) but has not committed -> keep waiting up to the
+          navigation timeout: a slow server must not turn a real link click into "URL unchanged".
+        * Nothing started within `post_action_settle_ms` -> the action did not navigate.
+        """
+        start = time.monotonic()
+        settle_deadline = start + min(self.settings.post_action_settle_s, timeout_s)
+        nav_deadline = start + min(self.settings.navigation_timeout_s, timeout_s)
+        before = probe.before
+        pending: str | None = None
+        while True:
+            state = await self._probe_navigation()
+            if state is None:
+                navigating = True
+            else:
+                replaced = probe.token is not None and state.get("token") != probe.token
+                if str(state.get("url", "")) != before.url or replaced:
+                    return await self._finish_navigation(before, settle_deadline, nav_deadline)
+                nav = state.get("nav")
+                started = isinstance(nav, dict) and nav.get("url") and not nav.get("same")
+                pending = str(nav["url"]) if started else None
+                navigating = pending is not None
+            if time.monotonic() >= (nav_deadline if navigating else settle_deadline):
+                info = await self.page_info()
+                info.pending_url = pending if navigating else None
+                return info
             await asyncio.sleep(self.settings.poll_interval_s)
-            info = await self.page_info()
-        if info.url == before.url:
-            return info
-        info = await self.wait_ready(min(self.settings.navigation_timeout_s, max(0.0, timeout_s)))
-        while info.title == before.title and time.monotonic() < deadline:
+
+    async def _finish_navigation(self, before: PageInfo, settle_deadline: float, nav_deadline: float) -> PageInfo:
+        info = await self.wait_ready(max(0.0, nav_deadline - time.monotonic()))
+        while info.title == before.title and time.monotonic() < settle_deadline:
             await asyncio.sleep(self.settings.poll_interval_s)
             info = await self.page_info()
         return info
@@ -539,24 +686,99 @@ class BrowserProvider:
         return await asyncio.wait_for(self.session.get_browser_state_summary(include_screenshot=False),
                                       timeout=max(MIN_CALL_TIMEOUT_S, timeout_s))
 
-    async def element(self, index: int, timeout_s: float) -> Any:
-        """The node for `index` on the CURRENT page (state is refreshed first). STALE_ELEMENT otherwise."""
-        state = await self.browser_state(timeout_s)
+    async def _document_token(self, ensure: bool) -> str | None:
+        """Per-document marker: survives SPA route changes, disappears when the document is replaced."""
+        expression = DOC_TOKEN_ENSURE_JS.format(token=uuid.uuid4().hex) if ensure else DOC_TOKEN_READ_JS
+        try:
+            value = await self.evaluate(expression, self.settings.action_timeout_s)
+        except (ToolError, asyncio.CancelledError):
+            raise
+        except Exception as exc:  # noqa: BLE001 - context destroyed mid-navigation means "not the same document"
+            logger.debug("document token unavailable (%s)", exc)
+            return None
+        return value if isinstance(value, str) else None
+
+    async def remember_state(self, state: Any, url: str) -> StateSnapshot:
+        """Record what browser.get_state showed the planner; index actions are checked against it."""
         selector_map = state.dom_state.selector_map if state.dom_state else {}
-        node = selector_map.get(index)
+        self._snapshot = StateSnapshot(
+            target_id=self.session.agent_focus_target_id, doc_token=await self._document_token(ensure=True), url=url,
+            fingerprints={int(i): element_fingerprint(node) for i, node in selector_map.items()})
+        return self._snapshot
+
+    def _stale(self, index: int, reason: str, current_url: str = "") -> ToolError:
+        snapshot_url = self._snapshot.url if self._snapshot else ""
+        return ToolError(ErrorCode.STALE_ELEMENT,
+                         f"{NOTHING_DONE} Element index {index} cannot be used: {reason}. "
+                         "Call browser.get_state for fresh indices.",
+                         details={"index": index, "url": current_url, "state_url": snapshot_url, "performed": False})
+
+    async def element(self, index: int, timeout_s: float) -> Any:
+        """The node for `index`, guaranteed to be the element the planner saw in its last browser.get_state.
+
+        Raises STALE_ELEMENT (without acting) when the tab or document changed since that state, the index was
+        not in it, or the node at that index is gone or is now a different element (backend node ids can repeat
+        across documents, so presence in the fresh selector map alone is not proof).
+        """
+        snapshot = self._snapshot
+        if snapshot is None:
+            raise self._stale(index, "no browser.get_state was taken in the current browser session")
+        if snapshot.target_id != self.session.agent_focus_target_id:
+            raise self._stale(index, "the active tab changed since the last browser.get_state")
+        if index not in snapshot.fingerprints:
+            raise self._stale(index, f"it was not in the last browser.get_state of {snapshot.url}")
+
+        async def same_document() -> None:
+            token = await self._document_token(ensure=False)
+            if snapshot.doc_token is None or token != snapshot.doc_token:
+                info = await self.page_info()
+                raise self._stale(index, f"the page changed since the last browser.get_state (it showed "
+                                         f"{snapshot.url}; the tab now shows {info.url})", info.url)
+
+        await same_document()
+        state = await self.browser_state(timeout_s)
+        await same_document()  # a navigation may have committed while the DOM was being read
+        node = (state.dom_state.selector_map if state.dom_state else {}).get(index)
         if node is None:
-            raise ToolError(ErrorCode.STALE_ELEMENT,
-                            f"element index {index} is not on the current page ({state.url}, "
-                            f"{len(selector_map)} interactive elements); call browser.get_state for fresh indices",
-                            details={"index": index, "url": state.url})
+            raise self._stale(index, "that element is no longer on the page", state.url)
+        expected, actual = snapshot.fingerprints[index], element_fingerprint(node)
+        if actual != expected:
+            raise self._stale(index, f"it now names {describe_fingerprint(actual)} instead of "
+                                     f"{describe_fingerprint(expected)}", state.url)
         return node
 
-    async def click(self, node: Any, timeout_s: float) -> dict[str, Any] | None:
-        bu = load_browser_use(self.settings.state_dir)
-        result = await self.dispatch(bu.events.ClickElementEvent(node=node), min(self.settings.action_timeout_s,
-                                                                                 timeout_s))
+    async def _after_failed_dispatch(self, action: str, exc: Exception, before: PageInfo) -> dict[str, Any]:
+        """An action raised after it may already have reached the page. Never answer STALE at this point: if the
+        page navigated the action evidently happened; otherwise report that it may or may not have happened."""
+        try:
+            after = await self.page_info()
+        except ToolError:
+            after = None
+        if after is not None and after.url != before.url:
+            logger.info("%s raised %s, but the page navigated to %s; treating it as performed", action, exc, after.url)
+            return {"warning": f"{action} raised {type(exc).__name__} after the page started navigating"}
+        error = to_tool_error(exc, f"browser.{action}")
+        if error.code == ErrorCode.STALE_ELEMENT:
+            error = ToolError(ErrorCode.EXECUTION_FAILED,
+                              f"browser.{action} may not have reached the element ({type(exc).__name__}: {exc}); the "
+                              "URL did not change - call browser.get_state before retrying")
+        error.details["maybe_performed"] = True
+        raise error from exc
+
+    def _click_event(self, node: Any) -> Any:
+        return load_browser_use(self.settings.state_dir).events.ClickElementEvent(node=node)
+
+    async def click(self, node: Any, before: PageInfo, timeout_s: float) -> dict[str, Any] | None:
+        event = self._click_event(node)  # built before the try: a failure here means nothing was sent
+        try:
+            result = await self.dispatch(event, min(self.settings.action_timeout_s, timeout_s))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - decided truthfully from the page state, never swallowed
+            return await self._after_failed_dispatch("click", exc, before)
         if isinstance(result, dict) and result.get("validation_error"):
-            raise ToolError(ErrorCode.INVALID_ARGUMENT, str(result["validation_error"]))
+            # browser-use validates (file input, <select>, ...) before any mouse event is sent.
+            raise ToolError(ErrorCode.INVALID_ARGUMENT, f"{NOTHING_DONE} {result['validation_error']}")
         return result if isinstance(result, dict) else None
 
     async def type_text(self, node: Any, text: str, clear: bool, timeout_s: float) -> str | None:

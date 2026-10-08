@@ -29,6 +29,7 @@ REPO_HOST = "github.com"
 CALL_BUDGET_S = 120.0
 WAIT_TIMEOUT_MS = 20_000
 KILL_WAIT_S = 10
+POLL_S = 0.2
 
 
 class Harness:
@@ -138,3 +139,78 @@ async def test_7_recovers_after_chrome_is_killed(harness: Harness) -> None:
     assert provider.chrome_pid is not None and provider.chrome_pid != old_pid
     state = await harness.call("browser.get_state")
     assert state.data["element_count"] > 0
+
+
+SEARCH_URL = "https://github.com/search?q=Windows-Use"
+OTHER_REPO_URL = "https://github.com/CursorTouch/Windows-MCP"
+
+
+def _link(state: Any, *, href_suffix: str = "", text: str = "") -> int:
+    for element in state.data["elements"]:
+        href = element["attributes"].get("href", "")
+        if element["tag"] == "a" and (not href_suffix or href.endswith(href_suffix)) \
+                and (not text or element["text"].strip().lower() == text):
+            return element["index"]
+    raise AssertionError(f"no link href*={href_suffix!r} text={text!r} on {state.data['url']}")
+
+
+async def test_8_stale_index_after_external_navigation_never_clicks(harness: Harness) -> None:
+    """Regression (acceptance run 20261008-035252): the tab navigated by itself (not via a browser tool) between
+    browser.get_state and browser.click. The click must be refused truthfully and must not click anything."""
+    from lga_worker.errors import ErrorCode, ToolError
+
+    await harness.call("browser.navigate", {"url": SEARCH_URL})
+    await harness.call("browser.wait_for", {"text_contains": "Jeomon/", "timeout_ms": WAIT_TIMEOUT_MS})
+    state = await harness.call("browser.get_state", {"max_elements": 2000})
+    index = _link(state, href_suffix="/Jeomon/Windows-Use")
+    provider = harness.services.peek("browser")
+    async with provider.attached(CALL_BUDGET_S):
+        await provider.evaluate(f"location.href = {OTHER_REPO_URL!r}", CALL_BUDGET_S)  # page-initiated navigation
+    await harness.call("browser.wait_for", {"url_contains": "CursorTouch/Windows-MCP", "timeout_ms": WAIT_TIMEOUT_MS})
+    with pytest.raises(ToolError) as exc:
+        await harness.call("browser.click", {"index": index})
+    assert exc.value.code == ErrorCode.STALE_ELEMENT and exc.value.details["performed"] is False
+    assert "CursorTouch/Windows-MCP" in exc.value.message
+    still = await harness.call("browser.page_matches", {"url_contains": "CursorTouch/Windows-MCP"})
+    assert still.data["matches"] is True  # nothing was clicked on the new page
+    # With a fresh state the same kind of click works and reports the page it led to.
+    await harness.call("browser.navigate", {"url": SEARCH_URL})
+    await harness.call("browser.wait_for", {"text_contains": "Jeomon/", "timeout_ms": WAIT_TIMEOUT_MS})
+    state = await harness.call("browser.get_state", {"max_elements": 2000})
+    clicked = await harness.call("browser.click", {"index": _link(state, href_suffix="/Jeomon/Windows-Use")})
+    assert clicked.data["url_changed"] is True and clicked.data["url"].rstrip("/").endswith("Jeomon/Windows-Use")
+
+
+async def test_9_sign_in_link_click_reports_the_new_url(harness: Harness) -> None:
+    """Regression: clicking GitHub's 'Sign in' <a href="/login?return_to=..."> must report the login URL."""
+    await harness.call("browser.navigate", {"url": SEARCH_URL})
+    state = await harness.call("browser.get_state", {"max_elements": 2000})
+    clicked = await harness.call("browser.click", {"index": _link(state, text="sign in")})
+    assert clicked.data["url_changed"] is True, clicked.observation
+    assert "/login" in clicked.data["url"] and "(changed)" in clicked.observation
+
+
+async def test_10_keep_open_detach_then_reattach_from_new_services(harness: Harness) -> None:
+    """Regression: close(keep_open=True) leaves Chrome running; a NEW Services re-attaches and works; then
+    close(keep_open=False) really closes it."""
+    first = harness.services.peek("browser")
+    assert first is not None and first.chrome_pid is not None
+    pid = first.chrome_pid
+    await first.close(keep_open=True)  # what the worker does on shutdown with [browser] keep_open = true
+    assert psutil.pid_exists(pid) and psutil.Process(pid).is_running(), "Chrome must stay open"
+
+    second = Harness(harness.config, harness.registry, Services(harness.config))
+    nav = await second.call("browser.navigate", {"url": REPO_URL})
+    assert "Windows-Use" in nav.data["title"] and nav.data["restarted"] is False
+    reattached = second.services.peek("browser")
+    assert reattached.mode == "reused" and reattached.chrome_pid == pid
+    state = await second.call("browser.get_state")
+    clicked = await second.call("browser.click", {"index": _link(state, href_suffix="/issues")})
+    assert "/issues" in clicked.data["url"]
+
+    await reattached.close(keep_open=False)
+    await second.services.close()
+    deadline = time.monotonic() + KILL_WAIT_S
+    while psutil.pid_exists(pid) and time.monotonic() < deadline:
+        time.sleep(POLL_S)
+    assert not psutil.pid_exists(pid), "Chrome must be closed"
