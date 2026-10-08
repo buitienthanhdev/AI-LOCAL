@@ -28,7 +28,7 @@ from lga_worker.autocad.provider import (
 )
 from lga_worker.errors import ErrorCode, ToolError
 from lga_worker.registry import Check, ToolContext, ToolOutcome, ToolRegistry
-from lga_worker.tools.system import absolute_path
+from lga_worker.paths import absolute_path
 
 BACKEND = "autocad-com"
 SERVICE_NAME = "autocad"

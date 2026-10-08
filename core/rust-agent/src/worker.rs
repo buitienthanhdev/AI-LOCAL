@@ -1,5 +1,8 @@
 //! IPC with the Python worker: JSON lines over the child's stdio (protocol in docs/tool-contract.md).
 //!
+//! `shell.exec`, `filesystem.*` and `system.environment` are not sent to the worker: `call` runs them in
+//! Rust (`crate::native`) and returns the same envelope.
+//!
 //! Each request carries `request_id`, `task_id`, `step_id`, `tool`, `args`, `deadline_unix_ms`; each
 //! response `request_id`, `status`, `result`, `error`, `metrics`. A request whose response does not
 //! arrive by `deadline + hung_grace` marks the worker as hung; the caller restarts it.
@@ -20,6 +23,7 @@ use tokio::sync::{oneshot, Mutex};
 
 use crate::config::Config;
 use crate::error::ToolErrorInfo;
+use crate::native::NativeTools;
 use crate::redact::Redactor;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -111,6 +115,7 @@ pub struct WorkerClient {
     alive: Arc<AtomicBool>,
     child: Mutex<Child>,
     tools: Vec<String>,
+    native: Arc<NativeTools>,
     pid: u32,
     hung_grace: Duration,
     #[cfg(windows)]
@@ -123,6 +128,7 @@ fn unix_ms(at: SystemTime) -> u64 {
 
 impl WorkerClient {
     pub async fn spawn(config: &Config, redactor: Redactor) -> Result<Self, WorkerError> {
+        let native = Arc::new(NativeTools::new(config).map_err(|e| WorkerError::Start(format!("native tools: {e:#}")))?);
         let python = config.path(&config.worker.python);
         if !python.is_file() {
             return Err(WorkerError::Start(format!(
@@ -173,17 +179,21 @@ impl WorkerClient {
             }
             Err(_) => return Err(WorkerError::Start(format!("worker not ready within {startup:?}"))),
         };
-        let tools = ready
+        let mut tools: Vec<String> = ready
             .get("tools")
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect())
             .unwrap_or_default();
+        tools.extend(crate::native::TOOLS.iter().map(|t| t.to_string()));
+        tools.sort();
+        tools.dedup();
         Ok(Self {
             stdin: Mutex::new(stdin),
             pending,
             alive,
             child: Mutex::new(child),
             tools,
+            native,
             pid,
             hung_grace: Duration::from_millis(config.worker.hung_grace_ms),
             #[cfg(windows)]
@@ -222,6 +232,9 @@ impl WorkerClient {
     }
 
     pub async fn call(&self, call: &ToolCall) -> Result<ToolResponse, WorkerError> {
+        if NativeTools::handles(&call.tool) {
+            return Ok(self.native.call(call).await);
+        }
         let deadline = SystemTime::now() + call.timeout;
         let rx = self.register(&call.request_id).await;
         let message = json!({
@@ -247,6 +260,9 @@ impl WorkerClient {
 
     /// Ask the worker to cancel an in-flight request. The response (CANCELLED) still arrives via `call`.
     pub async fn cancel(&self, request_id: &str) -> Result<(), WorkerError> {
+        if self.native.cancel(request_id) {
+            return Ok(());
+        }
         self.send(&json!({"type": "cancel", "request_id": request_id})).await
     }
 

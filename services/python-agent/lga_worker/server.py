@@ -35,13 +35,17 @@ class InFlight:
     cancel_event: threading.Event
 
 
+# Contract tools the Rust core executes itself (core/rust-agent/src/native); the worker never sees them.
+CORE_NATIVE_TOOLS = {"shell.exec", "filesystem.read", "filesystem.write", "filesystem.list", "filesystem.stat",
+                     "system.environment"}
+
+
 def build_registry(tools_dir) -> ToolRegistry:
-    from lga_worker.tools import desktop, system
+    from lga_worker.tools import desktop
 
     registry = ToolRegistry(load_specs(tools_dir))
     desktop.register(registry)
-    system.register(registry)
-    system.register_environment(registry)
+    # shell.exec, filesystem.* and system.environment run in the Rust core (core/rust-agent/src/native).
     for optional in ("browser", "vision", "autocad", "knowledge"):
         try:
             module = __import__(f"lga_worker.tools.{optional}", fromlist=["register"])
@@ -170,7 +174,7 @@ async def _main(protocol_out: BinaryIO) -> None:
     redactor = Redactor(config.get("observability.redact_env"))
     setup_logging("worker", config.path("paths.logs_dir"), str(config.get("observability.log_level")), redactor)
     registry = build_registry(config.path("paths.tools_dir"))
-    unbound = registry.unbound_tools()
+    unbound = [t for t in registry.unbound_tools() if t not in CORE_NATIVE_TOOLS]
     if unbound:
         logger.warning("tools in the contract without a handler in this worker: %s", ", ".join(unbound))
     worker = Worker(registry, Services(config), protocol_out, redactor)

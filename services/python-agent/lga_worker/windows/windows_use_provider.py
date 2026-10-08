@@ -34,18 +34,15 @@ from PIL import ImageGrab
 
 from lga_common.config import Config
 from lga_worker.errors import ErrorCode, ToolError
-from lga_worker.filesystem import ops as fs_ops
 from lga_worker.shell.powershell import resolve_powershell, run_powershell
 from lga_worker.sta import StaExecutor
 from lga_worker.windows import _upstream, win32
 from lga_worker.windows.elements import CacheEntry, ElementCache, matches_query
 from lga_worker.windows.provider import (
     CloseResult,
-    DirectoryEntry,
     ElementContent,
     ElementLocator,
     ElementQuery,
-    FileContent,
     LaunchResult,
     MouseButton,
     Rect,
@@ -56,7 +53,6 @@ from lga_worker.windows.provider import (
     UISnapshot,
     WindowInfo,
     WindowsControlProvider,
-    WriteResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,7 +95,6 @@ class DesktopSettings:
     element_cache_entries: int
     shell_executable: str
     shell_max_output_bytes: int
-    fs_max_write_bytes: int
 
     @classmethod
     def from_config(cls, config: Config) -> DesktopSettings:
@@ -114,7 +109,6 @@ class DesktopSettings:
             * int(config.get("desktop.ui_tree_max_elements")),
             shell_executable=str(config.get("shell.executable")),
             shell_max_output_bytes=int(config.get("shell.max_output_bytes")),
-            fs_max_write_bytes=int(config.get("filesystem.max_write_bytes")),
         )
 
 
@@ -697,7 +691,7 @@ class WindowsUseProvider(WindowsControlProvider):
         return self.read_element(element_id)
 
     # ------------------------------------------------------------------------------------------
-    # shell and filesystem
+    # shell (internal helper)
     # ------------------------------------------------------------------------------------------
     def run_powershell(self, script: str, cwd: Path | None, timeout_s: float,
                        cancel_event: threading.Event | None = None) -> ShellResult:
@@ -706,11 +700,3 @@ class WindowsUseProvider(WindowsControlProvider):
         return run_powershell(script, executable=self._shell(), cwd=cwd, timeout_s=timeout_s,
                               max_output_bytes=self._settings.shell_max_output_bytes, cancel_event=cancel_event)
 
-    def read_file(self, path: Path, max_bytes: int, encoding: str | None) -> FileContent:
-        return fs_ops.read_file(path, max_bytes, encoding)
-
-    def write_file(self, path: Path, content: str, encoding: str, overwrite: bool, create_dirs: bool) -> WriteResult:
-        return fs_ops.write_file(path, content, encoding, overwrite, create_dirs, self._settings.fs_max_write_bytes)
-
-    def list_directory(self, path: Path, max_entries: int) -> tuple[list[DirectoryEntry], bool]:
-        return fs_ops.list_directory(path, max_entries)

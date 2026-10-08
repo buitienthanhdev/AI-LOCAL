@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from lga_common.config import Config
 from lga_worker.knowledge.provider import KnowledgeHit, KnowledgeProvider
-from lga_worker.server import build_registry
+from lga_worker.server import CORE_NATIVE_TOOLS, build_registry
 
 
 def test_knowledge_tools_bound_in_registry(config: Config) -> None:
     registry = build_registry(config.path("paths.tools_dir"))
-    assert registry.unbound_tools() == []
+    assert set(registry.unbound_tools()) == CORE_NATIVE_TOOLS
     for tool in ("knowledge.search", "knowledge.get_context", "knowledge.read_document", "knowledge.status"):
         assert tool in registry.available_tools()
 

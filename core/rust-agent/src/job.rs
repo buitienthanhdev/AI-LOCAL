@@ -11,7 +11,7 @@ mod imp {
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+        TerminateJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
     use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE};
 
@@ -24,7 +24,17 @@ mod imp {
     unsafe impl Sync for JobObject {}
 
     impl JobObject {
+        /// Kill-on-close job whose members may start processes outside it (see the module docs).
         pub fn kill_on_close() -> io::Result<Self> {
+            Self::create(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK)
+        }
+
+        /// Kill-on-close job without breakaway: the whole process tree dies with it (shell commands).
+        pub fn kill_on_close_strict() -> io::Result<Self> {
+            Self::create(JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
+        }
+
+        fn create(limit_flags: u32) -> io::Result<Self> {
             // SAFETY: plain Win32 calls with valid arguments; the handle is owned by the returned value.
             unsafe {
                 let handle = CreateJobObjectW(std::ptr::null(), std::ptr::null());
@@ -32,7 +42,7 @@ mod imp {
                     return Err(io::Error::last_os_error());
                 }
                 let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
-                info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+                info.BasicLimitInformation.LimitFlags = limit_flags;
                 let ok = SetInformationJobObject(
                     handle,
                     JobObjectExtendedLimitInformation,
@@ -62,6 +72,16 @@ mod imp {
                     return Err(err);
                 }
                 Ok(())
+            }
+        }
+    }
+
+    impl JobObject {
+        /// Kill every process in the job now.
+        pub fn terminate(&self, exit_code: u32) {
+            // SAFETY: the handle is valid for the lifetime of self.
+            unsafe {
+                TerminateJobObject(self.handle, exit_code);
             }
         }
     }

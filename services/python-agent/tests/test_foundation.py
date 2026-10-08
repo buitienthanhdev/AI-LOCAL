@@ -8,7 +8,6 @@ import pytest
 
 from lga_common.config import Config
 from lga_worker.errors import ErrorCode, ToolError
-from lga_worker.filesystem import ops
 from lga_common.redact import REDACTED, Redactor
 from lga_worker.shell.powershell import looks_like_elevation_failure, resolve_powershell, run_powershell
 from lga_worker.sta import StaExecutor
@@ -44,35 +43,6 @@ def test_redactor_literal() -> None:
     redactor.add_literal("super-secret-value")
     assert "super-secret-value" not in redactor("x super-secret-value y")
 
-
-def test_write_read_roundtrip_and_conflict(tmp_path: Path) -> None:
-    target = tmp_path / "sub" / "hello.txt"
-    written = ops.write_file(target, "xin chào\nhello", "utf-8", overwrite=False, create_dirs=True, max_bytes=1024)
-    assert written.created and written.size == len("xin chào\nhello".encode())
-    read = ops.read_file(target, 1024, None)
-    assert read.content == "xin chào\nhello"
-    assert read.sha256 == written.sha256
-    with pytest.raises(ToolError) as exc:
-        ops.write_file(target, "again", "utf-8", overwrite=False, create_dirs=False, max_bytes=1024)
-    assert exc.value.code == ErrorCode.CONFLICT
-
-
-def test_read_missing_and_binary(tmp_path: Path) -> None:
-    with pytest.raises(ToolError) as exc:
-        ops.read_file(tmp_path / "missing.txt", 10, None)
-    assert exc.value.code == ErrorCode.NOT_FOUND
-    blob = tmp_path / "b.bin"
-    blob.write_bytes(b"\x00\x01\x02binary")
-    assert ops.read_file(blob, 100, None).encoding == "base64"
-
-
-def test_list_directory_truncates(tmp_path: Path) -> None:
-    for i in range(5):
-        (tmp_path / f"f{i}.txt").write_text("x")
-    (tmp_path / "dir").mkdir()
-    entries, truncated = ops.list_directory(tmp_path, 3)
-    assert truncated and len(entries) == 3
-    assert entries[0].is_dir and entries[0].name == "dir"
 
 
 def test_powershell_separates_streams_and_exit_code() -> None:

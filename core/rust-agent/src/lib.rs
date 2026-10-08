@@ -19,3 +19,4 @@ pub mod planner;
 pub mod doctor;
 pub mod process;
 pub mod interaction;
+pub mod native;

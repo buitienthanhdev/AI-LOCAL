@@ -24,7 +24,9 @@ fn config() -> Option<Config> {
 async fn worker_round_trip_verification_deadline_and_crash() {
     let Some(config) = config() else { return };
     let worker = WorkerClient::spawn(&config, Redactor::new()).await.expect("worker starts");
+    // Native (Rust) tools are listed alongside the worker's.
     assert!(worker.tools().iter().any(|t| t == "filesystem.write"));
+    assert!(worker.tools().iter().any(|t| t == "desktop.wait_for_window"));
     worker.ping(Duration::from_secs(5)).await.expect("ping");
 
     let dir = tempfile::tempdir().unwrap();
@@ -36,16 +38,17 @@ async fn worker_round_trip_verification_deadline_and_crash() {
     assert_eq!(response.result.as_ref().unwrap().verification.status, "passed");
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "from rust");
 
-    let slow = ToolCall::new("rust-it", "s2", "shell.exec",
-        json!({"command": "Start-Sleep 30", "timeout_ms": 60000}), Duration::from_secs(2));
+    // The worker enforces the request deadline.
+    let slow = ToolCall::new("rust-it", "s2", "desktop.wait_for_window",
+        json!({"title_contains": "lga-window-that-never-appears", "timeout_ms": 60000}), Duration::from_secs(2));
     let response = worker.call(&slow).await.expect("response");
     assert_eq!(response.error.as_ref().unwrap().code, ErrorCode::Timeout);
     assert!(response.metrics.duration_ms < 15_000);
 
-    let invalid = ToolCall::new("rust-it", "s3", "filesystem.read", json!({"path": "relative.txt"}), Duration::from_secs(10));
+    let invalid = ToolCall::new("rust-it", "s3", "desktop.wait_for_window", json!({}), Duration::from_secs(10));
     assert_eq!(worker.call(&invalid).await.unwrap().error.unwrap().code, ErrorCode::InvalidArgument);
 
     worker.kill().await;
-    let after = ToolCall::new("rust-it", "s4", "filesystem.stat", json!({"path": path.to_string_lossy()}), Duration::from_secs(5));
+    let after = ToolCall::new("rust-it", "s4", "desktop.list_windows", json!({}), Duration::from_secs(5));
     assert!(matches!(worker.call(&after).await, Err(WorkerError::Died)));
 }
