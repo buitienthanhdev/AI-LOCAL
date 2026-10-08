@@ -76,12 +76,14 @@ def _upscaled_png(image: Path, scale: float) -> bytes:
 
 
 def vietnamese_available() -> bool:
-    """True when the optional EasyOCR Vietnamese engine can be imported."""
-    try:
-        import easyocr  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    """True when the optional EasyOCR Vietnamese engine is installed.
+
+    Only checks installation (importlib.util.find_spec); it does not import torch, so probing
+    availability (e.g. from vision.status) never triggers torch's heavy load or a DLL conflict.
+    """
+    import importlib.util
+
+    return importlib.util.find_spec("easyocr") is not None
 
 
 def _easyocr(models_dir: Path):
@@ -90,12 +92,19 @@ def _easyocr(models_dir: Path):
         return _easyocr_reader
     with _easyocr_lock:
         if _easyocr_reader is None:
+            # Avoid torch's "OMP: Error #15" / WinError 1114 when another OpenMP runtime is already
+            # loaded in this process (the worker inherits a broad PATH).
+            os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
             try:
                 import easyocr
             except ImportError as exc:
                 raise ToolError(ErrorCode.BACKEND_UNAVAILABLE,
                                 "Vietnamese OCR needs the optional 'ocr' extra: "
                                 "uv sync --extra ocr (in services/python-agent)") from exc
+            except OSError as exc:
+                raise ToolError(ErrorCode.BACKEND_UNAVAILABLE,
+                                f"the Vietnamese OCR engine (torch) could not load: {exc}. "
+                                "Windows OCR or the vision model are used instead.") from exc
             models_dir.mkdir(parents=True, exist_ok=True)
             # CPU only: the GPU is reserved for the UI-TARS vision model.
             _easyocr_reader = easyocr.Reader(["vi", "en"], gpu=False, verbose=False,
