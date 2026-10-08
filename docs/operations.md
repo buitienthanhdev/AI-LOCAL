@@ -48,6 +48,7 @@ agent run "Mở AutoCAD, tạo bản vẽ mới và vẽ một hình tròn bán 
 agent status                 # active tasks and the latest finished one
 agent status <TASK_ID>       # every step with its verification
 agent cancel <TASK_ID>       # stop after the current action (from another terminal)
+agent pause <TASK_ID>        # pause before the next step; `agent unpause <TASK_ID>` continues
 agent resume <TASK_ID>       # continue an interrupted / paused / failed task
 agent history --limit 50
 agent tools                  # the tool contract the planner sees
@@ -65,6 +66,17 @@ Exit codes of `agent run` / `agent resume`:
 | 1 | failed |
 | 3 | waiting for the user (`task.ask_user` with no terminal) |
 | 130 | cancelled |
+
+## Web UI
+
+`pwsh scripts/start-ui.ps1`, then open the printed URL (default `http://127.0.0.1:8791/`). The UI starts tasks through the
+CLI (`agent run --ui-channel`) and shows:
+- the plan and the current action;
+- the latest screenshot;
+- every tool call with its verification;
+- errors and the completion verdicts.
+
+You can answer confirmation prompts and questions, and pause, unpause, cancel or resume tasks. It binds to loopback only and requires a per-start token, so web pages cannot drive it.
 
 ## Modes and confirmations
 
@@ -96,7 +108,7 @@ uv run pytest -m gateway --run-gateway -s                # TEST 6: kill primary,
 pwsh tests/e2e/run-e2e.ps1 -Test all                     # full agent runs with Gemini (TEST 1, 4, 8, acceptance)
 ```
 
-Desktop tests move the mouse and open windows. Do not use the PC while they run.
+Desktop tests move the mouse and open their own fixture window (`services/python-agent/tests/fixtures/test_app.ps1`). They never operate on your applications. Do not use the PC while they run; moving the mouse during a run makes the cursor and click checks fail, correctly.
 
 ## Troubleshooting
 
