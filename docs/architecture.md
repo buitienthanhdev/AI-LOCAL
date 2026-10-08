@@ -26,7 +26,8 @@ User ──► agent CLI (Rust) ──► Task runner (Rust core) ──► Chat
 | `apps/agent-cli` | Rust | The `agent` command: run, resume, status, cancel, history, doctor, models, tools, screenshot, gateway. Interactive confirmation prompts, Ctrl+C cancellation. |
 | `core/rust-agent` (`lga-core`) | Rust | The orchestrator: task lifecycle and state machine, planner loop, tool routing, timeouts, cancellation, retry policy, observation/verification state, policy engine, audit events, memory index, IPC with the worker, the `ChatProvider` trait. |
 | `core/rust-agent/policy/` | TOML | Execution policy per mode (normal / trusted / full_access). |
-| `services/python-agent` (`lga_worker`) | Python 3.12 | Execution and AI-adapter layer: implements every tool in `tools/*.json` on top of Windows-Use, browser-use, Windows OCR, AutoCAD COM. |
+| `core/rust-agent/src/native` | Rust | Tools the core runs itself, without the worker: `shell.exec` (PowerShell in a kill-on-close job, process-tree kill on timeout/cancel), `filesystem.read/write/list/stat` (atomic writes, read-back hash verification, encodings), `system.environment` (registry, file versions). Same envelope and error codes as worker tools. |
+| `services/python-agent` (`lga_worker`) | Python 3.12 | Execution and AI-adapter layer for the tools that need Python libraries: desktop (Windows-Use / UI Automation), browser (browser-use), vision (Windows OCR, EasyOCR, UI-TARS), AutoCAD COM, knowledge. |
 | `apps/agent-desktop` | Rust | The chat window (tao + wry over WebView2): starts tasks through the CLI, shows progress, confirmations, questions and results; starts the gateway and the knowledge backend when they are down. |
 | `services/gemini-gateway` (`lga-gateway`) | Rust | Local HTTP service (axum) implementing `ChatProvider` over Gemini Web: primary/fallback routing, circuit breakers, retries, health monitor, backend process supervision in a kill-on-close Job Object. |
 | `services/lga-common` | Python | Shared config loading, secret resolution, redaction, JSON logging. |
@@ -133,7 +134,7 @@ Everything is redacted before it is stored. Relevant memories are recalled into 
 ## Threading model (worker)
 
 - All UI Automation work runs on one STA thread (`StaExecutor("desktop")`). AutoCAD COM runs on its own STA thread.
-- Shell, filesystem and HTTP work runs on worker threads.
+- HTTP work runs on worker threads; shell and filesystem tools run in the Rust core.
 - Browser work runs on the asyncio loop (CDP).
 - A COM call that exceeds its timeout abandons that STA thread; a fresh one takes over.
 

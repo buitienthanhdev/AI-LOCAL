@@ -14,9 +14,10 @@ A local Windows agent that takes a task in natural language and completes it on 
 - **Completion:** a task counts as complete only when the core has re-run read-only checks that prove the goal, and an independent verifier has accepted the evidence.
 
 ```
-User → agent CLI / UI → Rust core (plan · route · policy · verify · recover · memory · audit)
-     → Gemini gateway (gemini-web2api-go → fallback WebAI-to-API, circuit breakers)
-     → Python worker → Windows-Use/UIA · PowerShell · filesystem · browser-use/Chrome · Windows OCR/vision · AutoCAD COM
+User → chat window (Rust) / agent CLI → Rust core (plan · route · policy · verify · recover · memory · audit)
+     → Gemini gateway, Rust (gemini-web2api-go → fallback WebAI-to-API, circuit breakers)
+     → Rust native tools: PowerShell · filesystem · system environment
+     → Python worker → Windows-Use/UIA · browser-use/Chrome · Windows OCR/vision · AutoCAD COM · knowledge
 ```
 
 ## Quick start
@@ -52,8 +53,8 @@ Details: [docs/operations.md](docs/operations.md). Connecting a Google account (
 ```
 apps/agent-cli        Rust CLI (`agent`)
 apps/agent-desktop    desktop chat window (Rust, native WebView2, drives the CLI)
-core/rust-agent       Rust core (lga-core) + policy/
-services/python-agent Python worker (Windows, shell, files, browser, vision, AutoCAD)
+core/rust-agent       Rust core (lga-core) + policy/ + native shell/filesystem/environment tools
+services/python-agent Python worker (Windows UI Automation, browser, vision, AutoCAD, knowledge)
 services/gemini-gateway  Gemini Web gateway, Rust (primary/fallback, breaker, health)
 services/lga-common   shared config / secrets / redaction / logging
 tools/                tool contract (the only thing Gemini sees), incl. knowledge.*
@@ -80,7 +81,7 @@ The tests below ran on the audited machine: Windows 11 Pro 26200, AutoCAD 2023, 
 | Acceptance 2: "Mở AutoCAD và vẽ một hình tròn bán kính 100." (+ save) | **PASS**. The circle was verified by handle read-back, and the artifact path `C:\temp\circle.dwg` was reported. | `run-e2e.ps1 -Test A2` |
 | Unified: "tìm tỷ lệ rắn OneCoat Pro trong tri thức rồi vẽ hình tròn bán kính đó trong AutoCAD" | **PASS** — one task: knowledge.search → 61% → autocad.create_circle r=61 → verified by handle | acceptance |
 | Knowledge: "thông số OneCoat Pro?" | **PASS** — answered from TDS with citation | `knowledge.*` |
-| Unit / integration suites | Rust 23 · worker 123 (+ desktop/browser/AutoCAD live) · gateway 9 (+ live) · UI 5 | see [operations.md](docs/operations.md#tests) |
+| Unit / integration suites | Rust 53 (core + native tools + gateway + desktop app; +2 live) · worker 123 (+ desktop/browser/AutoCAD live) | see [operations.md](docs/operations.md#tests) |
 
 `agent doctor` on this machine: every subsystem PASS except `vision` and `gemini-gateway`. Both are WARN, and both are caused by the missing Google sign-in.
 

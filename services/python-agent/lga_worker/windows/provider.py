@@ -197,32 +197,6 @@ class ShellResult:
     duration_ms: int
 
 
-@dataclass(frozen=True)
-class FileContent:
-    path: Path
-    size: int
-    encoding: str
-    content: str
-    truncated: bool
-    sha256: str
-
-
-@dataclass(frozen=True)
-class WriteResult:
-    path: Path
-    size: int
-    sha256: str
-    created: bool
-
-
-@dataclass(frozen=True)
-class DirectoryEntry:
-    name: str
-    is_dir: bool
-    size: int | None
-    modified_unix: float
-
-
 class WindowsControlProvider(ABC):
     """Windows execution backend. See module docstring for threading and coordinate rules."""
 
@@ -303,19 +277,10 @@ class WindowsControlProvider(ABC):
     @abstractmethod
     def foreground_window(self) -> WindowInfo | None: ...
 
-    # --- shell and filesystem ------------------------------------------------------------------
-    # These block for a long time and do not touch UI Automation; callers run them off the STA thread.
+    # --- shell ---------------------------------------------------------------------------------
+    # Internal helper (e.g. Get-StartApps); blocks, does not touch UI Automation, runs off the STA thread.
+    # The shell.exec / filesystem.* tools themselves run in the Rust core (core/rust-agent/src/native).
     @abstractmethod
     def run_powershell(
         self, script: str, cwd: Path | None, timeout_s: float, cancel_event: threading.Event | None = None
     ) -> ShellResult: ...
-
-    @abstractmethod
-    def read_file(self, path: Path, max_bytes: int, encoding: str | None) -> FileContent: ...
-
-    @abstractmethod
-    def write_file(self, path: Path, content: str, encoding: str, overwrite: bool, create_dirs: bool) -> WriteResult: ...
-
-    @abstractmethod
-    def list_directory(self, path: Path, max_entries: int) -> tuple[list[DirectoryEntry], bool]:
-        """Return (entries, truncated)."""

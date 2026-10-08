@@ -11,6 +11,8 @@ path = "src/lib.rs"
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
+base64.workspace = true
+encoding_rs.workspace = true
 chrono.workspace = true
 futures.workspace = true
 hex.workspace = true
