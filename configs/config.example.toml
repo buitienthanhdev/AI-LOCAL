@@ -156,6 +156,16 @@ launch_timeout_ms = 30_000
 navigation_timeout_ms = 30_000
 action_timeout_ms = 15_000
 max_state_elements = 250
+# After click/keys: how long to wait for a resulting URL change before reporting (then waits for the load).
+post_action_settle_ms = 1_500
+# Polling interval of browser.wait_for and load/settle waits.
+poll_interval_ms = 200
+# Characters of visible page text returned by browser.get_state (text_excerpt).
+text_excerpt_chars = 2_000
+# Upper bound of the browser.get_state observation text the planner reads.
+observation_max_chars = 8_000
+# Graceful Chrome shutdown (CDP Browser.close) before the process is killed on worker exit.
+close_timeout_ms = 5_000
 
 [vision]
 # "gemini" (image input through the gateway), "ui_tars" (OpenAI-compatible local server) or "none".
@@ -172,9 +182,14 @@ grounding_timeout_ms = 120_000
 prog_id = "AutoCAD.Application"
 launch_timeout_ms = 180_000
 com_call_timeout_ms = 30_000
+# How long an idempotent COM call is retried (exponential backoff) while AutoCAD rejects calls
+# because it is busy (RPC_E_CALL_REJECTED / RPC_E_SERVERCALL_RETRYLATER) before failing with BUSY.
+busy_retry_ms = 10_000
 # Empty: AutoCAD's default template.
 template = ""
-# AcSaveAsType for .dwg saves (64 = ac2018_dwg) and DXF exports (65 = ac2018_dxf).
+# AcSaveAsType for .dwg saves (64 = ac2018_dwg) and the DXF release autocad.export_dxf must produce
+# (65 = ac2018_dxf). DXF is written with Document.Export (the drawing keeps its DWG), which uses the running
+# AutoCAD's native DXF release; the export fails verification if that differs from dxf_save_type.
 dwg_save_type = 64
 dxf_save_type = 65
 pdf_plot_device = "DWG To PDF.pc3"

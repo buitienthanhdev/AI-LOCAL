@@ -1,0 +1,300 @@
+{
+  "category": "autocad",
+  "description": "AutoCAD drawings through AutoCAD's own COM (ActiveX) API: structured operations, never mouse clicks or typed commands. Coordinates are drawing units; points are {\"x\", \"y\", \"z\"} objects (z defaults to 0). Every tool works on the ACTIVE document's model space. Every state-changing tool reads its result back from AutoCAD and fails with VERIFICATION_FAILED if it does not match.",
+  "tools": [
+    {
+      "name": "autocad.status",
+      "description": "Report whether AutoCAD is installed, registered for COM, running and answering COM, plus its open drawings. Never starts AutoCAD. ready=true means the autocad.* tools can work now (AutoCAD answering COM) or after autocad.launch (installed, COM-registered, not running).",
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {
+        "type": "object", "required": ["ready", "installed", "com_registered", "running", "com_responsive"],
+        "properties": {
+          "ready": {"type": "boolean"}, "installed": {"type": "boolean"}, "com_registered": {"type": "boolean"},
+          "running": {"type": "boolean"}, "com_responsive": {"type": "boolean"},
+          "executable": {"type": ["string", "null"]}, "version": {"type": ["string", "null"]},
+          "pid": {"type": ["integer", "null"]}, "documents": {"type": ["integer", "null"]},
+          "active_document": {"type": ["string", "null"]}, "reason": {"type": ["string", "null"]}
+        }
+      },
+      "timeout_ms": 30000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "autocad.read"
+    },
+    {
+      "name": "autocad.launch",
+      "description": "Start AutoCAD (or attach to the running instance) and wait until it answers COM and is idle. Startup can take minutes. Verified: COM answers and AutoCAD reports itself quiescent. A fresh AutoCAD usually has NO open drawing: call autocad.new_document next.",
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {
+        "type": "object", "required": ["version", "pid", "hwnd", "launched", "documents"],
+        "properties": {
+          "version": {"type": "string"}, "pid": {"type": "integer"}, "hwnd": {"type": "integer"},
+          "launched": {"type": "boolean", "description": "true: started by this call; false: attached to a running AutoCAD."},
+          "documents": {"type": "integer"}, "active_document": {"type": ["string", "null"]}
+        }
+      },
+      "timeout_ms": 240000, "risk_level": "medium", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "autocad.write"
+    },
+    {
+      "name": "autocad.new_document",
+      "description": "Create a new drawing (optionally from a .dwt template) and make it the active document. Verified: the document count increased and the new drawing is active.",
+      "input_schema": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "template": {"type": "string", "minLength": 1, "description": "Absolute path to a .dwt, or a template file name AutoCAD resolves from its template folder (e.g. 'acad.dwt'). Default: configured template, else AutoCAD's default."}
+        }
+      },
+      "output_schema": {
+        "type": "object", "required": ["name", "documents"],
+        "properties": {"name": {"type": "string"}, "documents": {"type": "integer"}, "template": {"type": ["string", "null"]}}
+      },
+      "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "self", "policy_category": "autocad.write"
+    },
+    {
+      "name": "autocad.list_documents",
+      "description": "List the open drawings: name, full path (empty if never saved), whether all changes are saved, and which one is active.",
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {
+        "type": "object", "required": ["documents"],
+        "properties": {"documents": {"type": "array", "items": {"$ref": "#/$defs/document"}}}
+      },
+      "timeout_ms": 30000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "autocad.read"
+    },
+    {
+      "name": "autocad.get_entities",
+      "description": "Read entities from the active drawing's model space with their handle, object_name (e.g. AcDbLine, AcDbCircle, AcDbPolyline, AcDbText), layer and geometry. Filters are case-insensitive; object_name accepts 'circle' or 'AcDbCircle'.",
+      "input_schema": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "object_name": {"type": "string", "minLength": 1},
+          "layer": {"type": "string", "minLength": 1},
+          "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}
+        }
+      },
+      "output_schema": {
+        "type": "object", "required": ["entities", "total_in_model_space", "truncated"],
+        "properties": {
+          "entities": {"type": "array", "items": {"$ref": "#/$defs/entity"}},
+          "total_in_model_space": {"type": "integer"}, "truncated": {"type": "boolean"}
+        }
+      },
+      "timeout_ms": 120000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "autocad.read"
+    },
+    {
+      "name": "autocad.create_line",
+      "description": "Draw a line in model space. layer must already exist (autocad.create_layer); default is the current layer. Verified by reading the line back by handle; a mismatching line is erased and VERIFICATION_FAILED is returned. Undo with autocad.erase.",
+      "input_schema": {
+        "type": "object", "required": ["start", "end"], "additionalProperties": false,
+        "properties": {"start": {"$ref": "#/$defs/point"}, "end": {"$ref": "#/$defs/point"}, "layer": {"$ref": "#/$defs/layer_name"}}
+      },
+      "output_schema": {"$ref": "#/$defs/entity"},
+      "timeout_ms": 45000, "risk_level": "low", "requires_confirmation": false, "idempotent": false, "supports_rollback": true,
+      "verification": "self", "policy_category": "autocad.write"
+    },
+    {
+      "name": "autocad.create_circle",
+      "description": "Draw a circle in model space. layer must already exist (autocad.create_layer); default is the current layer. Verified by reading the circle back by handle; a mismatching circle is erased and VERIFICATION_FAILED is returned. Undo with autocad.erase.",
+      "input_schema": {
+        "type": "object", "required": ["center", "radius"], "additionalProperties": false,
+        "properties": {
+          "center": {"$ref": "#/$defs/point"}, "radius": {"type": "number", "exclusiveMinimum": 0},
+          "layer": {"$ref": "#/$defs/layer_name"}
+        }
+      },
+      "output_schema": {"$ref": "#/$defs/entity"},
+      "timeout_ms": 45000, "risk_level": "low", "requires_confirmation": false, "idempotent": false, "supports_rollback": true,
+      "verification": "self", "policy_category": "autocad.write"
+    },
+    {
+      "name": "autocad.create_polyline",
+      "description": "Draw a 2D lightweight polyline through the points (all points must share the same z, used as the polyline's elevation). closed=true joins the last point to the first. layer must already exist. Verified by reading the vertices back by handle; a mismatch is erased and VERIFICATION_FAILED is returned. Undo with autocad.erase.",
+      "input_schema": {
+        "type": "object", "required": ["points"], "additionalProperties": false,
+        "properties": {
+          "points": {"type": "array", "items": {"$ref": "#/$defs/point"}, "minItems": 2, "maxItems": 10000},
+          "closed": {"type": "boolean", "default": false},
+          "layer": {"$ref": "#/$defs/layer_name"}
+        }
+      },
+      "output_schema": {"$ref": "#/$defs/entity"},
+      "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": false, "supports_rollback": true,
+      "verification": "self", "policy_category": "autocad.write"
+    },
+    {
+      "name": "autocad.create_text",
+      "description": "Place single-line text (left-aligned at the insertion point). layer must already exist. Verified by reading text, insertion point, height and rotation back by handle; a mismatch is erased and VERIFICATION_FAILED is returned. Undo with autocad.erase.",
+      "input_schema": {
+        "type": "object", "required": ["insertion", "text", "height"], "additionalProperties": false,
+        "properties": {
+          "insertion": {"$ref": "#/$defs/point"},
+          "text": {"type": "string", "minLength": 1, "maxLength": 2000},
+          "height": {"type": "number", "exclusiveMinimum": 0},
+          "rotation_deg": {"type": "number", "default": 0},
+          "layer": {"$ref": "#/$defs/layer_name"}
+        }
+      },
+      "output_schema": {"$ref": "#/$defs/entity"},
+      "timeout_ms": 45000, "risk_level": "low", "requires_confirmation": false, "idempotent": false, "supports_rollback": true,
+      "verification": "self", "policy_category": "autocad.write"
+    },
+    {
+      "name": "autocad.create_layer",
+      "description": "Create a layer in the active drawing (an existing layer is reused). color is an AutoCAD Color Index 1-255 (1 red, 2 yellow, 3 green, 4 cyan, 5 blue, 6 magenta, 7 white/black). Verified: the layer exists afterwards with the requested color.",
+      "input_schema": {
+        "type": "object", "required": ["name"], "additionalProperties": false,
+        "properties": {"name": {"$ref": "#/$defs/layer_name"}, "color": {"type": "integer", "minimum": 1, "maximum": 255}}
+      },
+      "output_schema": {
+        "type": "object", "required": ["name", "color", "created"],
+        "properties": {"name": {"type": "string"}, "color": {"type": "integer"}, "created": {"type": "boolean"}}
+      },
+      "timeout_ms": 45000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "autocad.write"
+    },
+    {
+      "name": "autocad.verify_geometry",
+      "description": "Read-only check that the entity with this handle exists in the active drawing and matches the expected properties within the configured geometry tolerance. Use it in task.complete checks with {\"matches\": true}. A missing entity returns matches=false (not an error).",
+      "input_schema": {
+        "type": "object", "required": ["handle", "expect"], "additionalProperties": false,
+        "properties": {
+          "handle": {"$ref": "#/$defs/handle"},
+          "expect": {
+            "type": "object", "additionalProperties": false, "minProperties": 1,
+            "properties": {
+              "object_name": {"type": "string", "minLength": 1},
+              "layer": {"type": "string", "minLength": 1},
+              "start": {"$ref": "#/$defs/point"}, "end": {"$ref": "#/$defs/point"},
+              "center": {"$ref": "#/$defs/point"}, "radius": {"type": "number"},
+              "points": {"type": "array", "items": {"$ref": "#/$defs/point"}},
+              "closed": {"type": "boolean"}, "vertex_count": {"type": "integer", "minimum": 0},
+              "insertion": {"$ref": "#/$defs/point"}, "text": {"type": "string"},
+              "height": {"type": "number"}, "rotation_deg": {"type": "number"}
+            }
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object", "required": ["matches", "handle", "actual", "mismatches"],
+        "properties": {
+          "matches": {"type": "boolean"}, "handle": {"type": "string"},
+          "actual": {"anyOf": [{"$ref": "#/$defs/entity"}, {"type": "null"}]},
+          "mismatches": {"type": "array", "items": {"$ref": "#/$defs/mismatch"}},
+          "tolerance": {"type": "number"}
+        }
+      },
+      "timeout_ms": 30000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "none", "policy_category": "autocad.read"
+    },
+    {
+      "name": "autocad.save",
+      "description": "Save the active drawing as a .dwg (configured DWG version) at an absolute path; missing parent folders are created. Replacing a different existing file needs overwrite=true. Verified: the file exists, is non-empty and the drawing is now associated with that path.",
+      "input_schema": {
+        "type": "object", "required": ["path"], "additionalProperties": false,
+        "properties": {
+          "path": {"type": "string", "pattern": "(?i)\\.dwg$", "description": "Absolute path ending in .dwg."},
+          "overwrite": {"type": "boolean", "default": false}
+        }
+      },
+      "output_schema": {
+        "type": "object", "required": ["path", "size"],
+        "properties": {"path": {"type": "string"}, "size": {"type": "integer"}}
+      },
+      "timeout_ms": 120000, "risk_level": "medium", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "autocad.write"
+    },
+    {
+      "name": "autocad.export_dxf",
+      "description": "Write a copy of the active drawing (as it is now, including unsaved changes) as an ASCII .dxf at an absolute path. The drawing must already have been saved as .dwg (call autocad.save first), otherwise CONFLICT; it stays associated with that .dwg. Replacing an existing file needs overwrite=true. Verified: the file exists, is non-empty, starts like a DXF in the configured DXF version, and the drawing's path is still the .dwg.",
+      "input_schema": {
+        "type": "object", "required": ["path"], "additionalProperties": false,
+        "properties": {
+          "path": {"type": "string", "pattern": "(?i)\\.dxf$", "description": "Absolute path ending in .dxf."},
+          "overwrite": {"type": "boolean", "default": false}
+        }
+      },
+      "output_schema": {
+        "type": "object", "required": ["path", "size", "document_path"],
+        "properties": {"path": {"type": "string"}, "size": {"type": "integer"}, "document_path": {"type": "string"}, "dxf_version": {"type": ["string", "null"]}}
+      },
+      "timeout_ms": 180000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "self", "policy_category": "autocad.write"
+    },
+    {
+      "name": "autocad.export_pdf",
+      "description": "Plot the active layout's drawing extents, scaled to fit and centred, to a PDF with the configured plot device. The layout's plot settings are restored afterwards. Replacing an existing file needs overwrite=true. Verified: the file exists, is non-empty and starts with %PDF.",
+      "input_schema": {
+        "type": "object", "required": ["path"], "additionalProperties": false,
+        "properties": {
+          "path": {"type": "string", "pattern": "(?i)\\.pdf$", "description": "Absolute path ending in .pdf."},
+          "overwrite": {"type": "boolean", "default": false}
+        }
+      },
+      "output_schema": {
+        "type": "object", "required": ["path", "size", "device", "media"],
+        "properties": {
+          "path": {"type": "string"}, "size": {"type": "integer"}, "device": {"type": "string"},
+          "media": {"type": ["string", "null"]}, "layout": {"type": "string"}
+        }
+      },
+      "timeout_ms": 180000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "self", "policy_category": "autocad.write"
+    },
+    {
+      "name": "autocad.zoom_extents",
+      "description": "Zoom the active drawing's view to show everything (view change only; geometry is untouched).",
+      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
+      "output_schema": {"type": "object", "required": ["document"], "properties": {"document": {"type": "string"}}},
+      "timeout_ms": 30000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
+      "verification": "self", "policy_category": "autocad.write"
+    },
+    {
+      "name": "autocad.erase",
+      "description": "Erase one entity of the active drawing by handle. Verified: the handle no longer resolves to a live entity.",
+      "input_schema": {
+        "type": "object", "required": ["handle"], "additionalProperties": false,
+        "properties": {"handle": {"$ref": "#/$defs/handle"}}
+      },
+      "output_schema": {
+        "type": "object", "required": ["handle", "object_name", "erased"],
+        "properties": {"handle": {"type": "string"}, "object_name": {"type": "string"}, "erased": {"type": "boolean"}}
+      },
+      "timeout_ms": 30000, "risk_level": "high", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
+      "verification": "self", "policy_category": "autocad.destructive"
+    }
+  ],
+  "$defs": {
+    "point": {
+      "type": "object", "required": ["x", "y"], "additionalProperties": false,
+      "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number", "default": 0}}
+    },
+    "point_out": {
+      "type": "object", "required": ["x", "y", "z"],
+      "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"}}
+    },
+    "handle": {"type": "string", "pattern": "^[0-9A-Fa-f]{1,16}$", "description": "Entity handle (hex), as returned by create_* or get_entities."},
+    "layer_name": {"type": "string", "minLength": 1, "maxLength": 255, "pattern": "^[^<>/\\\\\":;?*|,=`]+$"},
+    "document": {
+      "type": "object", "required": ["name", "full_name", "saved", "active"],
+      "properties": {"name": {"type": "string"}, "full_name": {"type": "string"}, "saved": {"type": "boolean"}, "active": {"type": "boolean"}}
+    },
+    "entity": {
+      "type": "object", "required": ["handle", "object_name", "layer"],
+      "properties": {
+        "handle": {"type": "string"}, "object_name": {"type": "string"}, "layer": {"type": "string"},
+        "start": {"$ref": "#/$defs/point_out"}, "end": {"$ref": "#/$defs/point_out"}, "length": {"type": "number"},
+        "center": {"$ref": "#/$defs/point_out"}, "radius": {"type": "number"},
+        "start_angle_deg": {"type": "number"}, "end_angle_deg": {"type": "number"},
+        "points": {"type": "array", "items": {"$ref": "#/$defs/point_out"}},
+        "closed": {"type": "boolean"}, "vertex_count": {"type": "integer"},
+        "insertion": {"$ref": "#/$defs/point_out"}, "text": {"type": "string"},
+        "height": {"type": "number"}, "rotation_deg": {"type": "number"}
+      }
+    },
+    "mismatch": {
+      "type": "object", "required": ["field", "expected", "actual"],
+      "properties": {"field": {"type": "string"}, "expected": {}, "actual": {}}
+    }
+  }
+}
