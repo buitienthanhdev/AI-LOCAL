@@ -73,7 +73,6 @@ model = "auto"
 [gateway]
 listen_host = "127.0.0.1"
 listen_port = 8790
-python = "services/gemini-gateway/.venv/Scripts/python.exe"
 health_interval_ms = 30_000
 connect_timeout_ms = 5_000
 request_timeout_ms = 170_000

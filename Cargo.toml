@@ -1,5 +1,5 @@
 [workspace]
-members = ["core/rust-agent", "apps/agent-cli", "apps/agent-desktop"]
+members = ["core/rust-agent", "apps/agent-cli", "apps/agent-desktop", "services/gemini-gateway"]
 resolver = "2"
 
 [workspace.package]

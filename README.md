@@ -54,7 +54,7 @@ apps/agent-cli        Rust CLI (`agent`)
 apps/agent-desktop    desktop chat window (Rust, native WebView2, drives the CLI)
 core/rust-agent       Rust core (lga-core) + policy/
 services/python-agent Python worker (Windows, shell, files, browser, vision, AutoCAD)
-services/gemini-gateway  Gemini Web gateway (primary/fallback, breaker, health)
+services/gemini-gateway  Gemini Web gateway, Rust (primary/fallback, breaker, health)
 services/lga-common   shared config / secrets / redaction / logging
 tools/                tool contract (the only thing Gemini sees), incl. knowledge.*
 ../brain             Company Brain = the knowledge subsystem (RAG), reached over HTTP
@@ -73,7 +73,7 @@ The tests below ran on the audited machine: Windows 11 Pro 26200, AutoCAD 2023, 
 | TEST 3: screenshot → locate → click → verify | **PASS** with Windows OCR grounding; Gemini/UI-TARS grounding **BLOCKED** (see below) | `test_vision_live.py` |
 | TEST 4: PowerShell harmless command, read output | **PASS** (agent run) | `run-e2e.ps1 -Test 4` |
 | TEST 5: AutoCAD: launch, new drawing, geometry, save/DXF/PDF, verify | **PASS** (cold start and attach) | `test_autocad_live.py` |
-| TEST 6: kill primary gateway → fallback | **PASS** for failover and recovery; fallback answering **BLOCKED** until it is signed in | `services/gemini-gateway/tests/test_gateway_live.py` |
+| TEST 6: kill primary gateway → fallback | **PASS** for failover and recovery; fallback answering **BLOCKED** until it is signed in | `services/gemini-gateway/tests/live.rs` |
 | TEST 7: kill browser → recovery | **PASS** | `test_browser_live.py` |
 | TEST 8: destroy task state mid-run → resume | **PASS** (state file and backup destroyed, rebuilt from the audit log) | `run-e2e.ps1 -Test 8` |
 | Acceptance 1: "Mở Chrome, tìm trang GitHub của Windows-Use, sau đó mở AutoCAD và tạo một bản vẽ mới." | **PASS**. The verifier rejected a first, too-generic completion; the planner then opened Jeomon/Windows-Use. Chrome and AutoCAD were checked externally after the agent exited. | `run-e2e.ps1 -Test A1` |

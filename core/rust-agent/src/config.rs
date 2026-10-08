@@ -94,7 +94,6 @@ pub struct LlmCfg {
 pub struct GatewayCfg {
     pub listen_host: String,
     pub listen_port: u16,
-    pub python: String,
     pub api_key_secret: String,
 }
 
@@ -175,6 +174,8 @@ pub struct Config {
     pub vision: VisionCfg,
     pub autocad: AutocadCfg,
     pub knowledge: KnowledgeCfg,
+    /// The merged configuration, for components that own their own section (the gateway).
+    raw: toml::Value,
 }
 
 fn deep_merge(base: &mut toml::Value, overlay: toml::Value) {
@@ -239,6 +240,7 @@ impl Config {
         if let Ok(extra) = std::env::var("LGA_CONFIG") {
             deep_merge(&mut value, read_toml(Path::new(&extra))?);
         }
+        let merged = value.clone();
         let raw: RawConfig = value.try_into().context("configuration does not match the expected shape")?;
         Ok(Config {
             root: root.to_path_buf(),
@@ -254,7 +256,17 @@ impl Config {
             vision: raw.vision,
             autocad: raw.autocad,
             knowledge: raw.knowledge,
+            raw: merged,
         })
+    }
+
+    /// Deserialize a dotted section (e.g. "gateway") of the merged configuration.
+    pub fn section<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<T> {
+        let mut value = &self.raw;
+        for part in key.split('.') {
+            value = value.get(part).ok_or_else(|| anyhow!("configuration section [{key}] is missing"))?;
+        }
+        value.clone().try_into().with_context(|| format!("configuration section [{key}] has the wrong shape"))
     }
 
     /// Resolve a configured path relative to the repository root.

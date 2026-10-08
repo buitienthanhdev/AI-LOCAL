@@ -136,8 +136,7 @@ cd services/python-agent;  uv run pytest -q              # worker unit + protoco
 uv run pytest -m desktop --run-desktop -v                # real desktop (Notepad, Character Map, OCR click)
 uv run pytest -m browser --run-browser -v                # real Chrome (TEST 2, TEST 7)
 uv run pytest -m autocad --run-autocad -v                # real AutoCAD (TEST 5)
-cd ../gemini-gateway; uv run pytest -q                   # gateway routing
-uv run pytest -m gateway --run-gateway -s                # TEST 6: kill primary, verify failover
+cargo test --release -p lga-gateway --test live -- --ignored   # TEST 6: kill primary, verify failover + restart (gateway running)
 pwsh tests/e2e/run-e2e.ps1 -Test all                     # full agent runs with Gemini (TEST 1, 4, 8, acceptance)
 ```
 

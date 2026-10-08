@@ -53,7 +53,7 @@ Confirmation is interactive in the CLI. `--yes` approves "confirm" decisions but
 
 - **Bound to `127.0.0.1` only:** the gateway (8790), gemini-web2api-go (8083), WebAI-to-API (6969) and Chrome's DevTools port. The gateway refuses a non-loopback bind address.
 - **API-key protection:** the gateway's `/v1/*` endpoints require the gateway API key. The primary requires its own API key, and its admin UI requires the admin token. WebAI-to-API has no authentication of its own (upstream limitation), so it is reachable only on loopback.
-- **No proxies on loopback:** loopback clients (Rust `reqwest`, Python `aiohttp`/`urllib`) explicitly disable proxies.
+- **No proxies on loopback:** loopback clients (Rust `reqwest`, Python `urllib`) explicitly disable proxies.
 - **Telemetry off:** browser-use telemetry, version checks and extension downloads are disabled. Windows-Use's telemetry is never imported (import shim).
 
 ## Browser

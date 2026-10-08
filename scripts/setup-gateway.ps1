@@ -10,7 +10,7 @@
 #      config.json bound to 127.0.0.1.
 #   3. Creates a Python 3.12 venv for WebAI-to-API, installs its pinned requirements, and writes a
 #      config.conf with host-browser cookie scraping disabled ([Browser] name = none).
-#   4. Syncs the gateway's own venv.
+#   4. Builds the gateway itself (Rust, lga-gateway.exe).
 # It never reads browser cookies. Google sign-in for the backends is a separate, user-driven step
 # (see docs/operations.md "Connecting Gemini accounts").
 
@@ -99,9 +99,9 @@ gemini = true
     "fallback  venv $venv"
 }
 
-Push-Location (Join-Path $root 'services\gemini-gateway')
+Push-Location $root
 try {
-    & uv sync
-    if ($LASTEXITCODE -ne 0) { throw 'uv sync for services/gemini-gateway failed' }
+    & cargo build --release -p lga-gateway
+    if ($LASTEXITCODE -ne 0) { throw 'cargo build of services/gemini-gateway (lga-gateway) failed' }
 } finally { Pop-Location }
-'gateway   venv ready'
+'gateway   lga-gateway.exe ready'
