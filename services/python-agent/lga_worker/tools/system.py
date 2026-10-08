@@ -116,3 +116,36 @@ def register(registry: ToolRegistry) -> None:
         summary = (f"{path} exists ({'directory' if data['is_dir'] else str(data['size']) + ' bytes'})"
                    if data["exists"] else f"{path} does not exist")
         return ToolOutcome(data=data, observation=summary, backend="filesystem")
+
+
+def register_environment(registry: ToolRegistry) -> None:
+    from lga_worker import inventory
+    from lga_worker.shell.powershell import resolve_powershell as _resolve
+
+    @registry.handler("system.environment")
+    async def environment(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        def collect() -> dict[str, Any]:
+            chrome = inventory.find_chrome(str(ctx.config.get("browser.chrome_path")))
+            shell = _resolve(str(ctx.config.get("shell.executable")))
+            return {
+                "chrome": {"found": chrome is not None, "path": str(chrome) if chrome else None,
+                           "version": inventory.file_version(chrome) if chrome else None},
+                "autocad": {"installations": inventory.autocad_installations(),
+                            "com_registered": inventory.com_registered(str(ctx.config.get("autocad.prog_id"))),
+                            "running": inventory.process_running("acad.exe")},
+                "powershell": {"path": shell, "version": inventory.file_version(Path(shell))},
+                "screen": inventory.screen_layout(),
+                "user": {"name": os.environ.get("USERNAME", ""), "is_admin": inventory.is_admin()},
+            }
+
+        data = await asyncio.to_thread(collect)
+        acad = data["autocad"]["installations"]
+        summary = [
+            f"Chrome: {data['chrome']['version'] or 'not found'}",
+            "AutoCAD: " + (", ".join(f"{a['release']} at {a['location']}" for a in acad) or "not installed")
+            + f" (COM {'registered' if data['autocad']['com_registered'] else 'not registered'},"
+              f" {'running' if data['autocad']['running'] else 'not running'})",
+            f"Screen: {data['screen']}",
+            f"User: {data['user']['name']} (admin: {data['user']['is_admin']})",
+        ]
+        return ToolOutcome(data=data, observation="\n".join(summary), backend="registry")

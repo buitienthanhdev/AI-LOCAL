@@ -6,6 +6,7 @@
   POST /v1/upload            {"path": "..."} or {"data_base64": "...", "filename", "mime_type"}
   POST /v1/chat              ChatRequest JSON -> ChatResult JSON
   POST /v1/chat/stream       same body; Server-Sent Events: meta / delta / done / error
+  POST /v1/admin/shutdown    stop the gateway and its managed backends
 
 Chat request body:
   {"messages": [{"role": "system|user|assistant",
@@ -15,6 +16,7 @@ Chat request body:
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hmac
@@ -36,6 +38,9 @@ logger = logging.getLogger(__name__)
 
 GATEWAY_KEY = web.AppKey("gateway", GeminiGateway)
 API_KEY = web.AppKey("api_key", str)
+STOP_KEY = web.AppKey("stop", asyncio.Event)
+# Delay between answering the shutdown request and stopping, so the reply reaches the caller.
+SHUTDOWN_DELAY_S = 0.2
 _VALID_ROLES = {"system", "user", "assistant"}
 
 
@@ -192,16 +197,24 @@ async def handle_chat_stream(request: web.Request) -> web.StreamResponse:
     return response
 
 
+async def handle_shutdown(request: web.Request) -> web.Response:
+    stop = request.app[STOP_KEY]
+    asyncio.get_running_loop().call_later(SHUTDOWN_DELAY_S, stop.set)
+    return web.json_response({"stopping": True})
+
+
 def build_app(gateway: GeminiGateway, api_key: str, client_max_size: int) -> web.Application:
     app = web.Application(middlewares=[auth_and_access_log], client_max_size=client_max_size)
     app[GATEWAY_KEY] = gateway
     app[API_KEY] = api_key
+    app[STOP_KEY] = asyncio.Event()
     app.router.add_get("/health", handle_health)
     app.router.add_get("/v1/health", handle_health_detail)
     app.router.add_get("/v1/models", handle_models)
     app.router.add_post("/v1/upload", handle_upload)
     app.router.add_post("/v1/chat", handle_chat)
     app.router.add_post("/v1/chat/stream", handle_chat_stream)
+    app.router.add_post("/v1/admin/shutdown", handle_shutdown)
 
     async def on_startup(_: web.Application) -> None:
         await gateway.start()

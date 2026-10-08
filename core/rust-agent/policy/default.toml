@@ -1,0 +1,148 @@
+# Execution policy. Loaded by core/rust-agent/src/policy.rs; override in policy/local.toml (git-ignored)
+# with the same structure. Decisions: "allow" | "confirm" | "deny".
+#
+# Path placeholders: {repo} {artifacts} {state} {memory} {logs} plus %ENVVAR% and ~.
+# Patterns are case-insensitive regular expressions.
+#
+# The agent always runs with the rights of the current Windows user. No mode elevates to
+# Administrator: actions that need elevation return a structured escalation request instead.
+
+[modes.normal]
+"task" = "allow"
+"desktop.observe" = "allow"
+"desktop.input" = "allow"
+"desktop.app" = "allow"
+"shell" = "confirm"
+"filesystem.read" = "allow"
+"filesystem.write" = "allow"
+"browser.observe" = "allow"
+"browser.navigate" = "allow"
+"browser.input" = "allow"
+"browser.upload" = "confirm"
+"browser.download" = "allow"
+"vision.observe" = "allow"
+"autocad.read" = "allow"
+"autocad.write" = "allow"
+"autocad.destructive" = "confirm"
+
+[modes.trusted]
+"task" = "allow"
+"desktop.observe" = "allow"
+"desktop.input" = "allow"
+"desktop.app" = "allow"
+"shell" = "allow"
+"filesystem.read" = "allow"
+"filesystem.write" = "allow"
+"browser.observe" = "allow"
+"browser.navigate" = "allow"
+"browser.input" = "allow"
+"browser.upload" = "allow"
+"browser.download" = "allow"
+"vision.observe" = "allow"
+"autocad.read" = "allow"
+"autocad.write" = "allow"
+"autocad.destructive" = "confirm"
+
+[modes.full_access]
+"task" = "allow"
+"desktop.observe" = "allow"
+"desktop.input" = "allow"
+"desktop.app" = "allow"
+"shell" = "allow"
+"filesystem.read" = "allow"
+"filesystem.write" = "allow"
+"browser.observe" = "allow"
+"browser.navigate" = "allow"
+"browser.input" = "allow"
+"browser.upload" = "allow"
+"browser.download" = "allow"
+"vision.observe" = "allow"
+"autocad.read" = "allow"
+"autocad.write" = "allow"
+"autocad.destructive" = "allow"
+
+[risk]
+# Tools whose risk_level is at or above this need confirmation (except in full_access).
+confirm_at_or_above_normal = "critical"
+confirm_at_or_above_trusted = "critical"
+
+[paths]
+# Argument names that carry filesystem paths; they are expanded, normalised and checked.
+path_args = ["path", "cwd", "file_path", "output_path", "directory", "save_path", "target_path"]
+
+[filesystem]
+# Credential stores, secrets and this project's own secrets: never readable or writable, any mode.
+deny_always = [
+    "%APPDATA%\\Microsoft\\Credentials",
+    "%LOCALAPPDATA%\\Microsoft\\Credentials",
+    "%APPDATA%\\Microsoft\\Protect",
+    "%APPDATA%\\Microsoft\\Vault",
+    "%LOCALAPPDATA%\\Microsoft\\Vault",
+    "%LOCALAPPDATA%\\Google\\Chrome\\User Data",
+    "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data",
+    "%LOCALAPPDATA%\\BraveSoftware",
+    "%APPDATA%\\Mozilla\\Firefox\\Profiles",
+    "%USERPROFILE%\\.ssh",
+    "%USERPROFILE%\\.aws",
+    "%USERPROFILE%\\.config\\gcloud",
+    "{repo}\\.env",
+    "{state}\\gateway",
+    "{state}\\chrome-profile",
+    "%WINDIR%\\System32\\config",
+]
+# In normal mode, writes outside these roots need confirmation.
+write_roots_normal = [
+    "%USERPROFILE%\\Documents",
+    "%USERPROFILE%\\Desktop",
+    "%USERPROFILE%\\Downloads",
+    "%USERPROFILE%\\Pictures",
+    "%TEMP%",
+    "C:\\temp",
+    "{artifacts}",
+]
+# Writes here need confirmation in every mode except full_access (and usually fail without elevation).
+protected = ["%WINDIR%", "%ProgramFiles%", "%ProgramFiles(x86)%", "%ProgramData%"]
+
+[shell]
+# Refused in every mode.
+deny = [
+    '-verb\s+runas',                               # elevation request (UAC prompt)
+    '\b(consentpromptbehavior\w*|enablelua)\b',    # UAC configuration
+    '\bfodhelper\b|\bcomputerdefaults\b|\beventvwr\b.*mscfile', # known UAC bypass vectors
+    '\bbcdedit\b',
+    '\bdiskpart\b',
+    '\bformat(\.com)?\s+[a-z]:',
+    '\bcipher\s+/w',
+    'set-mppreference|add-mppreference',           # Defender configuration
+    '\bcmdkey\b|\bvaultcmd\b|get-storedcredential|credentialmanager',
+    '\bmimikatz\b|sekurlsa|lsadump',
+    '(login data|cookies|local state)\W*$|\\user data\\.*\\(login data|cookies)',  # browser credential DBs
+    'dpapi|protecteddata\]::unprotect',
+    '\breg(\.exe)?\s+(add|delete|import)\s+hklm',
+    'new-itemproperty.*hklm:|set-itemproperty.*hklm:',
+]
+# Need confirmation unless full_access.
+confirm = [
+    'remove-item\b.*-recurse',
+    '\brm\s+-r',
+    '\b(rd|rmdir)\s+/s',
+    '\bdel\s+/[sq]',
+    'stop-computer|restart-computer|\bshutdown(\.exe)?\b',
+    'set-executionpolicy',
+    'invoke-webrequest|\biwr\b|invoke-restmethod|\birm\b|\bcurl\b|\bwget\b|start-bitstransfer',
+    'new-service|sc(\.exe)?\s+(create|delete|config)',
+    '\bschtasks\b|register-scheduledtask',
+    'stop-process|\btaskkill\b',
+    '\bwinget\b|\bchoco\b|install-package|install-module',
+    'netsh\s+(advfirewall|firewall)',
+]
+
+[browser]
+# URL schemes that need confirmation / are refused.
+confirm_schemes = ["file", "chrome", "edge", "about", "data"]
+deny_schemes = ["javascript", "chrome-extension", "devtools"]
+deny_domains = []
+
+[autocad]
+# AutoCAD operations whose policy_category is autocad.write but that destroy existing work.
+destructive_tools = ["autocad.erase", "autocad.purge"]
