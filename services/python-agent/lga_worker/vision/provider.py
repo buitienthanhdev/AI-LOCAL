@@ -65,13 +65,33 @@ class VisionProvider:
             self._gateway = GatewayClient(self._config)
         return self._gateway
 
-    def grounding_backend(self) -> GroundingBackend:
+    def _gemini_backend(self) -> GeminiGrounding:
+        return GeminiGrounding(self.gateway())
+
+    def _ui_tars_backend(self) -> UiTarsGrounding:
+        return UiTarsGrounding(str(self._config.get("vision.ui_tars_base_url")),
+                               str(self._config.get("vision.ui_tars_model")),
+                               int(self._config.get("vision.ui_tars_min_free_vram_mb")))
+
+    def _gemini_can_do_images(self) -> bool:
+        try:
+            health = self.gateway().health()
+        except ToolError:
+            return False
+        return any(b.get("capabilities", {}).get("images") for b in health.get("backends", []))
+
+    async def grounding_backend(self) -> GroundingBackend:
+        """Pick the grounding backend. "auto" prefers Gemini (best, online) when a Google account that
+        accepts images is signed in, and otherwise falls back to the local UI-TARS server; this lets
+        vision work offline today and upgrade to Gemini automatically once a cookie is added."""
         if self._backend_name == "gemini":
-            return GeminiGrounding(self.gateway())
+            return self._gemini_backend()
         if self._backend_name == "ui_tars":
-            return UiTarsGrounding(str(self._config.get("vision.ui_tars_base_url")),
-                                   str(self._config.get("vision.ui_tars_model")),
-                                   int(self._config.get("vision.ui_tars_min_free_vram_mb")))
+            return self._ui_tars_backend()
+        if self._backend_name == "auto":
+            if await asyncio.to_thread(self._gemini_can_do_images):
+                return self._gemini_backend()
+            return self._ui_tars_backend()
         raise ToolError(ErrorCode.UNSUPPORTED, f"vision backend {self._backend_name!r} is disabled or unknown")
 
     async def status(self) -> tuple[bool, dict[str, Any], str]:
@@ -81,24 +101,40 @@ class VisionProvider:
         except ToolError as exc:
             info["ocr_languages"] = []
             info["ocr_error"] = exc.message
-        if self._backend_name == "gemini":
+
+        gemini_ready = False
+        gemini_detail = ""
+        if self._backend_name in ("gemini", "auto"):
             try:
                 health = await asyncio.to_thread(self.gateway().health)
+                capable = [b["name"] for b in health.get("backends", []) if b.get("capabilities", {}).get("images")]
+                info["image_capable_backends"] = capable
+                gemini_ready = bool(capable)
+                gemini_detail = (f"gemini via {', '.join(capable)}" if capable
+                                 else "gemini has no image-capable account (add a Google cookie; docs/operations.md)")
             except ToolError as exc:
-                return False, {**info, "error": exc.message}, f"gemini vision unavailable: {exc.message}"
-            capable = [b["name"] for b in health.get("backends", []) if b.get("capabilities", {}).get("images")]
-            info["image_capable_backends"] = capable
-            if capable:
-                return True, info, f"gemini vision via {', '.join(capable)}; OCR languages {info['ocr_languages']}"
-            return False, info, ("no Gemini backend accepts images (sign in a Google account for the gateway; "
-                                 f"see docs/operations.md); OCR languages {info['ocr_languages']}")
-        if self._backend_name == "ui_tars":
+                gemini_detail = f"gemini unavailable: {exc.message}"
+
+        ui_tars_ready = False
+        ui_tars_detail = ""
+        if self._backend_name in ("ui_tars", "auto"):
             free = await asyncio.to_thread(free_vram_mb)
             info["free_vram_mb"] = free
-            needed = int(self._config.get("vision.ui_tars_min_free_vram_mb"))
-            ready = free is None or free >= needed
-            return ready, info, f"ui_tars backend; free VRAM {free} MB (needs {needed})"
-        return False, info, f"vision backend {self._backend_name!r} disabled; OCR languages {info['ocr_languages']}"
+            server_up = await asyncio.to_thread(self._ui_tars_backend().server_reachable)
+            info["ui_tars_server_up"] = server_up
+            ui_tars_ready = server_up
+            ui_tars_detail = (f"local UI-TARS server {'up' if server_up else 'not running (scripts/start-vision-server.ps1)'}"
+                              f", free VRAM {free} MB")
+
+        ocr_note = f"OCR: {info['ocr_languages']}" + (" + local Vietnamese" if ocr.vietnamese_available() else "")
+        if self._backend_name == "gemini":
+            return gemini_ready, info, f"{gemini_detail}; {ocr_note}"
+        if self._backend_name == "ui_tars":
+            return ui_tars_ready, info, f"{ui_tars_detail}; {ocr_note}"
+        if self._backend_name == "auto":
+            ready = gemini_ready or ui_tars_ready
+            return ready, info, f"auto → {gemini_detail}; {ui_tars_detail}; {ocr_note}"
+        return False, info, f"vision backend {self._backend_name!r} disabled; {ocr_note}"
 
     async def capture(self, directory: Path, stem: str, hwnd: int | None, region: Rect | None) -> ScreenshotResult:
         path = directory / f"{stem}-{int(time.time() * 1000)}.png"
@@ -127,7 +163,7 @@ class VisionProvider:
                 "automation_id": control.AutomationId or ""}
 
     async def locate(self, directory: Path, stem: str, description: str, hwnd: int | None) -> Located:
-        backend = self.grounding_backend()
+        backend = await self.grounding_backend()
         shot = await self.capture(directory, stem, hwnd, None)
         image = await asyncio.to_thread(self.prepare, shot, isinstance(backend, UiTarsGrounding))
         grounding = await asyncio.to_thread(backend.locate, image.path, image.width, image.height, description,
@@ -142,16 +178,20 @@ class VisionProvider:
         return Located(x, y, grounding, image, element)
 
     async def describe(self, directory: Path, stem: str, question: str, hwnd: int | None) -> tuple[str, str, Path]:
-        if self._backend_name != "gemini":
-            raise ToolError(ErrorCode.UNSUPPORTED, "vision.describe needs the gemini vision backend")
-        shot = await self.capture(directory, stem, hwnd, None)
-        image = await asyncio.to_thread(self.prepare, shot, False)
-        backend = GeminiGrounding(self.gateway())
-        answer, used = await asyncio.to_thread(backend.describe, image.path, question, self._timeout_s)
-        return answer, used, shot.path
+        # Free-form description needs a general VLM; that is Gemini (direct or via "auto").
+        if self._backend_name == "gemini" or (self._backend_name == "auto"
+                                              and await asyncio.to_thread(self._gemini_can_do_images)):
+            shot = await self.capture(directory, stem, hwnd, None)
+            image = await asyncio.to_thread(self.prepare, shot, False)
+            answer, used = await asyncio.to_thread(self._gemini_backend().describe, image.path, question, self._timeout_s)
+            return answer, used, shot.path
+        raise ToolError(ErrorCode.UNSUPPORTED,
+                        "vision.describe needs an image-capable Gemini account (add a Google cookie; "
+                        "docs/operations.md). For locating a target on screen use vision.locate instead.")
 
-    async def read_text(self, directory: Path, stem: str, hwnd: int | None,
-                        region: Rect | None) -> tuple[list[ocr.OcrLine], str, ScreenshotResult]:
+    async def read_text(self, directory: Path, stem: str, hwnd: int | None, region: Rect | None,
+                        prefer_vietnamese: bool = False) -> tuple[list[ocr.OcrLine], str, ScreenshotResult]:
         shot = await self.capture(directory, stem, hwnd, region)
-        lines, language = await ocr.recognize(shot.path, float(self._config.get("vision.ocr_scale")))
+        lines, language = await ocr.recognize(shot.path, float(self._config.get("vision.ocr_scale")),
+                                              prefer_vietnamese=prefer_vietnamese)
         return lines, language, shot

@@ -30,7 +30,8 @@ def register(registry: ToolRegistry) -> None:
         provider = await _provider(ctx)
         region = Rect(**args["region"]) if args.get("region") else None
         lines, language, shot = await provider.read_text(ctx.artifact_dir("screenshots"), ctx.step_id or ctx.request_id,
-                                                         args.get("hwnd"), region)
+                                                         args.get("hwnd"), region,
+                                                         prefer_vietnamese=bool(args.get("vietnamese")))
         needle = (args.get("find_text") or "").lower()
         rows = []
         for line in lines:

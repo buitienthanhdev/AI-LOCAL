@@ -129,6 +129,14 @@ class UiTarsGrounding(GroundingBackend):
         self._min_free_vram_mb = min_free_vram_mb
         self._opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
+    def server_reachable(self) -> bool:
+        """True when the local OpenAI-compatible server (e.g. llama-server) answers /models."""
+        try:
+            with self._opener.open(self._base + "/models", timeout=3) as response:
+                return response.status == 200
+        except (urllib.error.URLError, TimeoutError, OSError):
+            return False
+
     def check_capacity(self) -> None:
         free = free_vram_mb()
         if free is not None and free < self._min_free_vram_mb:

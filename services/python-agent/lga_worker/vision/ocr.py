@@ -1,16 +1,29 @@
-"""Text recognition with the Windows built-in OCR engine (Windows.Media.Ocr via PyWinRT).
+"""On-screen text recognition.
 
-No model download and no GPU: it uses the OCR languages installed with Windows (Settings > Time &
-language > Language). Results carry word boxes in image pixels; the provider maps them to the screen.
+Two engines:
+* Windows.Media.Ocr (PyWinRT): fast, no GPU, no download; uses the OCR languages installed with Windows.
+  Windows has no Vietnamese OCR, so it reads English/Latin but not Vietnamese diacritics.
+* EasyOCR (optional `ocr` extra, Apache-2.0, CPU): a Vietnamese model that reads diacritics. Loaded lazily
+  and cached; the first call downloads its model (~100 MB) into runtime/models/easyocr.
+
+Note: the agent reads real application text through UI Automation, which handles Vietnamese perfectly and
+needs no OCR. OCR is the fallback for pixels only (images, canvas, games).
+Results carry word boxes in the ORIGINAL image's pixels; the provider maps them to the screen.
 """
 
 from __future__ import annotations
 
 import io
+import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
 from lga_worker.errors import ErrorCode, ToolError
+
+_easyocr_reader = None
+_easyocr_lock = threading.Lock()
+_VIETNAMESE_MARKERS = "ăâđêôơưạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ"
 
 
 @dataclass(frozen=True)
@@ -62,12 +75,75 @@ def _upscaled_png(image: Path, scale: float) -> bytes:
         return buffer.getvalue()
 
 
-async def recognize(image: Path, scale: float = 1.0) -> tuple[list[OcrLine], str]:
+def vietnamese_available() -> bool:
+    """True when the optional EasyOCR Vietnamese engine can be imported."""
+    try:
+        import easyocr  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _easyocr(models_dir: Path):
+    global _easyocr_reader
+    if _easyocr_reader is not None:
+        return _easyocr_reader
+    with _easyocr_lock:
+        if _easyocr_reader is None:
+            try:
+                import easyocr
+            except ImportError as exc:
+                raise ToolError(ErrorCode.BACKEND_UNAVAILABLE,
+                                "Vietnamese OCR needs the optional 'ocr' extra: "
+                                "uv sync --extra ocr (in services/python-agent)") from exc
+            models_dir.mkdir(parents=True, exist_ok=True)
+            # CPU only: the GPU is reserved for the UI-TARS vision model.
+            _easyocr_reader = easyocr.Reader(["vi", "en"], gpu=False, verbose=False,
+                                             model_storage_directory=str(models_dir),
+                                             download_enabled=True)
+    return _easyocr_reader
+
+
+def _recognize_vietnamese(image: Path, scale: float, models_dir: Path) -> list[OcrLine]:
+    import numpy as np
+    from PIL import Image
+
+    reader = _easyocr(models_dir)
+    with Image.open(image) as source:
+        if scale != 1.0:
+            source = source.convert("RGB").resize(
+                (max(1, round(source.width * scale)), max(1, round(source.height * scale))),
+                Image.Resampling.LANCZOS)
+        array = np.array(source.convert("RGB"))
+    lines: list[OcrLine] = []
+    for box, text, confidence in reader.readtext(array):
+        if not text.strip() or confidence < 0.3:
+            continue
+        xs = [p[0] / scale for p in box]
+        ys = [p[1] / scale for p in box]
+        left, top, right, bottom = min(xs), min(ys), max(xs), max(ys)
+        word = OcrWord(text, left, top, right - left, bottom - top)
+        lines.append(OcrLine(text, [word]))
+    return lines
+
+
+def _easyocr_models_dir() -> Path:
+    return Path(os.environ.get("LGA_ROOT", ".")) / "runtime" / "models" / "easyocr"
+
+
+async def recognize(image: Path, scale: float = 1.0, prefer_vietnamese: bool = False) -> tuple[list[OcrLine], str]:
     """Recognise text in a PNG/JPEG file. Returns (lines, recogniser language tag).
 
     With `scale` > 1 the image is upscaled first (small UI text is recognised far more reliably); word boxes
-    are returned in the ORIGINAL image's pixels.
+    are returned in the ORIGINAL image's pixels. When `prefer_vietnamese` and the optional engine is
+    installed, EasyOCR (vi+en) is used; otherwise the Windows engine runs.
     """
+    import asyncio
+
+    if prefer_vietnamese and vietnamese_available():
+        lines = await asyncio.to_thread(_recognize_vietnamese, image, scale, _easyocr_models_dir())
+        return lines, "vi+en (easyocr)"
+
     decoder_cls, engine_cls, writer_cls, stream_cls = _import_winrt()
     engine = engine_cls.try_create_from_user_profile_languages()
     if engine is None:
