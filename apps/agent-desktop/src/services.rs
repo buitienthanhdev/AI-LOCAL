@@ -1,5 +1,6 @@
 //! Health of the subsystems the agent orchestrates, and starting them when the window opens
-//! (what `scripts/start.ps1` used to do): the Gemini gateway and the Company Brain knowledge backend.
+//! (what `scripts/start.ps1` used to do): the Gemini gateway. Company knowledge needs no process: the core
+//! searches its index directly.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
@@ -10,7 +11,7 @@ use std::time::Duration;
 
 use lga_core::config::Config;
 
-use crate::api::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW};
+use crate::api::CREATE_NO_WINDOW;
 
 const PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
 
@@ -77,14 +78,15 @@ pub fn gateway_url(config: &Config) -> String {
     join(&config.llm.gateway_url, "/health")
 }
 
-pub fn knowledge_url(config: &Config) -> String {
-    join(&config.knowledge.base_url, "/api/health")
+/// Company knowledge is searched in-process by the core; it is "up" when its index exists.
+pub fn knowledge_ready(config: &Config) -> bool {
+    config.path(&config.knowledge.data_dir).join("catalog.db").is_file()
 }
 
 pub fn probe_all(config: &Config) -> Health {
     let (gateway, knowledge, vision) = std::thread::scope(|s| {
         let g = s.spawn(|| http_ok(&gateway_url(config)));
-        let k = s.spawn(|| http_ok(&knowledge_url(config)));
+        let k = s.spawn(|| knowledge_ready(config));
         let v = s.spawn(|| http_ok(&join(&config.vision.ui_tars_base_url, "/models")));
         (g.join().unwrap_or(false), k.join().unwrap_or(false), v.join().unwrap_or(false))
     });
@@ -103,24 +105,6 @@ pub fn warm_up(config: &Config, agent_exe: &Path) {
             .stderr(Stdio::null())
             .creation_flags(CREATE_NO_WINDOW)
             .status();
-    }
-    if config.knowledge.autostart && !http_ok(&knowledge_url(config)) {
-        let source = config.path(&config.knowledge.source_dir);
-        if source.join("brain").join("__main__.py").is_file() {
-            // Headless serve only (no window); prefer pythonw for the configured "python".
-            let python = match config.knowledge.python.as_str() {
-                "python" => "pythonw".to_string(),
-                other => other.to_string(),
-            };
-            let _ = Command::new(python)
-                .args(["-m", "brain", "serve"])
-                .current_dir(source)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP)
-                .spawn();
-        }
     }
 }
 

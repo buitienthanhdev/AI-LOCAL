@@ -122,18 +122,34 @@ pub struct VisionCfg {
     pub ui_tars_base_url: String,
 }
 
-/// Company Brain knowledge subsystem (only what the core and the desktop app need; the worker reads the rest).
+/// Company knowledge (Company Brain's index), searched natively by `native::knowledge`.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct KnowledgeCfg {
-    pub base_url: String,
-    pub autostart: bool,
-    pub python: String,
     pub source_dir: String,
+    pub data_dir: String,
+    pub qdrant_url: String,
+    pub collection: String,
+    pub ollama_url: String,
+    pub embed_model: String,
+    pub search_limit: usize,
+    pub request_timeout_ms: u64,
+    pub python: String,
 }
 
 impl Default for KnowledgeCfg {
     fn default() -> Self {
-        Self { base_url: "http://127.0.0.1:8765".into(), autostart: false, python: "python".into(), source_dir: "services/company-brain".into() }
+        Self {
+            source_dir: "services/company-brain".into(),
+            data_dir: "services/company-brain/data".into(),
+            qdrant_url: "http://127.0.0.1:6333".into(),
+            collection: "chunks".into(),
+            ollama_url: "http://127.0.0.1:11434".into(),
+            embed_model: "qwen3-embedding:0.6b".into(),
+            search_limit: 10,
+            request_timeout_ms: 30_000,
+            python: "python".into(),
+        }
     }
 }
 

@@ -6,6 +6,7 @@
 
 pub mod env;
 pub mod fs;
+pub mod knowledge;
 pub mod shell;
 
 use std::collections::HashMap;
@@ -21,8 +22,22 @@ use crate::config::Config;
 use crate::error::{ErrorCode, ToolErrorInfo};
 use crate::worker::{Metrics, ToolCall, ToolResponse, ToolResult, VerificationInfo};
 
-pub const TOOLS: [&str; 7] =
-    ["shell.exec", "filesystem.read", "filesystem.write", "filesystem.list", "filesystem.stat", "system.environment", "system.open"];
+pub const TOOLS: [&str; 11] = [
+    "shell.exec",
+    "filesystem.read",
+    "filesystem.write",
+    "filesystem.list",
+    "filesystem.stat",
+    "system.environment",
+    "system.open",
+    "knowledge.status",
+    "knowledge.search",
+    "knowledge.get_context",
+    "knowledge.read_document",
+];
+/// Characters of each passage in knowledge.get_context, and hits listed in a search observation.
+const CONTEXT_PASSAGE_CHARS: usize = 700;
+const OBSERVATION_HITS: usize = 8;
 /// Extensions `system.open` refuses: opening them would run a program (desktop.launch_app does that).
 const RUNNABLE_EXTENSIONS: [&str; 14] = ["exe", "com", "bat", "cmd", "ps1", "vbs", "vbe", "js", "jse", "wsf", "msi", "msc", "scr", "lnk"];
 const STAT_HASH_MAX_BYTES: u64 = 256 * 1024 * 1024;
@@ -71,6 +86,7 @@ pub struct NativeTools {
     filesystem: FilesystemCfg,
     chrome_path: String,
     prog_id: String,
+    knowledge: knowledge::Knowledge,
     in_flight: Mutex<HashMap<String, Arc<Notify>>>,
 }
 
@@ -90,6 +106,7 @@ impl NativeTools {
             filesystem: config.section("filesystem")?,
             chrome_path: config.browser.chrome_path.clone(),
             prog_id: config.autocad.prog_id.clone(),
+            knowledge: knowledge::Knowledge::new(config),
             in_flight: Mutex::new(HashMap::new()),
         })
     }
@@ -261,6 +278,86 @@ impl NativeTools {
                     backend: "shell",
                 })
             }
+            "knowledge.status" => {
+                let data = self.knowledge.status().await;
+                let observation = format!(
+                    "company knowledge index {} ({}), vector search {}",
+                    if data["index"] == true { "present" } else { "MISSING" },
+                    data["base_url"].as_str().unwrap_or(""),
+                    if data["vectors"] == true { "ready" } else { "starts on first search" }
+                );
+                Ok(Outcome { data, checks: vec![], artifacts: vec![], observation, backend: "company-knowledge" })
+            }
+            "knowledge.search" | "knowledge.get_context" => {
+                let query = str_arg(args, "query")?.to_string();
+                let default = if call.tool == "knowledge.search" { self.knowledge.limit() } else { 6 };
+                let limit = args.get("limit").and_then(Value::as_u64).map_or(default, |n| n as usize);
+                let (hits, notes) = self
+                    .knowledge
+                    .search(&query, limit)
+                    .await
+                    .map_err(|e| fs::tool_error(ErrorCode::BackendUnavailable, format!("company knowledge: {e:#}")))?;
+                let note = if notes.is_empty() { String::new() } else { format!("\n({})", notes.join("; ")) };
+                if call.tool == "knowledge.search" {
+                    let listing: Vec<String> = hits
+                        .iter()
+                        .take(OBSERVATION_HITS)
+                        .map(|h| {
+                            let snippet: String = h.text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect();
+                            format!("[id {}] {} {snippet}  (why: {})", h.file_id, h.citation(), h.why)
+                        })
+                        .collect();
+                    let observation = if hits.is_empty() {
+                        format!("No company-knowledge match for {query:?}.{note}")
+                    } else {
+                        format!("{} knowledge hit(s) for {query:?}:\n{}{note}", hits.len(), listing.join("\n"))
+                    };
+                    let data = json!({"hits": hits.iter().map(knowledge::Hit::to_json).collect::<Vec<_>>()});
+                    return Ok(Outcome { data, checks: vec![], artifacts: vec![], observation, backend: "company-knowledge" });
+                }
+                let blocks: Vec<String> = hits
+                    .iter()
+                    .enumerate()
+                    .map(|(i, h)| {
+                        let passage: String = h.text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(CONTEXT_PASSAGE_CHARS).collect();
+                        format!("[{}] {} (id {})\n{passage}", i + 1, h.citation(), h.file_id)
+                    })
+                    .collect();
+                let context = blocks.join("\n\n");
+                let observation = if hits.is_empty() {
+                    format!("No company-knowledge evidence for {query:?}.{note}")
+                } else {
+                    format!("Evidence from company knowledge ({} passage(s)):\n{context}{note}", hits.len())
+                };
+                let citations: Vec<Value> = hits.iter().map(|h| json!({"file_id": h.file_id.to_string(), "name": h.name, "loc": h.loc})).collect();
+                Ok(Outcome {
+                    data: json!({"context": context, "found": !hits.is_empty(), "citations": citations}),
+                    checks: vec![],
+                    artifacts: vec![],
+                    observation,
+                    backend: "company-knowledge",
+                })
+            }
+            "knowledge.read_document" => {
+                let key = str_arg(args, "file_id")?.to_string();
+                let cap = self.filesystem.max_read_bytes;
+                let max = args.get("max_bytes").and_then(Value::as_u64).map_or(cap, |n| (n as usize).min(cap));
+                let knowledge = &self.knowledge;
+                let (file_id, name, content, truncated) =
+                    knowledge.read_document(&key, max).map_err(|e| fs::tool_error(ErrorCode::NotFound, format!("{e:#}")))?;
+                Ok(Outcome {
+                    observation: format!(
+                        "{name} (id {file_id}), {} characters{}:\n{}",
+                        content.chars().count(),
+                        if truncated { ", truncated" } else { "" },
+                        content.chars().take(6000).collect::<String>()
+                    ),
+                    data: json!({"file_id": file_id.to_string(), "content": content, "content_type": "text/plain"}),
+                    checks: vec![],
+                    artifacts: vec![],
+                    backend: "company-knowledge",
+                })
+            }
             other => Err(fs::tool_error(ErrorCode::UnknownTool, format!("unknown or unavailable tool {other:?}"))),
         }
     }
@@ -383,5 +480,49 @@ mod tests {
         assert_eq!(stat.data["exists"], true);
         let env = native.call(&call("system.environment", json!({}))).await.result.unwrap();
         assert!(env.data["powershell"]["path"].is_string());
+    }
+}
+
+/// Against this machine's real Company Brain index (`cargo test -p lga-core --lib knowledge_live -- --ignored`).
+#[cfg(test)]
+mod knowledge_live {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    #[ignore]
+    async fn search_and_read_without_python() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+        let native = NativeTools::new(&Config::load_from(&root).unwrap()).unwrap();
+        let call = |tool: &str, args: Value| ToolCall::new("t", "s", tool, args, Duration::from_secs(120));
+        let started = std::time::Instant::now();
+        let found = native.call(&call("knowledge.search", json!({"query": "tỷ lệ rắn solids OneCoat Pro"}))).await;
+        let result = found.result.unwrap_or_else(|| panic!("{:?}", found.error));
+        println!("search {:?}:\n{}", started.elapsed(), result.observation);
+        let first = result.data["hits"][0]["file_id"].as_str().unwrap().to_string();
+        let read = native.call(&call("knowledge.read_document", json!({"file_id": first}))).await.result.unwrap();
+        println!("read: {}", read.observation.chars().take(300).collect::<String>());
+        let context = native.call(&call("knowledge.get_context", json!({"query": "OneCoat Pro solids"}))).await.result.unwrap();
+        assert_eq!(context.data["found"], true);
+        let status = native.call(&call("knowledge.status", json!({}))).await.result.unwrap();
+        println!("status: {}", status.observation);
+    }
+}
+
+#[cfg(test)]
+mod knowledge_parity {
+    use super::*;
+
+    /// Prints Rust hybrid-search file ids for the queries in LGA_PARITY_QUERIES (one per line) for comparison
+    /// with Company Brain's Python `index.search`.
+    #[tokio::test]
+    #[ignore]
+    async fn print_search_ids() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+        let k = knowledge::Knowledge::new(&Config::load_from(&root).unwrap());
+        for q in std::env::var("LGA_PARITY_QUERIES").unwrap_or_default().lines().filter(|l| !l.trim().is_empty()) {
+            let (hits, _) = k.search(q, 10).await.unwrap();
+            println!("RUST\t{q}\t{}", hits.iter().map(|h| h.file_id.to_string()).collect::<Vec<_>>().join(","));
+        }
     }
 }
