@@ -44,7 +44,7 @@ pub fn system_prompt(catalog: &str, mode: ExecutionMode, language: &str, environ
 
 # Reply format
 Reply with exactly one JSON object and nothing else (no prose, no markdown fences):
-{{"thought": "<the current state and why these actions are next>", "plan": ["<remaining high-level steps>"], "actions": [{{"tool": "<tool name>", "args": {{ ... }}}}]}}
+{{"thought": "<one short sentence: the current state and why these actions are next>", "plan": ["<remaining high-level steps>"], "actions": [{{"tool": "<tool name>", "args": {{ ... }}}}]}}
 "actions" holds 1 to {max_actions} calls run in order; the run stops at the first one that fails and you see every result. Batch calls whose arguments you already know and that do not depend on each other's results (several autocad.create_* shapes, several files, a type then a hotkey). Use a single action when the next arguments depend on what you will observe (element ids, window handles, search results). A task.* call must be the last action. Include "plan" in your first reply and whenever the plan changes.
 
 # Rules

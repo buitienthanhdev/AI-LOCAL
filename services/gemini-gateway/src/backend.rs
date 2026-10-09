@@ -213,6 +213,13 @@ impl Backend {
                 payload["format"] = json!("json");
             }
         }
+        if let Kind::OpenAiServer { .. } = self.kind {
+            // Gemma/Qwen "thinking" doubles the tokens a local GPU must generate for each planner step.
+            payload["chat_template_kwargs"] = json!({"enable_thinking": false});
+        }
+        if let Kind::Ollama { .. } = self.kind {
+            payload["think"] = json!(false);
+        }
         if let (Kind::GeminiApi { .. } | Kind::OpenAiServer { .. }, true) = (&self.kind, request.json) {
             payload["response_format"] = json!({"type": "json_object"});
         }
