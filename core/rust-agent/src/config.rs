@@ -133,7 +133,7 @@ pub struct KnowledgeCfg {
 
 impl Default for KnowledgeCfg {
     fn default() -> Self {
-        Self { base_url: "http://127.0.0.1:8765".into(), autostart: false, python: "python".into(), source_dir: "..".into() }
+        Self { base_url: "http://127.0.0.1:8765".into(), autostart: false, python: "python".into(), source_dir: "services/company-brain".into() }
     }
 }
 

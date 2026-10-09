@@ -241,8 +241,8 @@ base_url = "http://127.0.0.1:8765"
 autostart = true
 # Python that runs Company Brain (its own environment; it targets Python 3.14).
 python = "python"
-# Repository root of Company Brain (where `python -m brain` runs).
-source_dir = ".."
+# Company Brain's folder inside this repository (where `python -m brain` runs).
+source_dir = "services/company-brain"
 startup_timeout_ms = 60_000
 request_timeout_ms = 30_000
 search_limit = 10

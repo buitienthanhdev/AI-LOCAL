@@ -1,0 +1,15 @@
+[package]
+name = "brain_core"
+version.workspace = true
+edition.workspace = true
+description = "Company Brain — system core (Rust): text normalization, hashing; later scanner, watcher, governor"
+
+[dependencies]
+unicode-normalization = "0.1"
+sha2 = "0.10"
+hex = "0.4"
+rayon = "1"
+nvml-wrapper = "0.11"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }

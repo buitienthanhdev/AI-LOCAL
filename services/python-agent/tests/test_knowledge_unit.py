@@ -34,4 +34,4 @@ def test_search_parses_and_limits(config: Config, monkeypatch) -> None:
 def test_source_dir_resolves_under_repo_root(config: Config) -> None:
     provider = KnowledgeProvider(config)
     # default source_dir "..": Company Brain is the parent of this repo (resolved against the repo root).
-    assert provider._source_dir.resolve() == config.root.parent.resolve()
+    assert provider._source_dir.resolve() == (config.root / "services" / "company-brain").resolve()

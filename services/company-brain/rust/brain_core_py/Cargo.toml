@@ -1,0 +1,12 @@
+[package]
+name = "brain_core_py"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "brain_core_py"
+crate-type = ["cdylib"]
+
+[dependencies]
+brain_core = { path = "../brain_core" }
+pyo3 = { version = "0.27", features = ["extension-module", "abi3-py310"] }
