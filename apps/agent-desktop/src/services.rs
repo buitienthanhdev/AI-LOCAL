@@ -106,7 +106,17 @@ pub fn warm_up(config: &Config, agent_exe: &Path) {
             .creation_flags(CREATE_NO_WINDOW)
             .status();
     }
+    // Keep company knowledge fresh without a resident process: once a day, learn new and changed documents
+    // with a one-shot background job (below-normal priority; it ends by itself).
+    let knowledge = lga_core::native::knowledge::Knowledge::new(config);
+    let due = knowledge.hours_since_update().is_none_or(|hours| hours >= AUTO_LEARN_HOURS);
+    if knowledge_ready(config) && due && knowledge.update_state()["running"] != true {
+        let _ = knowledge.start_update(&[], false);
+    }
 }
+
+/// Hours between automatic knowledge updates.
+const AUTO_LEARN_HOURS: f64 = 24.0;
 
 #[cfg(test)]
 mod tests {

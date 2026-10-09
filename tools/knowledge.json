@@ -5,34 +5,307 @@
     {
       "name": "knowledge.status",
       "description": "Report whether the company knowledge backend is running and reachable.",
-      "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
-      "output_schema": {"type": "object", "required": ["ready"], "properties": {"ready": {"type": "boolean"}, "base_url": {"type": "string"}}},
-      "timeout_ms": 10000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "none", "side_effects": "none", "policy_category": "knowledge"
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "ready"
+        ],
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "base_url": {
+            "type": "string"
+          }
+        }
+      },
+      "timeout_ms": 10000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "knowledge"
     },
     {
       "name": "knowledge.search",
       "description": "Search the company knowledge base. Returns ranked passages with citations (document name, location, why it matched). Use this to answer questions about company documents, specifications, products or people.",
-      "input_schema": {"type": "object", "required": ["query"], "additionalProperties": false, "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 500}, "limit": {"type": "integer", "minimum": 1, "maximum": 30}}},
-      "output_schema": {"type": "object", "required": ["hits"], "properties": {"hits": {"type": "array", "items": {"type": "object", "properties": {"score": {"type": "number"}, "file_id": {"type": "string"}, "name": {"type": "string"}, "path": {"type": "string"}, "loc": {"type": "string"}, "text": {"type": "string"}, "why": {"type": "string"}, "author": {"type": "string"}, "modified_at": {"type": "string"}}}}}},
-      "timeout_ms": 40000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "none", "side_effects": "none", "policy_category": "knowledge"
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 30
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "hits"
+        ],
+        "properties": {
+          "hits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "score": {
+                  "type": "number"
+                },
+                "file_id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string"
+                },
+                "loc": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "why": {
+                  "type": "string"
+                },
+                "author": {
+                  "type": "string"
+                },
+                "modified_at": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "timeout_ms": 40000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "knowledge"
     },
     {
       "name": "knowledge.get_context",
       "description": "Retrieve the most relevant company-knowledge passages for a query, formatted as evidence (with citations) to ground your answer or plan. Use before answering a knowledge question or before acting on a company specification.",
-      "input_schema": {"type": "object", "required": ["query"], "additionalProperties": false, "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 500}, "limit": {"type": "integer", "minimum": 1, "maximum": 15}}},
-      "output_schema": {"type": "object", "required": ["context", "citations", "found"], "properties": {"context": {"type": "string"}, "found": {"type": "boolean"}, "citations": {"type": "array", "items": {"type": "object", "properties": {"file_id": {"type": "string"}, "name": {"type": "string"}, "loc": {"type": "string"}}}}}},
-      "timeout_ms": 40000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "none", "side_effects": "none", "policy_category": "knowledge"
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 15
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "context",
+          "citations",
+          "found"
+        ],
+        "properties": {
+          "context": {
+            "type": "string"
+          },
+          "found": {
+            "type": "boolean"
+          },
+          "citations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "loc": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "timeout_ms": 40000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "knowledge"
     },
     {
       "name": "knowledge.read_document",
       "description": "Read the full text of a company-knowledge document by its file_id (from knowledge.search results).",
-      "input_schema": {"type": "object", "required": ["file_id"], "additionalProperties": false, "properties": {"file_id": {"type": "string", "minLength": 1}, "max_bytes": {"type": "integer", "minimum": 1}}},
-      "output_schema": {"type": "object", "required": ["file_id", "content", "content_type"], "properties": {"file_id": {"type": "string"}, "content": {"type": "string"}, "content_type": {"type": "string"}}},
-      "timeout_ms": 40000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "none", "side_effects": "none", "policy_category": "knowledge"
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "file_id"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "max_bytes": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "file_id",
+          "content",
+          "content_type"
+        ],
+        "properties": {
+          "file_id": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "content_type": {
+            "type": "string"
+          }
+        }
+      },
+      "timeout_ms": 40000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "knowledge"
+    },
+    {
+      "name": "knowledge.query",
+      "description": "Run ONE read-only SQL SELECT over the company catalog to answer exact questions: where a file is (any file on this PC, by name), who created/edited it and when, counts and statistics, duplicate files (GROUP BY sha256 HAVING COUNT(*) > 1), extracted facts, version history with diffs, contributions, knowledge-graph relations, knowledge gaps. At most 50 rows. Views (read-only, SQLite):\nvisible_files(file_id, path, name, ext, size, sha256, fs_created_at, fs_modified_at, fs_owner, doc_author, doc_last_editor, doc_created_at, title, department, project, status, first_seen_at, last_seen_at, tier, version_no, name_key) -- every file on this PC; tier 1 documents, 2 source code, 3 libraries; name_key = name+title lower-case WITHOUT accents: find by name with name_key LIKE '%bao cao%'; status 'active'|'deleted'.\nvisible_events(event_id, file_id, event, actor, at, detail) -- discovered|modified|moved|deleted|restored.\nvisible_versions(file_id, file_name, version_no, sha256, size, fs_modified_at, editor, observed_at, diff_added, diff_removed, diff_summary) -- content versions and what changed.\nvisible_contributions(person, kind, weight, file_id, file_name, project, department, at, evidence) -- score = SUM(weight).\nvisible_relations(from_name, from_type, relation, to_name, to_type, source_file_id, source_file, evidence, valid_from, valid_to, confidence) -- knowledge graph (people, documents, projects, materials, suppliers...).\nvisible_facts(fact_id, subject, predicate, value, unit, subject_key, predicate_key, evidence, source_file_id, source_name, source_path, file_id, name, path, author, valid_from, valid_to, confidence, status, note, reviewed_by) -- facts extracted from documents; subject_key lower-case without accents; predicate: uses_material, material_percent, supplier, target_ph, measured_ph, target_viscosity, measured_viscosity, root_cause, corrective_action, test_result, decision, performed_by, belongs_to_project, cost_target, other_property; status: approved > trusted > usable > candidate; conflicted; superseded.\nvisible_gaps(kind, subject, detail, evidence, status, created_at) -- knowledge gaps.\nTimes are ISO 'YYYY-MM-DDTHH:MM:SS'. Function norm(text): lower-case, accents removed (WHERE norm(name) LIKE '%cong thuc%').",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "sql"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "sql": {
+            "type": "string",
+            "minLength": 6,
+            "maxLength": 4000
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "rows",
+          "truncated"
+        ],
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "timeout_ms": 30000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "knowledge"
+    },
+    {
+      "name": "knowledge.update",
+      "description": "Learn new and changed documents: scan folders into the company catalog and index their content (text, tables, PDFs, images, audio/video) so knowledge.search finds them. Runs in the background and can take minutes to hours; knowledge.status shows progress. Without paths it rescans the whole PC (only new/changed files are processed).",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "paths": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 3
+            },
+            "maxItems": 20,
+            "description": "Absolute folders to learn."
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "started"
+        ],
+        "properties": {
+          "started": {
+            "type": "boolean"
+          },
+          "already_running": {
+            "type": "boolean"
+          },
+          "log": {
+            "type": "string"
+          }
+        }
+      },
+      "timeout_ms": 30000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "possible",
+      "policy_category": "knowledge"
     }
   ]
 }

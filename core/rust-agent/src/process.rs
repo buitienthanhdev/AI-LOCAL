@@ -12,7 +12,8 @@ use std::path::Path;
 
 use windows_sys::Win32::Foundation::CloseHandle;
 use windows_sys::Win32::System::Threading::{
-    CreateProcessW, CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_UNICODE_ENVIRONMENT, DETACHED_PROCESS,
+    CreateProcessW, CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT,
+    DETACHED_PROCESS,
     PROCESS_INFORMATION, STARTUPINFOW,
 };
 
@@ -50,6 +51,16 @@ fn wide(s: &OsStr) -> Vec<u16> {
 /// Spawn `program args` detached (no console, own process group, no inherited handles).
 /// Returns the new process id.
 pub fn spawn_detached(program: &Path, args: &[&str], cwd: &Path, extra_env: &[(&str, &str)]) -> io::Result<u32> {
+    spawn_with(program, args, cwd, extra_env, DETACHED_PROCESS)
+}
+
+/// Like `spawn_detached`, but console programs (PowerShell, Python) get a hidden console of their own: with
+/// no console at all some of them exit at once.
+pub fn spawn_hidden_console(program: &Path, args: &[&str], cwd: &Path, extra_env: &[(&str, &str)]) -> io::Result<u32> {
+    spawn_with(program, args, cwd, extra_env, CREATE_NO_WINDOW)
+}
+
+fn spawn_with(program: &Path, args: &[&str], cwd: &Path, extra_env: &[(&str, &str)], console: u32) -> io::Result<u32> {
     let mut command_line = quote_arg(&program.to_string_lossy());
     for arg in args {
         command_line.push(' ');
@@ -71,7 +82,7 @@ pub fn spawn_detached(program: &Path, args: &[&str], cwd: &Path, extra_env: &[(&
 
     let application = wide(program.as_os_str());
     let directory = wide(cwd.as_os_str());
-    let base_flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT;
+    let base_flags = console | CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT;
     // Leave the caller's job (so the gateway outlives the CLI) when the job permits it.
     for flags in [base_flags | CREATE_BREAKAWAY_FROM_JOB, base_flags] {
         // SAFETY: all pointers reference live, NUL-terminated buffers owned by this function; the
