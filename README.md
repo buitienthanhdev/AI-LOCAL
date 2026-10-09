@@ -4,7 +4,9 @@
 (`services/company-brain`) and is the agent's knowledge subsystem: a single chat, a single orchestrator, and
 one model for every job: gemma-4-12B (Q8) served by llama.cpp (LlamaApp router), used both by the planner and
 by Company Brain's answering, extraction and media reading. Gemini API / Gemini Web / Ollama are only
-fallbacks for the planner. Company knowledge is just more tools (`knowledge.*`). Start/stop everything with
+fallbacks for the planner. Company knowledge is just more tools (`knowledge.*`), searched natively by the Rust
+core (hybrid Qdrant vectors + SQLite FTS5, reciprocal rank fusion) with no Python process at query time; the
+index is refreshed on demand with `Cập nhật tri thức.bat`. Start/stop everything with
 `Chạy Trợ lý.bat` / `Tắt Trợ lý.bat` next to this folder. See [docs/unification.md](docs/unification.md).
 
 A local Windows agent that takes a task in natural language and completes it on this PC, checking its own work at every step:
@@ -61,7 +63,7 @@ services/python-agent Python worker (Windows UI Automation, browser, vision, Aut
 services/gemini-gateway  Gemini Web gateway, Rust (primary/fallback, breaker, health)
 services/lga-common   shared config / secrets / redaction / logging
 tools/                tool contract (the only thing Gemini sees), incl. knowledge.*
-services/company-brain   Company Brain = the knowledge subsystem (RAG, Python 3.14), reached over HTTP; data/ git-ignored
+services/company-brain   Company Brain: builds the knowledge index (Python 3.14, run on demand by "Cập nhật tri thức.bat"); data/ git-ignored
 configs/ scripts/ tests/e2e/ docs/ references/ (pinned upstreams, git-ignored)
 memory/ logs/ artifacts/ runtime/   (local state, git-ignored)
 ```

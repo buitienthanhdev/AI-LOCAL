@@ -1,7 +1,7 @@
 //! Local Gemini Agent desktop app: the one chat for the whole agent, as a native window (WebView2).
 //!
-//! Double-click `agent-desktop.exe`: it starts the subsystems that are down (Gemini gateway, Company Brain
-//! knowledge backend) in the background and opens the chat. The page talks to `api.rs` over the private
+//! Double-click `agent-desktop.exe`: it starts the Gemini gateway if it is down (company knowledge needs no
+//! process: the core searches its index directly) and opens the chat. The page talks to `api.rs` over the private
 //! `lga://` scheme; tasks run in the real `agent` CLI next to this executable, so they keep running if the
 //! window is closed.
 
@@ -105,7 +105,7 @@ fn run() -> Result<()> {
     let agent_exe = find_agent_exe(&config)?;
     let api = Arc::new(api::Api { config: config.clone(), agent_exe: agent_exe.clone() });
 
-    // Start the gateway / knowledge backend if they are down, without delaying the window.
+    // Start the gateway if it is down, without delaying the window.
     std::thread::spawn(move || services::warm_up(&config, &agent_exe));
 
     let event_loop = EventLoop::new();

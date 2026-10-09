@@ -234,18 +234,22 @@ pdf_plot_device = "DWG To PDF.pc3"
 geometry_tolerance = 1e-6
 
 [knowledge]
-# Company Brain knowledge subsystem (RAG over company documents), reached over its local HTTP API.
-# The agent never runs Company Brain's own chat/agent loop — only its knowledge retrieval.
-base_url = "http://127.0.0.1:8765"
-# Start `python -m brain serve` automatically when the knowledge backend is not reachable.
-autostart = true
-# Python that runs Company Brain (its own environment; it targets Python 3.14).
-python = "python"
-# Company Brain's folder inside this repository (where `python -m brain` runs).
+# Company knowledge (RAG over company documents). Search and reading run in the Rust core
+# (core/rust-agent/src/native/knowledge.rs) directly on Company Brain's index: hybrid search = vectors in
+# Qdrant + full text (SQLite FTS5 in catalog.db), merged with reciprocal rank fusion. No Python at query time.
+# Company Brain's folder in this repository; its index lives in <source_dir>/data.
 source_dir = "services/company-brain"
-startup_timeout_ms = 60_000
-request_timeout_ms = 30_000
+data_dir = "services/company-brain/data"
+# Local Qdrant server holding the "chunks" vectors (started on demand from <data_dir>/qdrant-server).
+qdrant_url = "http://127.0.0.1:6333"
+collection = "chunks"
+# Query embeddings: the same model Company Brain indexed with (Ollama).
+ollama_url = "http://127.0.0.1:11434"
+embed_model = "qwen3-embedding:0.6b"
 search_limit = 10
+request_timeout_ms = 30_000
+# Python used only by "Cập nhật tri thức" (one-shot `python -m brain scan` + `index`), never at query time.
+python = "python"
 
 [memory]
 persistent_db = "memory/persistent.db"
