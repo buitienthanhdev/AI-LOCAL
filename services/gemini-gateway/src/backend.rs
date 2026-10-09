@@ -79,6 +79,8 @@ pub struct Backend {
     last_reload: Mutex<Option<std::time::Instant>>,
     /// Local server only: too slow to be useful until then; the gateway tries the other brains first.
     degraded_until: Mutex<Option<std::time::Instant>>,
+    /// Local server only: slow answers (or timeouts) in a row.
+    slow_streak: std::sync::atomic::AtomicU32,
     /// Local server only: thinking mode and sampling.
     pub generation: Generation,
     /// Local server only: other llama.cpp routers whose loaded models are unloaded before this server starts
@@ -93,8 +95,11 @@ pub struct Backend {
 /// Below this generation speed a local model is (partly) running on the CPU, typically because it was
 /// loaded while another program held the GPU memory. The machine's GPU runs it at ~27 tokens/s and reads
 /// prompts at ~1,900 tokens/s; spilled into system memory it drops to ~6 and ~110.
-const DEGRADED_TOKENS_PER_SECOND: f64 = 15.0;
-const DEGRADED_PROMPT_TOKENS_PER_SECOND: f64 = 500.0;
+const DEGRADED_TOKENS_PER_SECOND: f64 = 10.0;
+const DEGRADED_PROMPT_TOKENS_PER_SECOND: f64 = 300.0;
+/// Slow answers in a row before acting: one slow answer can be a passing burst (an embedding model sharing
+/// the GPU for a moment); a model spilled into system memory is slow every time.
+const DEGRADED_STREAK: u32 = 2;
 /// A degraded model is reloaded at most this often (a reload that cannot do better must not loop), and is
 /// tried after the other brains for this long.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(600);
@@ -145,6 +150,7 @@ impl Backend {
             client,
             last_reload: Mutex::new(None),
             degraded_until: Mutex::new(None),
+            slow_streak: std::sync::atomic::AtomicU32::new(0),
             generation: Generation::default(),
             release: Vec::new(),
             managed: false,
@@ -178,6 +184,25 @@ impl Backend {
     /// A local llama.cpp router keeps a model where it was loaded: after loading next to another GPU program
     /// it stays slow (CPU) even once the GPU is free. Ask the router to unload it so the next request loads it
     /// again with the GPU memory available now. Fire and forget; servers without the endpoint ignore it.
+    /// Track how fast the local model answers; act only on a streak of slow answers.
+    fn note_speed(&self, model: &str, fast: bool, detail: &str) {
+        use std::sync::atomic::Ordering;
+        if !matches!(self.kind, Kind::OpenAiServer { .. }) {
+            return;
+        }
+        if fast {
+            self.slow_streak.store(0, Ordering::Relaxed);
+            *self.degraded_until.lock().expect("degraded lock") = None;
+            return;
+        }
+        let streak = self.slow_streak.fetch_add(1, Ordering::Relaxed) + 1;
+        crate::log::info(&format!("{}: slow answer {streak}/{DEGRADED_STREAK} ({detail})", self.name));
+        if streak >= DEGRADED_STREAK {
+            self.slow_streak.store(0, Ordering::Relaxed);
+            self.reload_if_degraded(model);
+        }
+    }
+
     fn reload_if_degraded(&self, model: &str) {
         if !matches!(self.kind, Kind::OpenAiServer { .. }) || model.is_empty() {
             return;
@@ -534,7 +559,7 @@ impl Backend {
             Ok(response) => response,
             Err(e) => {
                 if e.message.ends_with("request timed out") {
-                    self.reload_if_degraded(&model);
+                    self.note_speed(&model, false, "timed out");
                 }
                 return Err(e);
             }
@@ -550,9 +575,11 @@ impl Backend {
         let prompt_read = timings.and_then(|t| t.get("prompt_n")).and_then(Value::as_u64).unwrap_or(0);
         let slow_prompt = prompt_read >= 1000 && prompt_speed.is_some_and(|s| s < DEGRADED_PROMPT_TOKENS_PER_SECOND);
         if slow_prompt || (generated >= 32 && speed.is_some_and(|s| s < DEGRADED_TOKENS_PER_SECOND)) {
-            self.reload_if_degraded(&model);
-        } else if speed.is_some_and(|s| s >= DEGRADED_TOKENS_PER_SECOND) {
-            *self.degraded_until.lock().expect("degraded lock") = None;
+            let detail = format!("prompt {prompt_read} tokens at {:.0}/s, {generated} generated at {:.1}/s",
+                                 prompt_speed.unwrap_or(0.0), speed.unwrap_or(0.0));
+            self.note_speed(&model, false, &detail);
+        } else if speed.is_some() {
+            self.note_speed(&model, true, "");
         }
         let pointer = if matches!(self.kind, Kind::Ollama { .. }) { "/message" } else { "/choices/0/message" };
         let choice = data

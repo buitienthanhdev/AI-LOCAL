@@ -246,8 +246,10 @@ impl Knowledge {
     }
 
     async fn embed_query(&self, query: &str) -> anyhow::Result<Vec<f64>> {
+        // On the CPU (num_gpu 0, under a second for one query): the 2 GB embedding model on the GPU next to
+        // the 13 GB planner model pushed the planner into system memory (6 tokens/s instead of 27).
         let body = json!({"model": self.cfg.embed_model, "input": [format!("{QUERY_INSTRUCTION}{query}")],
-                          "keep_alive": "30s", "truncate": true, "options": {"num_ctx": 2048}});
+                          "keep_alive": "30s", "truncate": true, "options": {"num_ctx": 2048, "num_gpu": 0}});
         let reply: Value = self.client.post(format!("{}/api/embed", self.cfg.ollama_url)).json(&body).send().await?.error_for_status()?.json().await?;
         let vector: Vec<f64> = reply
             .pointer("/embeddings/0")
