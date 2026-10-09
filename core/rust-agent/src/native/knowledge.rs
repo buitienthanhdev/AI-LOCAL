@@ -204,6 +204,11 @@ impl Knowledge {
         Self { db: data.join("catalog.db"), qdrant_exe: data.join("qdrant-server").join("qdrant.exe"), root: config.root.clone(), cfg, client }
     }
 
+    /// The Python interpreter Company Brain runs with (also used by python.exec).
+    pub fn python(&self) -> &str {
+        &self.cfg.python
+    }
+
     pub fn limit(&self) -> usize {
         self.cfg.search_limit
     }

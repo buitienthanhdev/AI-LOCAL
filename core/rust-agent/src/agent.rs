@@ -23,7 +23,7 @@ use crate::config::{Config, ExecutionMode};
 use crate::error::{ErrorCode, ToolErrorInfo};
 use crate::llm::{ChatMessage, ChatProvider, ChatRequest, Part};
 use crate::memory::Memory;
-use crate::planner::{parse_reply, system_prompt, user_turn, PlannerAction, TurnContext};
+use crate::planner::{parse_reply, system_prompt, user_turn, PlannerAction, TurnContext, MAX_ACTIONS_PER_REPLY};
 use crate::policy::{Policy, Verdict};
 use crate::redact::Redactor;
 use crate::retry::Backoff;
@@ -213,6 +213,33 @@ fn normalize_completion(args: &Value) -> Value {
         }
     }
     Value::Object(out)
+}
+
+/// The shape every planner reply must have, with the tool names limited to the tools of this run. A local
+/// model decoding under this schema cannot invent a tool or break the reply format; arguments are still
+/// validated against each tool's own schema before anything runs.
+fn planner_reply_schema(available: &[String]) -> Value {
+    let mut tools: Vec<&str> = available.iter().map(String::as_str).collect();
+    for core in ["task.complete", "task.fail", "task.ask_user"] {
+        if !tools.contains(&core) {
+            tools.push(core);
+        }
+    }
+    json!({
+        "type": "object",
+        "required": ["thought", "actions"],
+        "properties": {
+            "thought": {"type": "string"},
+            "plan": {"type": "array", "items": {"type": "string"}},
+            "actions": {
+                "type": "array", "minItems": 1, "maxItems": MAX_ACTIONS_PER_REPLY,
+                "items": {
+                    "type": "object", "required": ["tool", "args"],
+                    "properties": {"tool": {"enum": tools}, "args": {"type": "object"}}
+                }
+            }
+        }
+    })
 }
 
 /// Facts about this PC the planner must not guess (user name, real folder locations).
@@ -488,6 +515,7 @@ impl<'a> TaskRunner<'a> {
                 timeout: Duration::from_millis(llm_cfg.request_timeout_ms),
                 metadata: HashMap::from([("task_id".into(), record.task_id.clone())]),
                 json: true,
+                schema: Some(planner_reply_schema(&available)),
             };
             let reply = self.chat_with_retry(record, request).await?;
             match parse_reply(&reply) {
@@ -604,6 +632,22 @@ impl<'a> TaskRunner<'a> {
         let violations = self.rt.catalog.validate_args(&spec.name, &action.args);
         if !violations.is_empty() {
             let err = ToolErrorInfo::new(ErrorCode::InvalidArgument, violations.join("; "), false);
+            return Ok(self.rejected(step, StepStatus::Rejected, err));
+        }
+        // Bounded repair: an exact call that already failed for a deterministic reason (a script error, a
+        // missing file) fails the same way again; the planner has to change something.
+        let failed_before = record.steps.iter().find(|s| {
+            s.input_hash == step.input_hash
+                && s.status == StepStatus::Failed
+                && !s.error.as_ref().is_some_and(|e| matches!(e.code, ErrorCode::Timeout | ErrorCode::Busy | ErrorCode::BackendUnavailable))
+        });
+        if let Some(previous) = failed_before {
+            let why = previous.error.as_ref().map(|e| e.message.clone()).unwrap_or_default();
+            let err = ToolErrorInfo::new(
+                ErrorCode::Conflict,
+                format!("this exact call already failed in {} ({why}); fix the cause and change the call instead of repeating it", previous.step_id),
+                false,
+            );
             return Ok(self.rejected(step, StepStatus::Rejected, err));
         }
         let identical = record.steps.iter().rev().take_while(|s| s.input_hash == step.input_hash).count() as u32;
@@ -832,6 +876,7 @@ impl<'a> TaskRunner<'a> {
             timeout: Duration::from_millis(self.rt.config.llm.request_timeout_ms),
             metadata: HashMap::from([("task_id".into(), record.task_id.clone()), ("role".into(), "verifier".into())]),
             json: true,
+            schema: None,
         };
         let reply = self.chat_with_retry(record, request).await?;
         let verdict = crate::planner::extract_json_value(&reply);

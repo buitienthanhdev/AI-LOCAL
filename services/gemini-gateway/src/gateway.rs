@@ -101,6 +101,7 @@ async fn ensure_on_demand(route: &Route) {
         *last = Some(Instant::now());
     }
     let name = &route.backend.name;
+    route.backend.release_other_servers().await;
     if let Err(e) = crate::supervisor::spawn_independent(&on_demand.program, &on_demand.args) {
         crate::log::error(&format!("cannot start {name} server {}: {e}", on_demand.program.display()));
         return;
@@ -266,7 +267,11 @@ impl Gateway {
 
     /// Configured order, except that a brain known to be degraded (a local model running on the CPU) goes
     /// last until it recovers: it is still used when nothing else answers.
-    fn ordered_routes(&self) -> Vec<&Arc<Route>> {
+    /// A request whose metadata names a brain ("brain": "local_server") is served by that brain only.
+    fn ordered_routes(&self, request: &ChatRequest) -> Vec<&Arc<Route>> {
+        if let Some(pinned) = request.metadata.get("brain").filter(|b| !b.is_empty()) {
+            return self.routes.iter().filter(|r| r.backend.name == *pinned).collect();
+        }
         let (slow, fast): (Vec<_>, Vec<_>) = self.routes.iter().partition(|r| r.backend.degraded());
         fast.into_iter().chain(slow).collect()
     }
@@ -277,10 +282,12 @@ impl Gateway {
         let started = Instant::now();
         let mut attempts: Vec<Attempt> = Vec::new();
         let mut last_error: Option<BackendError> = None;
-        for route in self.ordered_routes() {
+        for route in self.ordered_routes(request) {
             let name = route.backend.name.clone();
             ensure_on_demand(route).await;
-            {
+            // A pinned brain (benchmarks) is always tried: the comparison must not depend on breaker state.
+            let pinned = request.metadata.get("brain").is_some_and(|b| !b.is_empty());
+            if !pinned {
                 let mut breaker = route.breaker();
                 if !breaker.allow() {
                     let wait = breaker.until_probe_at(Instant::now()).as_secs();
@@ -301,7 +308,7 @@ impl Gateway {
                     return Err(GatewayError::new(ErrorKind::BackendDown, "request deadline exceeded", attempts));
                 }
                 let t0 = Instant::now();
-                match route.backend.chat(request, route.attempt_budget(remaining)).await {
+                match route.backend.chat(request, if pinned { remaining } else { route.attempt_budget(remaining) }).await {
                     Ok(reply) => {
                         route.breaker().record_success();
                         attempts.push(Attempt { backend: name.clone(), ok: true, error_kind: None, message: None, duration_ms: millis(t0), status: Some(200) });
@@ -347,7 +354,7 @@ impl Gateway {
         let deadline = self.deadline(request);
         let mut attempts: Vec<Attempt> = Vec::new();
         let mut last_error: Option<BackendError> = None;
-        for route in self.ordered_routes() {
+        for route in self.ordered_routes(request) {
             let name = route.backend.name.clone();
             ensure_on_demand(route).await;
             if !route.breaker().allow() {

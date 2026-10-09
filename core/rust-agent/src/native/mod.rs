@@ -24,8 +24,9 @@ use crate::config::Config;
 use crate::error::{ErrorCode, ToolErrorInfo};
 use crate::worker::{Metrics, ToolCall, ToolResponse, ToolResult, VerificationInfo};
 
-pub const TOOLS: [&str; 18] = [
+pub const TOOLS: [&str; 19] = [
     "shell.exec",
+    "python.exec",
     "filesystem.read",
     "filesystem.write",
     "filesystem.list",
@@ -157,7 +158,7 @@ impl NativeTools {
             backend: String::new(),
         };
         let verification_mode = match call.tool.as_str() {
-            "shell.exec" => "observe",
+            "shell.exec" | "python.exec" => "observe",
             "filesystem.write" => "self",
             _ => "none",
         };
@@ -198,19 +199,23 @@ impl NativeTools {
     async fn dispatch(&self, call: &ToolCall, cancel: Arc<Notify>) -> Result<Outcome, ToolErrorInfo> {
         let args = &call.args;
         match call.tool.as_str() {
-            "shell.exec" => self.shell_exec(call, cancel).await,
+            "shell.exec" | "python.exec" => self.shell_exec(call, cancel).await,
             "filesystem.read" => {
                 let path = fs::absolute_path(str_arg(args, "path")?)?;
                 let cap = self.filesystem.max_read_bytes;
                 let limit = args.get("max_bytes").and_then(Value::as_u64).map_or(cap, |n| (n as usize).min(cap));
                 let encoding = args.get("encoding").and_then(Value::as_str).map(String::from);
                 let data = blocking(move || fs::read_file(&path, limit, encoding.as_deref())).await?;
+                let content = data["content"].as_str().unwrap_or("");
+                let shown: String = content.chars().take(OBSERVATION_READ_CHARS).collect();
                 let observation = format!(
-                    "{} ({} bytes, {}{})",
+                    "{} ({} bytes, {}{}){}:\n{}",
                     data["path"].as_str().unwrap_or(""),
                     data["size"],
                     data["encoding"].as_str().unwrap_or(""),
-                    if data["truncated"] == true { ", truncated" } else { "" }
+                    if data["truncated"] == true { ", truncated" } else { "" },
+                    if shown.len() < content.len() { format!(", first {OBSERVATION_READ_CHARS} characters") } else { String::new() },
+                    shown
                 );
                 Ok(Outcome { data, checks: vec![], artifacts: vec![], observation, backend: "filesystem" })
             }
@@ -361,10 +366,14 @@ impl NativeTools {
                 let db = self.knowledge_db_query(sql.clone());
                 let (rows, truncated) = db.await.map_err(|e| fs::tool_error(ErrorCode::InvalidArgument, format!("{e:#}")))?;
                 let shown: Vec<String> = rows.iter().take(20).map(|r| r.to_string().chars().take(300).collect()).collect();
+                // Zero is often a wrong filter value ('pdf' for '.pdf', 'Active' for 'active'), not a fact.
+                let all_zero = rows.len() == 1 && rows[0].as_object().is_some_and(|r| r.values().all(|v| v.as_i64() == Some(0)));
+                let hint = "\nIf you expected matches, check the filter values against the schema (ext has the dot: '.pdf'; status 'active') or look at a few sample rows before concluding.";
                 let observation = if rows.is_empty() {
-                    "Query returned no rows.".to_string()
+                    format!("Query returned no rows.{hint}")
                 } else {
-                    format!("{} row(s){}:\n{}", rows.len(), if truncated { " (truncated at 50)" } else { "" }, shown.join("\n"))
+                    let tail = if all_zero { hint } else { "" };
+                    format!("{} row(s){}:\n{}{tail}", rows.len(), if truncated { " (truncated at 50)" } else { "" }, shown.join("\n"))
                 };
                 Ok(Outcome { data: json!({"rows": rows, "truncated": truncated}), checks: vec![], artifacts: vec![], observation, backend: "company-knowledge" })
             }
@@ -496,7 +505,8 @@ impl NativeTools {
 
     async fn shell_exec(&self, call: &ToolCall, cancel: Arc<Notify>) -> Result<Outcome, ToolErrorInfo> {
         let args = &call.args;
-        let command = str_arg(args, "command")?.to_string();
+        let python = call.tool == "python.exec";
+        let command = if python { self.python_command(call)? } else { str_arg(args, "command")?.to_string() };
         let cwd: Option<PathBuf> = match args.get("cwd").and_then(Value::as_str).filter(|c| !c.is_empty()) {
             Some(raw) => {
                 let dir = fs::absolute_path(raw)?;
@@ -539,8 +549,20 @@ impl NativeTools {
             data,
             artifacts: vec![],
             observation,
-            backend: "powershell",
+            backend: if python { "python" } else { "powershell" },
         })
+    }
+
+    /// python.exec: the program is saved as a UTF-8 file and run with the configured Python through the
+    /// same PowerShell runner (timeout, cancellation, process-tree kill, output capture).
+    fn python_command(&self, call: &ToolCall) -> Result<String, ToolErrorInfo> {
+        let code = str_arg(&call.args, "code")?;
+        let dir = std::env::temp_dir().join("lga-python");
+        std::fs::create_dir_all(&dir).map_err(|e| fs::tool_error(ErrorCode::ExecutionFailed, format!("creating {}: {e}", dir.display())))?;
+        let script = dir.join(format!("{}.py", call.request_id.replace(|c: char| !c.is_ascii_alphanumeric() && c != '-', "_")));
+        std::fs::write(&script, code).map_err(|e| fs::tool_error(ErrorCode::ExecutionFailed, format!("writing {}: {e}", script.display())))?;
+        let quote = |s: &str| format!("'{}'", s.replace('\'', "''"));
+        Ok(format!("& {} -X utf8 {}; exit $LASTEXITCODE", quote(self.knowledge.python()), quote(&script.to_string_lossy())))
     }
 }
 
@@ -573,11 +595,25 @@ mod tests {
         assert_eq!(result.data["stdout"].as_str().unwrap().trim(), "hi");
         assert_eq!(result.verification.status, "passed");
         assert_eq!(ok.metrics.backend, "powershell");
+        let table = native.call(&call("shell.exec", json!({"command": "Get-PSDrive C | Select-Object @{Name='Free_GB';Expression={[Math]::Round($_.Free / 1GB, 2)}}"}))).await;
+        assert!(table.result.unwrap().data["stdout"].as_str().unwrap().contains("Free_GB"), "formatted objects reach stdout");
         let failed = native.call(&call("shell.exec", json!({"command": "exit 2"}))).await;
         assert!(failed.is_ok(), "a non-zero exit is an observation, not a tool error");
         assert_eq!(failed.result.unwrap().verification.status, "failed");
         let timeout = native.call(&call("shell.exec", json!({"command": "Start-Sleep 30", "timeout_ms": 1500}))).await;
         assert_eq!(timeout.error.unwrap().code, ErrorCode::Timeout);
+    }
+
+    #[tokio::test]
+    async fn python_exec_runs_programs_and_reports_failures() {
+        let native = tools();
+        let ok = native.call(&call("python.exec", json!({"code": "import json\nprint(json.dumps({'tổng': 125 + 340 + 35}, ensure_ascii=False))"}))).await;
+        let result = ok.result.expect("python ran");
+        assert_eq!(result.data["stdout"].as_str().unwrap().trim(), "{\"tổng\": 500}");
+        assert_eq!(result.verification.status, "passed");
+        assert_eq!(ok.metrics.backend, "python");
+        let failed = native.call(&call("python.exec", json!({"code": "raise SystemExit(3)"}))).await;
+        assert_eq!(failed.result.unwrap().data["exit_code"], 3);
     }
 
     #[tokio::test]

@@ -59,6 +59,15 @@ pub struct Reply {
     pub usage: Option<Value>,
 }
 
+/// Generation settings of a local OpenAI-compatible server.
+#[derive(Debug, Clone, Default)]
+pub struct Generation {
+    pub thinking: bool,
+    pub temperature: Option<f64>,
+    pub top_p: Option<f64>,
+    pub top_k: Option<u32>,
+}
+
 pub struct Backend {
     pub name: String,
     pub base_url: String,
@@ -70,14 +79,43 @@ pub struct Backend {
     last_reload: Mutex<Option<std::time::Instant>>,
     /// Local server only: too slow to be useful until then; the gateway tries the other brains first.
     degraded_until: Mutex<Option<std::time::Instant>>,
+    /// Local server only: thinking mode and sampling.
+    pub generation: Generation,
+    /// Local server only: other llama.cpp routers whose loaded models are unloaded before this server starts
+    /// or when it turns out too slow. Two copies of a 13 GB model do not fit a 16 GB GPU; the driver then
+    /// silently spills into system memory and both run at CPU speed.
+    pub release: Vec<String>,
+    /// Local server only: the gateway started this server itself (its port is in `base_url`), so it may stop
+    /// it when it is degraded; the next request starts it again with the GPU memory free.
+    pub managed: bool,
 }
 
 /// Below this generation speed a local model is (partly) running on the CPU, typically because it was
-/// loaded while another program held the GPU memory. The machine's GPU runs it at ~25 tokens/s.
-const DEGRADED_TOKENS_PER_SECOND: f64 = 8.0;
+/// loaded while another program held the GPU memory. The machine's GPU runs it at ~27 tokens/s and reads
+/// prompts at ~1,900 tokens/s; spilled into system memory it drops to ~6 and ~110.
+const DEGRADED_TOKENS_PER_SECOND: f64 = 15.0;
+const DEGRADED_PROMPT_TOKENS_PER_SECOND: f64 = 500.0;
 /// A degraded model is reloaded at most this often (a reload that cannot do better must not loop), and is
 /// tried after the other brains for this long.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(600);
+
+/// Unload every loaded model of the given llama.cpp routers (`GET /v1/models`, `POST /models/unload`).
+async fn release_servers(client: &reqwest::Client, bases: &[String], name: &str) {
+    for base in bases {
+        let base = base.trim_end_matches('/');
+        let Ok(response) = client.get(format!("{base}/v1/models")).timeout(Duration::from_secs(5)).send().await else { continue };
+        let Ok(listing) = response.json::<Value>().await else { continue };
+        for model in listing["data"].as_array().cloned().unwrap_or_default() {
+            if model.pointer("/status/value").and_then(Value::as_str) != Some("loaded") {
+                continue;
+            }
+            let id = model["id"].as_str().unwrap_or_default().to_string();
+            let unloaded = client.post(format!("{base}/models/unload")).timeout(Duration::from_secs(30))
+                .json(&json!({"model": id})).send().await.is_ok_and(|r| r.status().is_success());
+            crate::log::info(&format!("{name}: unloaded {id} from {base} to free GPU memory ({})", if unloaded { "ok" } else { "failed" }));
+        }
+    }
+}
 
 fn truncate(text: &str) -> String {
     text.chars().take(MAX_ERROR_BODY_CHARS).collect()
@@ -107,7 +145,29 @@ impl Backend {
             client,
             last_reload: Mutex::new(None),
             degraded_until: Mutex::new(None),
+            generation: Generation::default(),
+            release: Vec::new(),
+            managed: false,
         }
+    }
+
+    /// Unload every model the configured other routers hold (best effort, a few seconds at most).
+    pub async fn release_other_servers(&self) {
+        release_servers(&self.client, &self.release, &self.name).await;
+    }
+
+    /// Stop the llama.cpp server this gateway started (matched by its port on the command line).
+    fn stop_managed_server(&self) {
+        let Some(port) = self.base_url.rsplit(':').next().and_then(|p| p.split('/').next()).filter(|p| p.chars().all(|c| c.is_ascii_digit())) else { return };
+        let script = format!(
+            "Get-CimInstance Win32_Process | Where-Object {{ $_.Name -like 'llama*' -and $_.CommandLine -like '*--port {port}*' }} | \
+             ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+        );
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .creation_flags(0x0800_0000)
+            .status();
     }
 
     /// True while a local model is known to be too slow (it timed out or generated far below GPU speed).
@@ -129,6 +189,17 @@ impl Backend {
                 return;
             }
             *last = Some(std::time::Instant::now());
+        }
+        if self.managed {
+            // Our own server: free the GPU and restart it (the next request starts it again on demand).
+            crate::log::warn(&format!("{}: too slow (model not fully on the GPU); restarting it with the GPU freed", self.name));
+            let release = self.release.clone();
+            let client = self.client.clone();
+            let name = self.name.clone();
+            self.stop_managed_server();
+            tokio::spawn(async move { release_servers(&client, &release, &name).await });
+            *self.degraded_until.lock().expect("degraded lock") = None;
+            return;
         }
         let (client, url, model) = (self.client.clone(), format!("{}/models/unload", self.base_url), model.to_string());
         tokio::spawn(async move {
@@ -253,14 +324,33 @@ impl Backend {
             }
         }
         if let Kind::OpenAiServer { .. } = self.kind {
-            // Gemma/Qwen "thinking" doubles the tokens a local GPU must generate for each planner step.
-            payload["chat_template_kwargs"] = json!({"enable_thinking": false});
+            // Thinking off by default: it multiplies the tokens a local GPU must generate for each planner
+            // step. The configuration, or a request's metadata (benchmarks), can turn it on.
+            let meta = |key: &str| request.metadata.get(key).map(String::as_str);
+            let g = &self.generation;
+            let thinking = meta("thinking").map_or(g.thinking, |v| v == "on" || v == "true");
+            payload["chat_template_kwargs"] = json!({"enable_thinking": thinking});
+            payload["max_tokens"] = json!(if thinking { 8192 } else { 3072 });
+            let float = |key: &str, default: Option<f64>| meta(key).and_then(|v| v.parse::<f64>().ok()).or(default);
+            if let Some(t) = float("temperature", g.temperature) {
+                payload["temperature"] = json!(t);
+            }
+            if let Some(p) = float("top_p", g.top_p) {
+                payload["top_p"] = json!(p);
+            }
+            if let Some(k) = meta("top_k").and_then(|v| v.parse::<u32>().ok()).or(g.top_k) {
+                payload["top_k"] = json!(k);
+            }
         }
         if let Kind::Ollama { .. } = self.kind {
             payload["think"] = json!(false);
         }
         if let (Kind::GeminiApi { .. } | Kind::OpenAiServer { .. }, true) = (&self.kind, request.json) {
             payload["response_format"] = json!({"type": "json_object"});
+        }
+        if let (Kind::OpenAiServer { .. }, Some(schema)) = (&self.kind, &request.schema) {
+            // Constrained decoding: the reply cannot leave this shape (tool names from an enum).
+            payload["response_format"] = json!({"type": "json_schema", "json_schema": {"name": "reply", "schema": schema}});
         }
         if !model.is_empty() {
             payload["model"] = json!(model);
@@ -456,7 +546,10 @@ impl Backend {
         let timings = data.get("timings");
         let speed = timings.and_then(|t| t.get("predicted_per_second")).and_then(Value::as_f64);
         let generated = timings.and_then(|t| t.get("predicted_n")).and_then(Value::as_u64).unwrap_or(0);
-        if generated >= 16 && speed.is_some_and(|s| s < DEGRADED_TOKENS_PER_SECOND) {
+        let prompt_speed = timings.and_then(|t| t.get("prompt_per_second")).and_then(Value::as_f64);
+        let prompt_read = timings.and_then(|t| t.get("prompt_n")).and_then(Value::as_u64).unwrap_or(0);
+        let slow_prompt = prompt_read >= 1000 && prompt_speed.is_some_and(|s| s < DEGRADED_PROMPT_TOKENS_PER_SECOND);
+        if slow_prompt || (generated >= 32 && speed.is_some_and(|s| s < DEGRADED_TOKENS_PER_SECOND)) {
             self.reload_if_degraded(&model);
         } else if speed.is_some_and(|s| s >= DEGRADED_TOKENS_PER_SECOND) {
             *self.degraded_until.lock().expect("degraded lock") = None;

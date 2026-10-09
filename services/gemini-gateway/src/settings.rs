@@ -39,6 +39,31 @@ pub struct LocalServerCfg {
     /// "" or "auto": the first model the server lists.
     #[serde(default)]
     pub model: String,
+    /// Program and arguments that start this server when it is down (%VAR% expanded), e.g. llama.cpp's
+    /// server with a fixed context, every layer on the GPU and one slot. Empty: the user runs it.
+    #[serde(default)]
+    pub launch: Vec<String>,
+    /// Longest wait for one answer before the next brain is tried.
+    #[serde(default = "default_local_server_attempt_ms")]
+    pub attempt_timeout_ms: u64,
+    /// Generation settings sent with every request (unset: the server's own defaults). A request can
+    /// override them through its metadata (thinking, temperature, top_p, top_k), which benchmarks use.
+    #[serde(default)]
+    pub thinking: bool,
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub top_p: Option<f64>,
+    #[serde(default)]
+    pub top_k: Option<u32>,
+    /// Other llama.cpp routers (e.g. LlamaApp's, "http://127.0.0.1:9931") whose loaded models are unloaded
+    /// before this server starts or when it runs too slowly: two copies of the model do not fit the GPU.
+    #[serde(default)]
+    pub release: Vec<String>,
+}
+
+fn default_local_server_attempt_ms() -> u64 {
+    90_000
 }
 
 /// The official Gemini API (optional). Used first when the user has saved a key: it is the fastest and

@@ -11,7 +11,7 @@ use lga_core::redact::Redactor;
 use lga_core::secrets::resolve_secret;
 
 use crate::attachments::AttachmentStore;
-use crate::backend::Backend;
+use crate::backend::{Backend, Generation};
 use crate::gateway::{Gateway, Route};
 use crate::resilience::{BackoffPolicy, BreakerSettings, CircuitBreaker};
 use crate::settings::{ms, GatewaySettings};
@@ -55,6 +55,24 @@ fn find_ollama(configured: &str) -> Option<PathBuf> {
         let local = std::env::var("LOCALAPPDATA").ok()?;
         Some(PathBuf::from(local).join("Programs").join("Ollama").join("ollama.exe")).filter(|p| p.is_file())
     })
+}
+
+/// `%NAME%` replaced by the environment variable (left as is when it is not set).
+fn expand_env(value: &str) -> String {
+    let mut out = String::new();
+    let mut rest = value;
+    while let Some(start) = rest.find('%') {
+        let Some(len) = rest[start + 1..].find('%') else { break };
+        let name = &rest[start + 1..start + 1 + len];
+        out.push_str(&rest[..start]);
+        match std::env::var(name) {
+            Ok(v) if !name.is_empty() => out.push_str(&v),
+            _ => out.push_str(&rest[start..start + len + 2]),
+        }
+        rest = &rest[start + len + 2..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn text(path: PathBuf) -> String {
@@ -174,9 +192,22 @@ pub fn assemble(config: &Config, redactor: Arc<Redactor>) -> Result<Assembly> {
     // A local OpenAI-compatible server the user runs (llama.cpp, LM Studio), when configured.
     if !s.local_server.base_url.trim().is_empty() {
         loopback_port(s.local_server.base_url.trim())?;
-        let server = Backend::openai_server("local_server", s.local_server.base_url.trim(), &s.local_server.model, Arc::clone(&store), connect);
+        let mut server = Backend::openai_server("local_server", s.local_server.base_url.trim(), &s.local_server.model, Arc::clone(&store), connect);
+        server.generation = Generation {
+            thinking: s.local_server.thinking,
+            temperature: s.local_server.temperature,
+            top_p: s.local_server.top_p,
+            top_k: s.local_server.top_k,
+        };
+        server.release = s.local_server.release.clone();
+        server.managed = !s.local_server.launch.is_empty();
         // Capped so a stuck local server still leaves time for the other brains.
-        routes.push(Route::new(server, CircuitBreaker::new(breaker), None, ms(0)).with_attempt_timeout(ms(90_000)));
+        let mut route = Route::new(server, CircuitBreaker::new(breaker), None, ms(0))
+            .with_attempt_timeout(ms(s.local_server.attempt_timeout_ms));
+        if let Some((program, args)) = s.local_server.launch.split_first() {
+            route = route.with_on_demand_start(PathBuf::from(expand_env(program)), args.iter().map(|a| expand_env(a)).collect());
+        }
+        routes.push(route);
     }
     // Local model: the agent keeps working when Gemini Web is down or Google throttles the account.
     let l = &s.local;
@@ -212,5 +243,13 @@ mod tests {
         assert_eq!(loopback_port("http://localhost:6969/").unwrap(), "6969");
         assert!(loopback_port("http://10.0.0.5:8083").is_err());
         assert!(loopback_port("http://127.0.0.1").is_err());
+    }
+
+    #[test]
+    fn env_variables_expand_in_launch_paths() {
+        std::env::set_var("LGA_TEST_DIR", "C:/x");
+        assert_eq!(expand_env("%LGA_TEST_DIR%/llama.exe"), "C:/x/llama.exe");
+        assert_eq!(expand_env("%LGA_UNSET_VAR_123%/a"), "%LGA_UNSET_VAR_123%/a");
+        assert_eq!(expand_env("50%"), "50%");
     }
 }
