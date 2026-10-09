@@ -15,6 +15,10 @@ pub struct GatewaySettings {
     pub attachment_max_bytes: usize,
     pub attachment_total_bytes: usize,
     pub attachment_ttl_ms: u64,
+    /// Which brain is tried first: route names in order ("api", "primary", "fallback", "local_server",
+    /// "local"); unlisted routes follow in their default order.
+    #[serde(default)]
+    pub brain_order: Vec<String>,
     pub retry: RetrySettings,
     pub circuit_breaker: BreakerCfg,
     pub primary: PrimaryCfg,

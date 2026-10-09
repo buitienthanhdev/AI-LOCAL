@@ -189,6 +189,33 @@ impl ToolCatalog {
     }
 
     /// Validate planner-supplied arguments. Returns the list of violations (empty = valid).
+    /// Repair the type slips small local models make in otherwise correct arguments, before validation:
+    /// a number where the schema wants a string (AutoCAD handle 80 → "80"), a numeric or boolean string
+    /// where it wants a number or boolean. Only top-level properties with a single declared type change.
+    pub fn coerce_args(&self, name: &str, args: &mut Value) {
+        let Some(spec) = self.specs.get(name) else { return };
+        let (Some(props), Some(values)) = (spec.input_schema.get("properties").and_then(Value::as_object), args.as_object_mut()) else {
+            return;
+        };
+        for (key, value) in values.iter_mut() {
+            let Some(ty) = props.get(key).and_then(|p| p.get("type")).and_then(Value::as_str) else { continue };
+            let fixed = match (ty, &*value) {
+                ("string", Value::Number(n)) => Some(Value::String(n.to_string())),
+                ("integer", Value::String(s)) => s.trim().parse::<i64>().ok().map(Value::from),
+                ("number", Value::String(s)) => s.trim().parse::<f64>().ok().and_then(|f| serde_json::Number::from_f64(f).map(Value::Number)),
+                ("boolean", Value::String(s)) => match s.trim() {
+                    "true" => Some(Value::Bool(true)),
+                    "false" => Some(Value::Bool(false)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(fixed) = fixed {
+                *value = fixed;
+            }
+        }
+    }
+
     pub fn validate_args(&self, name: &str, args: &Value) -> Vec<String> {
         match self.validators.get(name) {
             None => vec![format!("unknown tool {name}")],
@@ -281,6 +308,15 @@ mod tests {
         assert!(c.get("desktop.click").is_some());
         assert!(c.get("task.complete").is_some());
         assert_eq!(c.get("filesystem.write").unwrap().verification, VerificationMode::SelfCheck);
+    }
+
+    #[test]
+    fn coerces_scalar_type_slips() {
+        let c = catalog();
+        let mut args = json!({"x": "10", "y": 20});
+        c.coerce_args("desktop.click", &mut args);
+        assert_eq!(args, json!({"x": 10, "y": 20}));
+        assert!(c.validate_args("desktop.click", &args).is_empty());
     }
 
     #[test]

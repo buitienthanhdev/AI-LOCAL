@@ -175,7 +175,8 @@ pub fn assemble(config: &Config, redactor: Arc<Redactor>) -> Result<Assembly> {
     if !s.local_server.base_url.trim().is_empty() {
         loopback_port(s.local_server.base_url.trim())?;
         let server = Backend::openai_server("local_server", s.local_server.base_url.trim(), &s.local_server.model, Arc::clone(&store), connect);
-        routes.push(Route::new(server, CircuitBreaker::new(breaker), None, ms(0)));
+        // Capped so a stuck local server still leaves time for the other brains.
+        routes.push(Route::new(server, CircuitBreaker::new(breaker), None, ms(0)).with_attempt_timeout(ms(90_000)));
     }
     // Local model: the agent keeps working when Gemini Web is down or Google throttles the account.
     let l = &s.local;
@@ -188,6 +189,8 @@ pub fn assemble(config: &Config, redactor: Arc<Redactor>) -> Result<Assembly> {
         }
         routes.push(route);
     }
+    // A user-chosen order (e.g. the local llama.cpp model first); a stable sort keeps the rest as they are.
+    routes.sort_by_key(|r| s.brain_order.iter().position(|n| *n == r.backend.name).unwrap_or(usize::MAX));
     let gateway = Gateway::new(routes, store, retry, ms(s.request_timeout_ms), ms(s.health_interval_ms));
     Ok(Assembly {
         gateway,

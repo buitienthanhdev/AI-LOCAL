@@ -175,6 +175,46 @@ const MAX_COMPLETION_REJECTIONS: u32 = 2;
 /// Pauses before retrying a planner call that found no brain available.
 const LLM_RETRY_DELAYS: [Duration; 3] = [Duration::from_secs(5), Duration::from_secs(20), Duration::from_secs(45)];
 
+/// Repair the shapes small models give task.complete: `checks` as an object instead of a list, stray
+/// non-object check entries, unknown top-level keys, a non-string summary.
+fn normalize_completion(args: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    if let Some(summary) = args.get("summary") {
+        out.insert("summary".into(), summary.as_str().map_or_else(|| json!(summary.to_string()), |s| json!(s)));
+    }
+    let checks: Vec<Value> = match args.get("checks") {
+        Some(Value::Array(items)) => items.clone(),
+        Some(Value::Object(map)) => map.values().cloned().collect(),
+        _ => Vec::new(),
+    };
+    let checks: Vec<Value> = checks
+        .into_iter()
+        .filter(|c| c.get("tool").and_then(Value::as_str).is_some())
+        .map(|c| {
+            let mut check = serde_json::Map::new();
+            for key in ["tool", "args", "expect"] {
+                if let Some(v) = c.get(key) {
+                    check.insert(key.into(), v.clone());
+                }
+            }
+            check.entry("args").or_insert_with(|| json!({}));
+            Value::Object(check)
+        })
+        .collect();
+    if !checks.is_empty() {
+        out.insert("checks".into(), Value::Array(checks));
+    }
+    for key in ["evidence_steps", "artifacts"] {
+        if let Some(Value::Array(items)) = args.get(key) {
+            let strings: Vec<Value> = items.iter().filter(|v| v.is_string()).cloned().collect();
+            if !strings.is_empty() {
+                out.insert(key.into(), Value::Array(strings));
+            }
+        }
+    }
+    Value::Object(out)
+}
+
 /// Facts about this PC the planner must not guess (user name, real folder locations).
 fn describe_computer() -> String {
     let user = std::env::var("USERNAME").unwrap_or_default();
@@ -432,7 +472,10 @@ impl<'a> TaskRunner<'a> {
             };
             let reply = self.chat_with_retry(record, request).await?;
             match parse_reply(&reply) {
-                Ok(actions) => {
+                Ok(mut actions) => {
+                    for action in &mut actions {
+                        self.rt.catalog.coerce_args(&action.tool, &mut action.args);
+                    }
                     self.notices.clear();
                     self.latest_screenshots.clear();
                     return Ok(Some(actions));
@@ -795,10 +838,17 @@ impl<'a> TaskRunner<'a> {
 
     /// VERIFY: run the planner's completion checks; complete only if all pass.
     async fn verify_completion(&mut self, record: &mut TaskRecord, action: &PlannerAction) -> Result<bool> {
+        let normalized = PlannerAction { args: normalize_completion(&action.args), ..action.clone() };
+        let action = &normalized;
         let violations = self.rt.catalog.validate_args("task.complete", &action.args);
         if !violations.is_empty() {
             self.notices.push(format!("task.complete arguments are invalid: {}", violations.join("; ")));
-            record.consecutive_failures += 1;
+            // Counted like a rejected completion, not as a failed step: finished work must not be
+            // thrown away because the closing call was malformed.
+            self.completion_rejections += 1;
+            if self.completion_rejections > MAX_COMPLETION_REJECTIONS + 1 {
+                record.consecutive_failures += 1;
+            }
             return Ok(false);
         }
         self.set_status(record, TaskStatus::Verifying, None)?;
@@ -842,7 +892,8 @@ impl<'a> TaskRunner<'a> {
                 failures.push(format!("check {i}: {tool} is not a read-only tool; checks must only observe"));
                 continue;
             }
-            let args = check["args"].clone();
+            let mut args = check["args"].clone();
+            self.rt.catalog.coerce_args(tool, &mut args);
             let violations = self.rt.catalog.validate_args(tool, &args);
             if !violations.is_empty() {
                 failures.push(format!("check {i}: invalid args for {tool}: {}", violations.join("; ")));
@@ -924,5 +975,22 @@ impl<'a> TaskRunner<'a> {
         ));
         self.set_status(record, TaskStatus::Planning, Some("completion checks failed"))?;
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_completions_are_normalized() {
+        let raw = json!({"summary": "done", "description": "x",
+            "checks": {"a": {"tool": "autocad.verify_geometry", "args": {"handle": "80"}, "expect": {"matches": true}}, "b": "junk"},
+            "evidence_steps": ["s001", 3]});
+        let n = normalize_completion(&raw);
+        assert_eq!(n["checks"].as_array().unwrap().len(), 1);
+        assert_eq!(n["evidence_steps"], json!(["s001"]));
+        assert!(n.get("description").is_none());
+        assert_eq!(normalize_completion(&json!({"summary": "hi"})), json!({"summary": "hi"}));
     }
 }
