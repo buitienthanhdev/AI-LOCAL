@@ -203,6 +203,15 @@ def double_array(values: Iterable[float], pythoncom: Any = None, client: Any = N
     return client.VARIANT(vt, [float(v) for v in values])
 
 
+def dispatch_array(objects: Iterable[Any], pythoncom: Any = None, client: Any = None) -> Any:
+    """VARIANT(VT_ARRAY | VT_DISPATCH) of COM objects, e.g. the boundary list of Hatch.AppendOuterLoop."""
+    if pythoncom is None:
+        import pythoncom
+    if client is None:
+        from win32com import client
+    return client.VARIANT(pythoncom.VT_ARRAY | pythoncom.VT_DISPATCH, [unwrap(o) for o in objects])
+
+
 def point_variant(point: Mapping[str, Any], pythoncom: Any = None, client: Any = None) -> Any:
     return double_array(point_xyz(point), pythoncom, client)
 

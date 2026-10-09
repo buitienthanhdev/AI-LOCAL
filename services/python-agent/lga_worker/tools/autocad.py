@@ -16,9 +16,10 @@ from pathlib import Path
 from typing import Any
 
 from lga_worker import inventory
-from lga_worker.autocad import geometry
+from lga_worker.autocad import floorplan, geometry
 from lga_worker.autocad.provider import (
     ACAD_IMAGE_NAME,
+    PLAN_LAYERS,
     DXF_HEAD_BYTES,
     PDF_MAGIC,
     AutoCadProvider,
@@ -80,6 +81,10 @@ def _entity_line(entity: Mapping[str, Any]) -> str:
         parts.append(f"text={entity['text']!r} at {_pt(entity['insertion'])} h={_num(entity['height'])}")
     parts.append(f"on layer {entity['layer']}")
     return " ".join(parts)
+
+
+def provider_layers() -> list[tuple[str, int]]:
+    return list(PLAN_LAYERS.values())
 
 
 def _output_path(raw: str, suffix: str) -> Path:
@@ -316,6 +321,35 @@ def register(registry: ToolRegistry) -> None:
         return ToolOutcome(data={"document": document},
                            checks=[Check("zoom_returned", True, f"ZoomExtents completed on {document}")],
                            observation=f"Zoomed {document} to extents.", backend=BACKEND)
+
+    @registry.handler("autocad.draw_floor_plan")
+    async def draw_floor_plan(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        try:
+            plan = floorplan.plan_house(width=args.get("width"), depth=args.get("depth"), area=args.get("area"),
+                                        bedrooms=args.get("bedrooms"), altar=args.get("altar"), study=args.get("study"),
+                                        porch=args.get("porch"))
+        except ValueError as exc:
+            raise ToolError(ErrorCode.INVALID_ARGUMENT, str(exc)) from exc
+        origin = args.get("origin") or {}
+        provider = await _provider(ctx)
+        result = await _sta(ctx, provider, provider.draw_plan, plan, bool(args.get("new_document", True)),
+                            (float(origin.get("x", 0.0)), float(origin.get("y", 0.0))))
+        rooms = [{"name": r.name, "area_m2": round(r.total_area, 2), "width": round(r.width, 2), "depth": round(r.depth, 2)}
+                 for r in plan.rooms if r.kind not in ("corridor", "annex")]
+        counts = result.counts
+        walls_ok = counts.get("wall", 0) == 2 * len(plan.walls)
+        labels_ok = counts.get("text", 0) == len(plan.labels) + 2
+        listing = "; ".join(f"{r['name']} {r['area_m2']:g} m²" for r in rooms)
+        return ToolOutcome(
+            data={"document": result.document, "width": plan.width, "depth": plan.depth, "area_m2": round(plan.area, 2),
+                  "rooms": rooms, "entities": counts, "layers": [name for name, _ in provider_layers()]},
+            checks=[Check("walls_drawn", walls_ok, f"{counts.get('wall', 0)} wall entities for {len(plan.walls)} wall pieces"),
+                    Check("labels_drawn", labels_ok, f"{counts.get('text', 0)} texts for {len(plan.labels)} rooms + title + table")],
+            observation=(f"Drew a complete {plan.width:g} x {plan.depth:g} m house plan ({plan.area:g} m²) in {result.document}: "
+                         f"{listing}. Walls filled, doors with swings, windows, furniture, room labels with areas, "
+                         f"dimensions, title and area table; one undo step (layers KT-*)."),
+            backend=BACKEND,
+        )
 
     @registry.handler("autocad.erase")
     async def erase(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:

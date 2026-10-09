@@ -262,6 +262,86 @@
       },
       "timeout_ms": 30000, "risk_level": "high", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
       "verification": "self", "policy_category": "autocad.destructive"
+    },
+    {
+      "name": "autocad.draw_floor_plan",
+      "description": "Draw a complete, professional single-storey house floor plan (mặt bằng nhà cấp 4) in ONE call: the layout is computed for you (porch, living room, corridor, bedrooms with en-suite bathrooms, shared bathroom, laundry, kitchen-dining, altar room, study, storage as the size allows), walls with real thickness (filled), doors with swing arcs, windows, furniture, room names with areas, dimensions, title and an area table, on layers KT-*. Units are metres. Give width and depth of the footprint (or the area). Use this for ANY request to draw a house / floor plan / mặt bằng instead of drawing walls with lines; afterwards add details with the other autocad.* tools if asked. AutoCAD must be running (autocad.launch). new_document=true (default) draws in a fresh drawing.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "width": {
+            "type": "number",
+            "minimum": 4,
+            "maximum": 60,
+            "description": "footprint width along the street, m"
+          },
+          "depth": {
+            "type": "number",
+            "minimum": 8,
+            "maximum": 80,
+            "description": "footprint depth, m"
+          },
+          "area": {
+            "type": "number",
+            "minimum": 40,
+            "maximum": 3000,
+            "description": "footprint area in m², when width/depth are not both given"
+          },
+          "bedrooms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          },
+          "altar": {
+            "type": "boolean",
+            "description": "phòng thờ (default: from 80 m²)"
+          },
+          "study": {
+            "type": "boolean",
+            "description": "phòng làm việc (default: from 260 m²)"
+          },
+          "porch": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 5,
+            "description": "front porch depth, m"
+          },
+          "new_document": {
+            "type": "boolean",
+            "default": true
+          },
+          "origin": {
+            "$ref": "#/$defs/point"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "document",
+          "rooms"
+        ],
+        "properties": {
+          "document": {
+            "type": "string"
+          },
+          "rooms": {
+            "type": "array"
+          },
+          "area_m2": {
+            "type": "number"
+          }
+        }
+      },
+      "timeout_ms": 300000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "autocad.write"
     }
   ],
   "$defs": {
