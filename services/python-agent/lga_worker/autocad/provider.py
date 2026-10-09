@@ -45,7 +45,7 @@ import psutil
 from lga_common.config import Config
 
 from lga_worker import inventory
-from lga_worker.autocad import com, geometry
+from lga_worker.autocad import com, floorplan, geometry
 from lga_worker.errors import ErrorCode, ToolError
 from lga_worker.sta import StaExecutor
 
@@ -73,6 +73,10 @@ PDF_MEDIA_PREFERENCE = (
 
 NO_DOCUMENT_HINT = "AutoCAD has no active drawing; call autocad.new_document first"
 UNKNOWN_HANDLE = "(unknown)"
+# Layers of a drawn floor plan: role -> (layer name, ACI colour).
+PLAN_LAYERS = {"wall": ("KT-TUONG", 7), "door": ("KT-CUA", 1), "window": ("KT-CUASO", 4), "furniture": ("KT-NOITHAT", 8),
+               "porch": ("KT-HIEN", 2), "text": ("KT-CHU", 2), "dimension": ("KT-KICHTHUOC", 3)}
+PLAN_TEXT_STYLE = "LGA_VN"  # Arial: renders Vietnamese marks, unlike AutoCAD's default txt.shx
 DXF_EXPORT_FORMAT = "dxf"  # lower case: AutoCAD appends it verbatim as the file extension
 DXF_SELECTION_PREFIX = "LGA_DXF_"
 DXF_HEAD_BYTES = 512
@@ -187,6 +191,12 @@ class EraseResult:
     handle: str
     object_name: str
     gone: bool
+
+
+@dataclass
+class PlanResult:
+    document: str
+    counts: dict[str, int]
 
 
 @dataclass
@@ -746,6 +756,101 @@ class AutoCadProvider:
             return str(self._idempotent("read drawing name", lambda: doc.Name, deadline))
 
         return self._guard("zoom extents", run)
+
+    # ------------------------------------------------------------------ whole drawings
+
+    def draw_plan(self, plan: floorplan.Plan, new_document: bool, origin: tuple[float, float], *,
+                  deadline: float) -> PlanResult:
+        """Draw a computed floor plan (walls filled, doors with swings, windows, furniture, labels, dimensions,
+        title, area table) as one undo step, then zoom to it."""
+
+        def run() -> PlanResult:
+            if new_document:
+                self._new_document(None, deadline)
+            app, doc = self._writable_document(deadline)
+            name = str(self._idempotent("read drawing name", lambda: doc.Name, deadline))
+            for layer_name, color in PLAN_LAYERS.values():
+                layer = self._idempotent(f"add layer {layer_name}", lambda n=layer_name: doc.Layers.call("Add", n), deadline)
+                self._idempotent("set layer color", lambda lay=layer, c=color: setattr(lay, "color", c), deadline)
+            style = self._idempotent("add text style", lambda: doc.TextStyles.call("Add", PLAN_TEXT_STYLE), deadline)
+            try:
+                style.call("SetFont", "Arial", False, False, 0, 34)
+            except Exception as exc:  # keeps AutoCAD's default font: still readable, without Vietnamese marks
+                logger.warning("draw_plan: could not set the Arial font: %s", com.describe(exc) if com.is_com_error(exc) else exc)
+            ms = self._idempotent("open model space", lambda: doc.ModelSpace, deadline)
+            ox, oy = origin
+            counts: dict[str, int] = {}
+
+            def pt(x: float, y: float) -> Any:
+                return com.double_array((x + ox, y + oy, 0.0))
+
+            def put(entity: Any, role: str) -> Any:
+                entity.Layer = PLAN_LAYERS[role][0]
+                counts[role] = counts.get(role, 0) + 1
+                return entity
+
+            def shape(s: floorplan.Shape, role: str) -> None:
+                v = s.values
+                if s.kind == "rect":
+                    pl = ms.call("AddLightWeightPolyline", com.double_array(
+                        (v[0] + ox, v[1] + oy, v[2] + ox, v[1] + oy, v[2] + ox, v[3] + oy, v[0] + ox, v[3] + oy)))
+                    pl.Closed = True
+                    put(pl, role)
+                elif s.kind == "line":
+                    put(ms.call("AddLine", pt(v[0], v[1]), pt(v[2], v[3])), role)
+                elif s.kind == "circle":
+                    put(ms.call("AddCircle", pt(v[0], v[1]), float(v[2])), role)
+                elif s.kind == "arc":
+                    put(ms.call("AddArc", pt(v[0], v[1]), float(v[2]), float(v[3]), float(v[4])), role)
+
+            def text(label: floorplan.Label, attach: int, role: str = "text") -> None:
+                mt = ms.call("AddMText", pt(label.x, label.y), 0.0, label.text)
+                mt.StyleName = PLAN_TEXT_STYLE
+                mt.Height = float(label.height)
+                mt.AttachmentPoint = attach
+                mt.InsertionPoint = pt(label.x, label.y)
+                put(mt, role)
+
+            doc.call("StartUndoMark")
+            try:
+                for x0, y0, x1, y1 in plan.walls:
+                    pl = ms.call("AddLightWeightPolyline", com.double_array(
+                        (x0 + ox, y0 + oy, x1 + ox, y0 + oy, x1 + ox, y1 + oy, x0 + ox, y1 + oy)))
+                    pl.Closed = True
+                    put(pl, "wall")
+                    hatch = ms.call("AddHatch", 1, "SOLID", True)  # acHatchPatternTypePreDefined
+                    put(hatch, "wall")
+                    hatch.call("AppendOuterLoop", com.dispatch_array([pl]))
+                    hatch.call("Evaluate")
+                for op in plan.openings:
+                    t = plan.wall_thickness.get((op.orient, round(op.line, 4)), floorplan.INTERIOR_WALL)
+                    for s in floorplan.opening_shapes(op, t):
+                        shape(s, "window" if op.kind == "window" else "door")
+                for s in plan.furniture:
+                    shape(s, "furniture")
+                for s in plan.porch_shapes:
+                    shape(s, "porch")
+                for label in plan.labels:
+                    text(label, 5)  # acAttachmentPointMiddleCenter
+                text(plan.title, 2)  # top centre
+                text(plan.schedule, 1)  # top left
+                for dim in plan.dimensions:
+                    d = put(ms.call("AddDimAligned", pt(*dim.p1), pt(*dim.p2), pt(*dim.text_at)), "dimension")
+                    for prop, value in (("TextStyle", PLAN_TEXT_STYLE), ("TextHeight", plan.text_height),
+                                        ("Arrowhead1Type", 4), ("Arrowhead2Type", 4), ("ArrowheadSize", 0.12),
+                                        ("ExtensionLineExtension", 0.1), ("ExtensionLineOffset", 0.1),
+                                        ("TextGap", 0.05), ("PrimaryUnitsPrecision", 2), ("SuppressTrailingZeros", False),
+                                        ("DecimalSeparator", ",")):
+                        try:
+                            setattr(d, prop, value)
+                        except Exception:  # a property this AutoCAD version lacks: keep its default
+                            pass
+            finally:
+                doc.call("EndUndoMark")
+            self._idempotent("zoom extents", lambda: app.call("ZoomExtents"), deadline)
+            return PlanResult(document=name, counts=counts)
+
+        return self._guard("draw floor plan", run)
 
     # ------------------------------------------------------------------ files
 

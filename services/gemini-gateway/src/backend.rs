@@ -68,12 +68,15 @@ pub struct Backend {
     client: reqwest::Client,
     /// Local server only: when the model was last asked to reload (see `reload_if_degraded`).
     last_reload: Mutex<Option<std::time::Instant>>,
+    /// Local server only: too slow to be useful until then; the gateway tries the other brains first.
+    degraded_until: Mutex<Option<std::time::Instant>>,
 }
 
 /// Below this generation speed a local model is (partly) running on the CPU, typically because it was
 /// loaded while another program held the GPU memory. The machine's GPU runs it at ~25 tokens/s.
 const DEGRADED_TOKENS_PER_SECOND: f64 = 8.0;
-/// A degraded model is reloaded at most this often (a reload that cannot do better must not loop).
+/// A degraded model is reloaded at most this often (a reload that cannot do better must not loop), and is
+/// tried after the other brains for this long.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(600);
 
 fn truncate(text: &str) -> String {
@@ -103,7 +106,13 @@ impl Backend {
             attachments,
             client,
             last_reload: Mutex::new(None),
+            degraded_until: Mutex::new(None),
         }
+    }
+
+    /// True while a local model is known to be too slow (it timed out or generated far below GPU speed).
+    pub fn degraded(&self) -> bool {
+        self.degraded_until.lock().expect("degraded lock").is_some_and(|until| std::time::Instant::now() < until)
     }
 
     /// A local llama.cpp router keeps a model where it was loaded: after loading next to another GPU program
@@ -113,6 +122,7 @@ impl Backend {
         if !matches!(self.kind, Kind::OpenAiServer { .. }) || model.is_empty() {
             return;
         }
+        *self.degraded_until.lock().expect("degraded lock") = Some(std::time::Instant::now() + RELOAD_INTERVAL);
         {
             let mut last = self.last_reload.lock().expect("reload lock");
             if last.is_some_and(|at| at.elapsed() < RELOAD_INTERVAL) {
@@ -448,6 +458,8 @@ impl Backend {
         let generated = timings.and_then(|t| t.get("predicted_n")).and_then(Value::as_u64).unwrap_or(0);
         if generated >= 16 && speed.is_some_and(|s| s < DEGRADED_TOKENS_PER_SECOND) {
             self.reload_if_degraded(&model);
+        } else if speed.is_some_and(|s| s >= DEGRADED_TOKENS_PER_SECOND) {
+            *self.degraded_until.lock().expect("degraded lock") = None;
         }
         let pointer = if matches!(self.kind, Kind::Ollama { .. }) { "/message" } else { "/choices/0/message" };
         let choice = data

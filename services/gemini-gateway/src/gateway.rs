@@ -264,13 +264,20 @@ impl Gateway {
         None
     }
 
+    /// Configured order, except that a brain known to be degraded (a local model running on the CPU) goes
+    /// last until it recovers: it is still used when nothing else answers.
+    fn ordered_routes(&self) -> Vec<&Arc<Route>> {
+        let (slow, fast): (Vec<_>, Vec<_>) = self.routes.iter().partition(|r| r.backend.degraded());
+        fast.into_iter().chain(slow).collect()
+    }
+
     pub async fn chat(&self, request: &ChatRequest) -> Result<ChatResult, GatewayError> {
         self.check_attachments(request)?;
         let deadline = self.deadline(request);
         let started = Instant::now();
         let mut attempts: Vec<Attempt> = Vec::new();
         let mut last_error: Option<BackendError> = None;
-        for route in &self.routes {
+        for route in self.ordered_routes() {
             let name = route.backend.name.clone();
             ensure_on_demand(route).await;
             {
@@ -340,7 +347,7 @@ impl Gateway {
         let deadline = self.deadline(request);
         let mut attempts: Vec<Attempt> = Vec::new();
         let mut last_error: Option<BackendError> = None;
-        for route in &self.routes {
+        for route in self.ordered_routes() {
             let name = route.backend.name.clone();
             ensure_on_demand(route).await;
             if !route.breaker().allow() {

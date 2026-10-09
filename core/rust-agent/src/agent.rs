@@ -880,6 +880,9 @@ impl<'a> TaskRunner<'a> {
             .iter()
             .filter(|s| s.status == StepStatus::Succeeded)
             .filter(|s| self.rt.catalog.get(&s.tool).is_some_and(|spec| spec.changes_state()))
+            // A change the tool verified itself by reading it back (files, AutoCAD entities, whole drawings)
+            // is already proven; only unconfirmed effects (clicks, typing, shell commands) need checks.
+            .filter(|s| s.verification.as_deref() != Some("passed"))
             .map(|s| format!("{} {}", s.step_id, s.tool))
             .collect();
         if checks.is_empty() && !state_changing.is_empty() {
