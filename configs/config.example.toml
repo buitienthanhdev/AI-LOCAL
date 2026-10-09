@@ -141,6 +141,20 @@ attempt_timeout_ms = 60_000
 # "http://127.0.0.1:8081". Tried before Ollama. Empty = not used.
 base_url = ""
 model = "auto"
+# Program + arguments that start this server when it is down (%VAR% expanded); empty = you run it. Example
+# for gemma-4-12B Q8 on a 16 GB GPU (every layer on the GPU, fixed 16K context, one slot):
+# launch = ['%LOCALAPPDATA%\Microsoft\WindowsApps\llama.exe', "serve", "-hf", "ggml-org/gemma-4-12B-it-GGUF:Q8_0",
+#           "--host", "127.0.0.1", "--port", "9940", "-ngl", "99", "-c", "16384", "-np", "1", "--jinja",
+#           "--no-mmproj", "--fit", "off"]
+launch = []
+# Other llama.cpp routers whose loaded models are unloaded before this server starts or when it runs slowly.
+release = []
+# Thinking mode and sampling (unset = the server's defaults). Benchmark them with tests/bench/run_bench.py.
+thinking = false
+# temperature = 1.0
+# top_p = 0.95
+# top_k = 64
+attempt_timeout_ms = 90_000
 
 [gateway.local]
 # Last-resort brain: a local model served by Ollama, used when both Gemini Web backends cannot answer
