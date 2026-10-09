@@ -295,6 +295,47 @@ impl Knowledge {
         Ok((fuse(query, &vector, &fts, &rows, limit), notes))
     }
 
+    /// Text of ANY file on the PC (not only indexed ones), with Company Brain's own extractors run one-shot:
+    /// Word, Excel, PowerPoint, PDF, Markdown/CSV/JSON/text, and images (described), audio and video
+    /// (transcribed) through the local models. Returns the sections as (location, text).
+    pub async fn extract_file(&self, path: &Path, timeout: Duration) -> anyhow::Result<Vec<(String, String)>> {
+        const SCRIPT: &str = "import sys, json\nfrom pathlib import Path\ntry:\n    from brain.extract import extract_segments\n    segs, _ = extract_segments(Path(sys.argv[1]))\n    out = {'segments': [[loc, text] for loc, text in segs]}\nexcept Exception as e:\n    out = {'error': f'{type(e).__name__}: {e}'}\nsys.stdout.write('\\n' + json.dumps(out, ensure_ascii=False) + '\\n')\n";
+        let source = self.root.join(&self.cfg.source_dir);
+        anyhow::ensure!(source.join("brain").join("extract.py").is_file(), "Company Brain not found at {}", source.display());
+        let mut command = tokio::process::Command::new(&self.cfg.python);
+        command
+            .args(["-c", SCRIPT])
+            .arg(path.as_os_str())
+            .current_dir(&source)
+            .env("PYTHONIOENCODING", "utf-8")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        let output = tokio::time::timeout(timeout, command.output())
+            .await
+            .map_err(|_| anyhow::anyhow!("reading the file took longer than {} s", timeout.as_secs()))??;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let line = stdout.lines().rev().find(|l| l.starts_with('{')).ok_or_else(|| {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::anyhow!("the document reader failed: {}", stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("no output"))
+        })?;
+        let parsed: Value = serde_json::from_str(line)?;
+        if let Some(error) = parsed["error"].as_str() {
+            anyhow::bail!("{error}");
+        }
+        Ok(parsed["segments"]
+            .as_array()
+            .map(|segs| {
+                segs.iter()
+                    .filter_map(|s| Some((s[0].as_str()?.to_string(), s[1].as_str()?.to_string())))
+                    .filter(|(_, text)| !text.trim().is_empty())
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
     /// Text of a knowledge document: its indexed passages in order (works for Word, Excel, PDF, images...),
     /// or the file itself for plain-text formats that were not indexed. Accepts a numeric id or a file name.
     pub fn read_document(&self, id_or_name: &str, max_chars: usize) -> anyhow::Result<(i64, String, String, bool)> {

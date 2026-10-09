@@ -1,0 +1,52 @@
+{
+  "category": "documents",
+  "description": "Read any document on the PC, also ones that are not in the company knowledge base.",
+  "tools": [
+    {
+      "name": "document.read",
+      "description": "Read the text of any file by absolute path: Word (.docx), Excel (.xlsx), PowerPoint (.pptx), PDF, Markdown, CSV, JSON, text; images are described and audio/video transcribed by the local models (slow: up to minutes). Sections are labelled ([trang 3], [sheet 'A' · dòng 1–40], [slide 2]...).",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "max_chars": {
+            "type": "integer",
+            "minimum": 500
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          },
+          "sections": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "timeout_ms": 600000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "filesystem.read"
+    }
+  ]
+}

@@ -1,0 +1,76 @@
+{
+  "category": "memory",
+  "description": "Long-term notes about the user that every future task sees (listed under 'Relevant memory').",
+  "tools": [
+    {
+      "name": "memory.remember",
+      "description": "Remember a fact or preference for all future tasks, when the user says to remember something or states a lasting preference (e.g. 'Tôi tên Thành', 'Luôn lưu báo cáo vào D:\\BaoCao'). One self-contained sentence, written in the user's language. Never store passwords or secrets.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "note"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "note": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "added": {
+            "type": "boolean"
+          }
+        }
+      },
+      "timeout_ms": 5000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "possible",
+      "policy_category": "memory"
+    },
+    {
+      "name": "memory.forget",
+      "description": "Forget remembered notes that contain the given text (case-insensitive), when the user asks to forget or corrects something.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "array"
+          }
+        }
+      },
+      "timeout_ms": 5000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "possible",
+      "policy_category": "memory"
+    }
+  ]
+}

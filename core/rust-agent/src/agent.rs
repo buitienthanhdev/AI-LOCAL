@@ -220,7 +220,12 @@ fn describe_computer() -> String {
     let user = std::env::var("USERNAME").unwrap_or_default();
     let computer = std::env::var("COMPUTERNAME").unwrap_or_default();
     let admin = if crate::native::env::is_admin() { "elevated" } else { "normal user rights, not elevated" };
-    let mut out = format!("Windows user: {user} on {computer} ({admin}).\nFolders:\n");
+    let now = chrono::Local::now();
+    let mut out = format!(
+        "Now: {} (UTC{}).\nWindows user: {user} on {computer} ({admin}).\nFolders:\n",
+        now.format("%A %Y-%m-%d %H:%M"),
+        now.format("%:z")
+    );
     for (label, path) in crate::native::env::known_folders() {
         out.push_str(&format!("- {label}: {path}\n"));
     }
