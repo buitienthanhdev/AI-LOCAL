@@ -12,6 +12,8 @@ path = "src/lib.rs"
 anyhow.workspace = true
 async-trait.workspace = true
 base64.workspace = true
+# Company Brain's own Rust core (Vietnamese text normalization shared with its indexer).
+brain_core = { path = "../../services/company-brain/rust/brain_core" }
 encoding_rs.workspace = true
 chrono.workspace = true
 futures.workspace = true

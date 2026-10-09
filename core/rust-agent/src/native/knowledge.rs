@@ -58,6 +58,7 @@ impl Hit {
     }
 }
 
+#[derive(Clone)]
 pub struct Knowledge {
     cfg: KnowledgeCfg,
     db: PathBuf,
@@ -342,12 +343,168 @@ impl Knowledge {
         Ok((file_id, name, text, truncated))
     }
 
-    /// Whether the index is present, and which search branches work right now.
+    /// Whether the index is present, which search branches work right now, and the learning job's state.
     pub async fn status(&self) -> Value {
         let index = self.db.is_file();
         let vectors = self.qdrant_alive().await;
         json!({"ready": index, "base_url": self.db.display().to_string(), "index": index, "vectors": vectors,
-               "source_dir": self.root.join(&self.cfg.source_dir).display().to_string()})
+               "source_dir": self.root.join(&self.cfg.source_dir).display().to_string(), "update": self.update_state()})
+    }
+
+    /// One read-only SELECT over permission-filtered views of the catalog (Company Brain's `sqlbox`): an
+    /// authorizer allows only SELECT, reads through the views and the `norm()` function, so neither writes nor
+    /// direct reads of the underlying tables are possible.
+    pub fn query(&self, sql: &str, max_rows: usize) -> anyhow::Result<(Vec<Value>, bool)> {
+        use rusqlite::functions::FunctionFlags;
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        use rusqlite::types::ValueRef;
+
+        let conn = open_db(&self.db)?;
+        conn.execute_batch(CATALOG_VIEWS)?;
+        conn.create_scalar_function("norm", 1, FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC, |ctx| {
+            Ok(ctx.get::<Option<String>>(0)?.map(|s| brain_core::text::norm(&s)))
+        })?;
+        conn.authorizer(Some(|ctx: AuthContext<'_>| match ctx.action {
+            AuthAction::Select | AuthAction::Function { .. } => Authorization::Allow,
+            // Base tables of the main database may only be read through one of the views.
+            // (A read with no column name reveals no data: SQLite reports it for tables a flattened view
+            // touches. Company Brain's Python sandbox denied it too, which broke every visible_facts query.)
+            AuthAction::Read { column_name, .. }
+                if ctx.database_name == Some("main") && ctx.accessor.is_none() && !column_name.is_empty() =>
+            {
+                Authorization::Deny
+            }
+            AuthAction::Read { .. } => Authorization::Allow,
+            _ => Authorization::Deny,
+        }));
+        let mut stmt = conn.prepare(sql.trim().trim_end_matches(';')).map_err(|e| {
+            anyhow::anyhow!("{e}. Only one SELECT over the visible_* views is allowed (see the tool description).")
+        })?;
+        let columns: Vec<String> = stmt.column_names().iter().map(|c| c.to_string()).collect();
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            if out.len() == max_rows {
+                return Ok((out, true));
+            }
+            let mut object = serde_json::Map::new();
+            for (i, name) in columns.iter().enumerate() {
+                let value = match row.get_ref(i)? {
+                    ValueRef::Null => Value::Null,
+                    ValueRef::Integer(n) => json!(n),
+                    ValueRef::Real(f) => json!(f),
+                    ValueRef::Text(t) => json!(String::from_utf8_lossy(t)),
+                    ValueRef::Blob(b) => json!(format!("<{} bytes>", b.len())),
+                };
+                object.insert(name.clone(), value);
+            }
+            out.push(Value::Object(object));
+        }
+        Ok((out, false))
+    }
+
+    fn update_state_path(&self) -> PathBuf {
+        self.root.join("logs").join("knowledge").join("update.json")
+    }
+
+    /// The learning job's last state: {"running", "started_at", "log", "paths"} (Null when it never ran).
+    pub fn update_state(&self) -> Value {
+        let Ok(text) = std::fs::read_to_string(self.update_state_path()) else { return Value::Null };
+        let mut state: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        let running = state["pid"].as_u64().is_some_and(|pid| process_alive(pid as u32));
+        if let Some(object) = state.as_object_mut() {
+            object.insert("running".into(), json!(running));
+        }
+        state
+    }
+
+    /// Hours since the last learning run started (None when it never ran).
+    pub fn hours_since_update(&self) -> Option<f64> {
+        let started = self.update_state()["started_at"].as_str().map(String::from)?;
+        let at = chrono::DateTime::parse_from_rfc3339(&started).ok()?;
+        Some((chrono::Utc::now() - at.with_timezone(&chrono::Utc)).num_minutes() as f64 / 60.0)
+    }
+
+    /// Learn new and changed documents: Company Brain's own scanner and indexer (`python -m brain scan` then
+    /// `index`) as ONE detached background job that ends by itself. Nothing stays resident.
+    /// `force`: the user asked for it now, so it does not wait for the machine to be idle (Company Brain's
+    /// governor otherwise lets background learning yield to the user).
+    pub fn start_update(&self, paths: &[String], force: bool) -> anyhow::Result<Value> {
+        let state = self.update_state();
+        if state["running"] == true {
+            return Ok(json!({"started": false, "already_running": true, "log": state["log"]}));
+        }
+        let source = self.root.join(&self.cfg.source_dir);
+        anyhow::ensure!(source.join("brain").join("__main__.py").is_file(), "Company Brain not found at {}", source.display());
+        let shell = super::shell::resolve_powershell("pwsh").ok_or_else(|| anyhow::anyhow!("PowerShell not found"))?;
+        let dir = self.root.join("logs").join("knowledge");
+        std::fs::create_dir_all(&dir)?;
+        let log = dir.join(format!("update-{}.log", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+        // PowerShell single-quoted literal; verbatim (\\?\) prefixes from canonicalized paths are dropped,
+        // since PowerShell's file cmdlets do not accept them.
+        let quote = |s: &str| format!("'{}'", s.trim_start_matches(r"\\?\").replace('\'', "''"));
+        let scan_args = if paths.is_empty() { "--all".to_string() } else { paths.iter().map(|p| quote(p)).collect::<Vec<_>>().join(" ") };
+        let python = quote(&self.cfg.python);
+        let script = format!(
+            "$ErrorActionPreference = 'Continue'; $env:PYTHONIOENCODING = 'utf-8'; [Console]::OutputEncoding = [Text.Encoding]::UTF8; Set-Location -LiteralPath {src}; \
+             {force_env}(Get-Process -Id $PID).PriorityClass = 'BelowNormal'; \
+             \"started $(Get-Date -Format o)\" | Out-File -Append -Encoding utf8 {log}; \
+             & {python} -m brain scan {scan_args} *>&1 | Out-File -Append -Encoding utf8 {log}; \
+             & {python} -m brain index *>&1 | Out-File -Append -Encoding utf8 {log}; \
+             \"finished $(Get-Date -Format o)\" | Out-File -Append -Encoding utf8 {log}",
+            src = quote(&source.to_string_lossy()),
+            force_env = if force { "$env:BRAIN_FORCE = '1'; " } else { "" },
+            log = quote(&log.to_string_lossy()),
+        );
+        let encoded = {
+            use base64::Engine;
+            let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+            base64::engine::general_purpose::STANDARD.encode(utf16)
+        };
+        let pid = crate::process::spawn_hidden_console(&shell, &["-NoProfile", "-NonInteractive", "-EncodedCommand", &encoded], &source, &[])?;
+        let state = json!({"pid": pid, "started_at": chrono::Utc::now().to_rfc3339(), "log": log.display().to_string(),
+                           "paths": paths});
+        std::fs::write(self.update_state_path(), serde_json::to_vec_pretty(&state)?)?;
+        Ok(json!({"started": true, "already_running": false, "log": log.display().to_string()}))
+    }
+}
+
+/// Permission-filtered views of the catalog for the local admin (Company Brain's `sqlbox._views`, admin case).
+const CATALOG_VIEWS: &str = "
+CREATE TEMP VIEW visible_files AS SELECT file_id, path, name, ext, size, sha256, fs_created_at, fs_modified_at, fs_owner,
+  doc_author, doc_last_editor, doc_created_at, title, department, project, status, first_seen_at, last_seen_at, tier,
+  version_no, name_key FROM main.files;
+CREATE TEMP VIEW visible_events AS SELECT e.* FROM main.file_events e JOIN visible_files f ON f.file_id = e.file_id;
+CREATE TEMP VIEW visible_versions AS SELECT v.file_id, f.name AS file_name, v.version_no, v.sha256, v.size, v.fs_modified_at,
+  v.editor, v.observed_at, v.diff_added, v.diff_removed, v.diff_summary
+  FROM main.file_versions v JOIN visible_files f ON f.file_id = v.file_id;
+CREATE TEMP VIEW visible_contributions AS SELECT p.name AS person, c.kind, c.weight, c.file_id, f.name AS file_name, c.project,
+  c.department, c.at, c.evidence FROM main.contributions c JOIN main.people p ON p.person_id = c.person_id
+  LEFT JOIN visible_files f ON f.file_id = c.file_id;
+CREATE TEMP VIEW visible_relations AS SELECT a.name AS from_name, a.type AS from_type, r.rel AS relation, b.name AS to_name,
+  b.type AS to_type, r.source_file_id, f.name AS source_file, r.evidence, r.valid_from, r.valid_to, r.confidence
+  FROM main.relations r JOIN main.entities a ON a.entity_id = r.src JOIN main.entities b ON b.entity_id = r.dst
+  LEFT JOIN visible_files f ON f.file_id = r.source_file_id;
+CREATE TEMP VIEW visible_facts AS SELECT x.fact_id, x.subject, x.predicate, x.value, x.unit, x.subject_key, x.predicate_key,
+  x.evidence, x.source_file_id, f.name AS source_name, f.path AS source_path, f.file_id, f.name, f.path, x.author,
+  x.valid_from, x.valid_to, x.confidence, x.status, x.note, x.reviewed_by
+  FROM main.facts x JOIN visible_files f ON f.file_id = x.source_file_id WHERE x.status != 'rejected';
+CREATE TEMP VIEW visible_gaps AS SELECT kind, subject, detail, evidence, status, created_at FROM main.knowledge_gaps;
+";
+
+fn process_alive(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, STILL_ACTIVE};
+    use windows_sys::Win32::System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    // SAFETY: the handle is checked and closed; the exit code is written into a local.
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if handle.is_null() {
+            return false;
+        }
+        let mut code = 0u32;
+        let alive = GetExitCodeProcess(handle, &mut code) != 0 && code == STILL_ACTIVE as u32;
+        CloseHandle(handle);
+        alive
     }
 }
 

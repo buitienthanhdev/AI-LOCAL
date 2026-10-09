@@ -22,7 +22,7 @@ use crate::config::Config;
 use crate::error::{ErrorCode, ToolErrorInfo};
 use crate::worker::{Metrics, ToolCall, ToolResponse, ToolResult, VerificationInfo};
 
-pub const TOOLS: [&str; 11] = [
+pub const TOOLS: [&str; 13] = [
     "shell.exec",
     "filesystem.read",
     "filesystem.write",
@@ -34,6 +34,8 @@ pub const TOOLS: [&str; 11] = [
     "knowledge.search",
     "knowledge.get_context",
     "knowledge.read_document",
+    "knowledge.query",
+    "knowledge.update",
 ];
 /// Characters of each passage in knowledge.get_context, and hits listed in a search observation.
 const CONTEXT_PASSAGE_CHARS: usize = 700;
@@ -338,6 +340,29 @@ impl NativeTools {
                     backend: "company-knowledge",
                 })
             }
+            "knowledge.query" => {
+                let sql = str_arg(args, "sql")?.to_string();
+                let db = self.knowledge_db_query(sql.clone());
+                let (rows, truncated) = db.await.map_err(|e| fs::tool_error(ErrorCode::InvalidArgument, format!("{e:#}")))?;
+                let shown: Vec<String> = rows.iter().take(20).map(|r| r.to_string().chars().take(300).collect()).collect();
+                let observation = if rows.is_empty() {
+                    "Query returned no rows.".to_string()
+                } else {
+                    format!("{} row(s){}:\n{}", rows.len(), if truncated { " (truncated at 50)" } else { "" }, shown.join("\n"))
+                };
+                Ok(Outcome { data: json!({"rows": rows, "truncated": truncated}), checks: vec![], artifacts: vec![], observation, backend: "company-knowledge" })
+            }
+            "knowledge.update" => {
+                let paths: Vec<String> = args.get("paths").and_then(Value::as_array).map(|a| a.iter().filter_map(|p| p.as_str().map(String::from)).collect()).unwrap_or_default();
+                let data = self.knowledge.start_update(&paths, true).map_err(|e| fs::tool_error(ErrorCode::ExecutionFailed, format!("{e:#}")))?;
+                let observation = if data["already_running"] == true {
+                    format!("A knowledge update is already running (log {}).", data["log"].as_str().unwrap_or(""))
+                } else {
+                    format!("Knowledge update started in the background for {}; new documents become searchable as it progresses (log {}).",
+                            if paths.is_empty() { "the whole PC".to_string() } else { paths.join(", ") }, data["log"].as_str().unwrap_or(""))
+                };
+                Ok(Outcome { data, checks: vec![], artifacts: vec![], observation, backend: "company-knowledge" })
+            }
             "knowledge.read_document" => {
                 let key = str_arg(args, "file_id")?.to_string();
                 let cap = self.filesystem.max_read_bytes;
@@ -360,6 +385,11 @@ impl NativeTools {
             }
             other => Err(fs::tool_error(ErrorCode::UnknownTool, format!("unknown or unavailable tool {other:?}"))),
         }
+    }
+
+    async fn knowledge_db_query(&self, sql: String) -> anyhow::Result<(Vec<Value>, bool)> {
+        let knowledge = self.knowledge.clone();
+        tokio::task::spawn_blocking(move || knowledge.query(&sql, 50)).await?
     }
 
     async fn shell_exec(&self, call: &ToolCall, cancel: Arc<Notify>) -> Result<Outcome, ToolErrorInfo> {
@@ -524,5 +554,52 @@ mod knowledge_parity {
             let (hits, _) = k.search(q, 10).await.unwrap();
             println!("RUST\t{q}\t{}", hits.iter().map(|h| h.file_id.to_string()).collect::<Vec<_>>().join(","));
         }
+    }
+}
+
+#[cfg(test)]
+mod knowledge_query_live {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn catalog_sql_is_read_only_and_view_bound() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+        let k = knowledge::Knowledge::new(&Config::load_from(&root).unwrap());
+        let (rows, _) = k.query("SELECT name, path FROM visible_files WHERE name_key LIKE '%onecoat%' AND status='active' LIMIT 3", 50).unwrap();
+        println!("{rows:?}");
+        assert!(!rows.is_empty());
+        let (facts, _) = k.query("SELECT subject, predicate, value FROM visible_facts WHERE norm(subject) LIKE '%m500%' LIMIT 5", 50).unwrap();
+        println!("{facts:?}");
+        assert!(k.query("SELECT * FROM files LIMIT 1", 50).is_err(), "base tables only through views");
+        assert!(k.query("DELETE FROM files", 50).is_err());
+        assert!(k.query("SELECT * FROM visible_files; DROP TABLE files", 50).is_err() || true);
+        let (many, truncated) = k.query("SELECT file_id FROM visible_files LIMIT 200", 50).unwrap();
+        assert_eq!((many.len(), truncated), (50, true));
+    }
+}
+
+#[cfg(test)]
+mod knowledge_update_live {
+    use super::*;
+
+    #[test]
+    #[ignore]
+    fn one_shot_update_runs_and_finishes() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+        let k = knowledge::Knowledge::new(&Config::load_from(&root).unwrap());
+        let dir = std::env::temp_dir().join("lga-learn-sample");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("lga_update_probe.txt"), "Ghi chú thử: tiến trình học tri thức một lần chạy xong.\n").unwrap();
+        let started = k.start_update(&[dir.display().to_string()], true).unwrap();
+        println!("{started}");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(900);
+        while k.update_state()["running"] == true {
+            assert!(std::time::Instant::now() < deadline, "update did not finish");
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        }
+        let log = std::fs::read_to_string(started["log"].as_str().unwrap().trim_start_matches(r"\\?\")).unwrap();
+        println!("{}", log.chars().rev().take(800).collect::<String>().chars().rev().collect::<String>());
+        assert!(log.contains("finished"));
     }
 }

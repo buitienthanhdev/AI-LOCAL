@@ -1,6 +1,7 @@
 """CLI: python -m brain <lệnh>"""
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -102,6 +103,9 @@ def main():
             print(json.dumps(scan(r), ensure_ascii=False), flush=True)
     elif a.cmd == "index":
         from .index import index_all
+        if os.environ.get("BRAIN_FORCE") == "1":  # người dùng yêu cầu học ngay (Trợ lý: knowledge.update) => không nhường máy
+            from . import governor
+            governor.set_force(True)
         print(json.dumps(index_all(progress=lambda m, p=None: print(m, flush=True)), ensure_ascii=False))
     elif a.cmd == "search":
         from .index import search
