@@ -362,6 +362,8 @@ impl<'a> TaskRunner<'a> {
             let Some(actions) = self.plan_next(record).await? else { continue };
             // A reply may hold several independent actions; they run in order and the batch stops at the
             // first one that does not succeed, so the planner always sees that failure next.
+            // Set once this batch ran a read-only step: its results were not visible when the reply was written.
+            let mut read_in_batch = false;
             for action in actions {
                 if self.cancel.is_cancelled() || record.steps.len() as u32 >= max_steps {
                     break;
@@ -386,6 +388,15 @@ impl<'a> TaskRunner<'a> {
                 self.ui.event(RunEvent::Thinking { step_id: &step_id, thought: &action.thought, tool: &action.tool, args: &action.args });
 
                 match action.tool.as_str() {
+                    "task.complete" if read_in_batch => {
+                        // The summary was written before the results of this batch's reads were seen.
+                        self.notices.push(
+                            "Your task.complete came in the same reply as the steps that fetch the answer, so it was \
+                             written before you saw their results. Read the results above, then complete with the real answer."
+                                .into(),
+                        );
+                        break;
+                    }
                     "task.complete" => {
                         if self.verify_completion(record, &action).await? {
                             return Ok(());
@@ -415,6 +426,9 @@ impl<'a> TaskRunner<'a> {
                     _ => {
                         let outcome = self.execute_step(record, &action).await?;
                         let succeeded = outcome.record.status == StepStatus::Succeeded;
+                        if self.rt.catalog.get(&action.tool).is_some_and(|spec| !spec.changes_state()) {
+                            read_in_batch = true;
+                        }
                         self.after_step(record, outcome)?;
                         if record.status.is_terminal() {
                             return Ok(());

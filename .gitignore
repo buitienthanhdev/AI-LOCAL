@@ -55,3 +55,8 @@ desktop.ini
 
 # Local runtime state (built binaries, venvs, browser profile, backend databases)
 runtime/
+
+# Company Brain (services/company-brain): its index, catalog and models are local state; Rust build output
+services/company-brain/data/
+services/company-brain/rust/target/
+services/company-brain/.pytest_cache/

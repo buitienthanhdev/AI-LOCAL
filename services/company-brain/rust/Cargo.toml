@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = ["brain_core", "brain_core_py"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = 1          # giữ symbol để đọc được stack trace khi lỗi, không ảnh hưởng tốc độ
+panic = "unwind"   # PyO3 đổi panic thành exception Python thay vì làm sập tiến trình

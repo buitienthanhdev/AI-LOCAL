@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Company Brain</title>
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--text:#1b1f24;--muted:#667085;--line:#e4e7ec;--accent:#2f6fed;--accent-ink:#fff;--user:#e8efff;--danger:#c4321c}
+@media (prefers-color-scheme:dark){:root{--bg:#111418;--panel:#1a1e24;--text:#e6e8eb;--muted:#9aa3af;--line:#2b313a;--accent:#5b8cff;--accent-ink:#0b1020;--user:#22304d;--danger:#ff7a66}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,"Segoe UI",sans-serif;height:100vh;display:flex;flex-direction:column}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+header h1{font-size:16px;margin:0;font-weight:600}
+nav{display:flex;gap:4px;margin-left:8px}
+nav button{background:none;border:0;color:var(--muted);padding:6px 10px;border-radius:6px;cursor:pointer;font:inherit}
+nav button.on{background:var(--bg);color:var(--text);font-weight:600}
+#who{margin-left:auto;color:var(--muted);font-size:13px}
+main{flex:1;overflow:hidden;display:flex;justify-content:center}
+.view{display:none;width:100%;max-width:860px;flex-direction:column;padding:0 16px}
+.view.on{display:flex}
+#log{flex:1;overflow-y:auto;padding:16px 0}
+.msg{margin:10px 0;padding:10px 14px;border-radius:10px;white-space:pre-wrap;word-wrap:break-word}
+.msg.user{background:var(--user);margin-left:15%}
+.msg.bot{background:var(--panel);border:1px solid var(--line);margin-right:5%}
+.msg.err{color:var(--danger)}
+.src{margin-top:8px;font-size:13px;color:var(--muted)}
+.src a{color:var(--accent);text-decoration:none;display:block}
+.steps{font-size:12px;color:var(--muted);margin-top:6px;font-family:ui-monospace,Consolas,monospace}
+form.bar{display:flex;gap:8px;padding:12px 0 16px}
+input,textarea{flex:1;font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text)}
+button.primary{background:var(--accent);color:var(--accent-ink);border:0;border-radius:8px;padding:0 18px;font:inherit;font-weight:600;cursor:pointer}
+button.primary:disabled{opacity:.5}
+.hit{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:8px 0}
+.hit .meta{font-size:12px;color:var(--muted)}
+.hit .t{font-size:13px;margin-top:4px;white-space:pre-wrap;max-height:6.5em;overflow:hidden}
+.hit a{color:var(--accent);font-weight:600;text-decoration:none}
+#results{overflow-y:auto;flex:1}
+#login{max-width:340px;margin:12vh auto;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:24px;display:none;flex-direction:column;gap:10px}
+#login h2{margin:0 0 6px;font-size:18px}
+#login .err{color:var(--danger);font-size:13px;min-height:1em}
+#admin dl{display:grid;grid-template-columns:max-content 1fr;gap:6px 16px}
+#admin dt{color:var(--muted)}
+.hint{color:var(--muted);font-size:13px}
+.act-box{margin-top:10px;padding:8px 12px;border:1px solid #d69e2e;border-radius:8px;font-size:13px;white-space:normal;word-break:break-all}
+#learn{overflow-y:auto;padding-bottom:24px}
+.lp-head{display:flex;gap:24px;align-items:center;padding:20px 0 8px}
+.lp-big{font-size:52px;font-weight:700;line-height:1;display:flex;flex-direction:column;font-variant-numeric:tabular-nums}
+.lp-big small{font-size:13px;font-weight:400;color:var(--muted);margin-top:4px}
+.lp-meta{flex:1;display:flex;flex-direction:column;gap:8px}
+.lp-bar,.lp-mini{height:12px;border-radius:6px;background:var(--line);overflow:hidden}
+.lp-mini{height:8px;width:120px}
+.lp-bar div,.lp-mini div{height:100%;transition:width .6s}
+.lp-now{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin:8px 0;font-size:13px;word-break:break-all}
+.lp-stack{display:flex;height:30px;border-radius:8px;overflow:hidden;margin:8px 0 12px;background:var(--line)}
+.lp-stack div{height:100%;color:#fff;font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center;white-space:nowrap;overflow:hidden;min-width:2px}
+.lp-dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:8px;vertical-align:middle}
+.attach{display:flex;align-items:center;padding:0 10px;font-size:20px;cursor:pointer;border:1px solid var(--line);border-radius:8px;background:var(--panel)}
+#chips{min-height:0}
+.fb{margin-top:8px;display:flex;gap:6px;align-items:center;font-size:13px;color:var(--muted)}
+.fb button{background:none;border:1px solid var(--line);border-radius:6px;padding:2px 8px;cursor:pointer;color:var(--text)}
+.fb button.on{border-color:var(--accent);background:var(--user)}
+#factBar{display:flex;gap:8px;padding:12px 0}
+#factBar select{font:inherit;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text)}
+#factList{overflow-y:auto;flex:1}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--bg)}
+.badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:12px;border:1px solid var(--line);white-space:nowrap}
+.b-approved{background:#1f9d55;color:#fff;border:0}.b-trusted{border-color:#1f9d55;color:#1f9d55}
+.b-usable{border-color:var(--accent);color:var(--accent)}.b-conflicted{background:var(--danger);color:#fff;border:0}
+.b-superseded{color:var(--muted);text-decoration:line-through}
+td .act button{font-size:12px;margin:2px 2px 0 0;padding:2px 6px;border-radius:5px;border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer}
+</style>
+</head>
+<body>
+<header>
+  <h1>Company Brain</h1>
+  <nav id="tabs">
+    <button data-v="chat" class="on">Hỏi đáp</button>
+    <button data-v="search">Tìm tài liệu</button>
+    <button data-v="facts">Tri thức</button>
+    <button data-v="learn">Tiến độ học</button>
+    <button data-v="memory">Bộ nhớ</button>
+    <button data-v="admin" id="tabAdmin" hidden>Quản trị</button>
+  </nav>
+  <span id="who"></span>
+  <button id="logout" class="primary" style="padding:6px 12px" hidden>Đăng xuất</button>
+</header>
+
+<form id="login">
+  <h2>Đăng nhập</h2>
+  <input id="u" placeholder="Tài khoản" autocomplete="username" required>
+  <input id="p" type="password" placeholder="Mật khẩu" autocomplete="current-password" required>
+  <div class="err" id="lerr"></div>
+  <button class="primary" style="padding:10px">Vào</button>
+</form>
+
+<main id="app" hidden>
+  <section class="view on" id="chat">
+    <div id="log"><div class="msg bot">Xin chào! Hỏi tôi về tài liệu, file, dự án… Ví dụ: “Nguyên nhân M500 tụt nhớt?”, “File công thức M500 ở đâu, ai sửa cuối?”</div></div>
+    <div id="chips" class="hint"></div>
+    <form class="bar" id="askForm">
+      <label class="attach" title="Đính kèm ảnh / audio / video (hoặc dán ảnh bằng Ctrl+V)">📎<input type="file" id="file" multiple accept="image/*,audio/*,video/*" hidden></label>
+      <input id="q" placeholder="Nhập câu hỏi… (có thể đính kèm ảnh, audio, video)" autocomplete="off"><button class="primary" id="askBtn">Gửi</button>
+    </form>
+  </section>
+  <section class="view" id="search">
+    <form class="bar" id="searchForm"><input id="sq" placeholder="Tìm theo ý nghĩa, ví dụ: báo cáo độ nhớt giảm"><button class="primary">Tìm</button></form>
+    <div id="results"></div>
+  </section>
+  <section class="view" id="memory">
+    <p class="hint" style="margin:16px 0 4px">Những điều bot đã tự học từ các lần chat: bài học khi bị sửa sai (👎 hoặc "không phải…"),
+      cách đã làm đúng (👍), cách bạn gọi tên, và lời dặn ("từ giờ…"). Tắt kinh nghiệm nào sai để bot không dùng nữa.</p>
+    <div id="memList" style="overflow-y:auto;flex:1"></div>
+  </section>
+  <section class="view" id="learn">
+    <div class="lp-head">
+      <div class="lp-big"><span id="lpPct">–</span><small>đã học</small></div>
+      <div class="lp-meta">
+        <div id="lpCount" class="hint"></div>
+        <div class="lp-bar"><div id="lpFill"></div></div>
+        <div id="lpState" class="hint"></div>
+      </div>
+    </div>
+    <div class="lp-now" id="lpNow" hidden>
+      <div><span class="hint">Đang học thư mục:</span> <b id="lpDir"></b></div>
+      <div><span class="hint">Tệp:</span> <b id="lpFile"></b></div>
+    </div>
+    <h3>Phân loại tệp <span class="hint">(mỗi màu = tỉ lệ loại tệp trong toàn bộ dữ liệu)</span></h3>
+    <div class="lp-stack" id="lpStack"></div>
+    <div id="lpTypes"></div>
+  </section>
+  <section class="view" id="facts">
+    <div id="factBar">
+      <input id="fq" placeholder="Lọc theo chủ thể/giá trị, vd. M500">
+      <select id="fs"><option value="">Mọi trạng thái</option><option value="conflicted">Mâu thuẫn</option>
+        <option value="approved">Đã duyệt</option><option value="trusted">Tin cậy</option><option value="usable">Dùng được</option>
+        <option value="candidate">Cần kiểm chứng</option><option value="superseded">Đã thay thế</option></select>
+      <button class="primary" id="fgo">Lọc</button>
+    </div>
+    <div id="factList"></div>
+  </section>
+  <section class="view" id="admin">
+    <h3>Trạng thái</h3>
+    <dl id="st"></dl>
+    <p><button class="primary" id="reindex" style="padding:8px 14px">Quét &amp; index lại ngay</button>
+       <button class="primary" id="learnNow" style="padding:8px 14px">Học ngay toàn bộ (không chờ máy rảnh)</button></p>
+    <p class="hint">Tạo tài khoản cho đồng nghiệp trên máy chủ: <code>python -m brain adduser ten --groups rnd</code></p>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+async function api(path, body) {
+  const r = await fetch(path, body ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)} : {});
+  const j = await r.json().catch(() => ({error: "Lỗi " + r.status}));
+  if (!r.ok) throw Object.assign(new Error(j.error || r.status), {status: r.status});
+  return j;
+}
+function fileLink(f) {
+  const a = el("a", null, "📄 " + f.name);
+  a.href = "/api/file/" + f.file_id; a.title = f.path;
+  return a;
+}
+
+let history = [];
+async function boot() {
+  const me = await api("/api/me");
+  if (!me.user) { $("#login").style.display = "flex"; $("#app").hidden = true; return; }
+  $("#login").style.display = "none"; $("#app").hidden = false;
+  $("#who").textContent = me.user;
+  $("#logout").hidden = me.admin && me.user.includes("máy chủ");
+  $("#tabAdmin").hidden = !me.admin; isAdmin = me.admin;
+  $("#q").focus();
+}
+
+$("#login").onsubmit = async e => {
+  e.preventDefault(); $("#lerr").textContent = "";
+  try { await api("/api/login", {username: $("#u").value, password: $("#p").value}); boot(); }
+  catch (err) { $("#lerr").textContent = err.message; }
+};
+$("#logout").onclick = async () => { await api("/api/logout", {}); location.reload(); };
+
+$("#tabs").onclick = e => {
+  const v = e.target.dataset.v; if (!v) return;
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.v === v));
+  document.querySelectorAll(".view").forEach(s => s.classList.toggle("on", s.id === v));
+  if (v === "admin") loadStatus();
+  if (v === "facts") loadFacts();
+  if (v === "learn") loadLearn();
+  if (v === "memory") loadMemory();
+};
+
+// ---- đính kèm ảnh / audio / video ----
+let attached = [];
+function renderChips() {
+  $("#chips").replaceChildren(...attached.map((a, i) => {
+    const c = el("span", null, "📎 " + a.name + " ✕"); c.style.cssText = "cursor:pointer;margin-right:10px";
+    c.onclick = () => { attached.splice(i, 1); renderChips(); }; return c;
+  }));
+}
+function addFile(f) {
+  if (f.size > 15 * 1024 * 1024) return alert(f.name + ": tối đa 15 MB");
+  if (attached.length >= 4) return alert("Tối đa 4 file");
+  const rd = new FileReader();
+  rd.onload = () => {
+    const url = rd.result;
+    attached.push({name: f.name || "anh-dan.png", data: url.slice(url.indexOf(",") + 1),
+                   preview: f.type.startsWith("image/") ? url : null});
+    renderChips();
+  };
+  rd.readAsDataURL(f);
+}
+$("#file").onchange = e => { [...e.target.files].forEach(addFile); e.target.value = ""; };
+document.addEventListener("paste", e => {
+  [...(e.clipboardData?.files || [])].forEach(f => { if (f.type.startsWith("image/")) addFile(new File([f], "anh-dan.png", {type: f.type})); });
+});
+
+$("#askForm").onsubmit = async e => {
+  e.preventDefault();
+  const q = $("#q").value.trim(); if (!q && !attached.length) return;
+  const atts = attached; attached = []; renderChips();
+  $("#q").value = ""; $("#askBtn").disabled = true;
+  const log = $("#log");
+  const um = el("div", "msg user", q);
+  atts.forEach(a => {
+    if (a.preview) { const im = el("img"); im.src = a.preview; im.style.cssText = "max-width:220px;display:block;margin-top:6px;border-radius:6px"; um.append(im); }
+    else um.append(el("div", "hint", "📎 " + a.name));
+  });
+  log.append(um);
+  const bot = el("div", "msg bot", "Đang tìm…"); log.append(bot); log.scrollTop = log.scrollHeight;
+  try {
+    if (atts.length) bot.textContent = "Đang đọc file đính kèm…";
+    const r = await api("/api/ask", {question: q, history, attachments: atts.map(a => ({name: a.name, data: a.data}))});
+    bot.textContent = r.answer;
+    if (r.sources.length) {
+      const s = el("div", "src", "Mở file nguồn:");
+      r.sources.forEach(f => s.append(fileLink(f)));
+      bot.append(s);
+    }
+    if (r.steps.length) bot.append(el("div", "steps", r.steps.join("\n")));
+    (r.actions || []).forEach(a => bot.append(actionBox(a)));
+    bot.append(feedbackBar(r.qa_id));
+    history.push({role: "user", content: q}, {role: "assistant", content: r.answer});
+    history = history.slice(-6);
+  } catch (err) {
+    bot.textContent = err.status === 401 ? "Phiên đăng nhập hết hạn." : "Lỗi: " + err.message;
+    bot.classList.add("err"); if (err.status === 401) boot();
+  }
+  $("#askBtn").disabled = false; log.scrollTop = log.scrollHeight; $("#q").focus();
+};
+
+$("#searchForm").onsubmit = async e => {
+  e.preventDefault();
+  const box = $("#results"); box.replaceChildren(el("p", "hint", "Đang tìm…"));
+  try {
+    const r = await api("/api/search", {query: $("#sq").value});
+    box.replaceChildren();
+    if (!r.hits.length) box.append(el("p", "hint", "Không có kết quả."));
+    const seen = new Set();
+    r.hits.forEach(h => {
+      if (seen.has(h.file_id)) return; seen.add(h.file_id);
+      const d = el("div", "hit"); d.append(fileLink(h));
+      d.append(el("div", "meta", `${h.author || "?"} · sửa ${h.modified_at} · độ khớp ${h.score}\n${h.path}`));
+      d.append(el("div", "t", h.text.split("\n").slice(1).join("\n")));
+      box.append(d);
+    });
+  } catch (err) { box.replaceChildren(el("p", "hint", "Lỗi: " + err.message)); }
+};
+
+function actionBox(a) {
+  // Thao tác file AI đề xuất: chỉ chạy khi người dùng bấm "Thực hiện"
+  const box = el("div", "act-box"); box.append(el("div", null, "⚠ " + a.summary));
+  const row = el("div", "fb"), ok = el("button", null, "✔ Thực hiện"), no = el("button", null, "✖ Hủy");
+  const send = async confirm => {
+    ok.disabled = no.disabled = true;
+    try { const r = await api("/api/action", {id: a.id, confirm}); row.replaceChildren(el("span", null, r.message)); }
+    catch (err) { row.replaceChildren(el("span", null, "Lỗi: " + err.message)); }
+  };
+  ok.onclick = () => send(true); no.onclick = () => send(false);
+  row.append(ok, no); box.append(row);
+  return box;
+}
+
+function feedbackBar(qaId) {
+  const bar = el("div", "fb", "Câu trả lời này:");
+  const mk = (label, rating) => {
+    const b = el("button", null, label);
+    b.onclick = async () => {
+      let comment = null;
+      if (rating === -1) comment = prompt("Sai ở đâu? Câu trả lời đúng là gì? (giúp AI học)") ;
+      await api("/api/feedback", {qa_id: qaId, rating, comment});
+      bar.querySelectorAll("button").forEach(x => x.classList.remove("on")); b.classList.add("on");
+    };
+    return b;
+  };
+  bar.append(mk("👍 Đúng", 1), mk("👎 Sai", -1));
+  return bar;
+}
+
+const STATUS_VI = {approved: "Đã duyệt", trusted: "Tin cậy", usable: "Dùng được", candidate: "Cần kiểm chứng",
+                   conflicted: "Mâu thuẫn", superseded: "Đã thay thế"};
+let isAdmin = false;
+async function loadFacts() {
+  const box = $("#factList"); box.replaceChildren(el("p", "hint", "Đang tải…"));
+  const qs = new URLSearchParams({q: $("#fq").value, status: $("#fs").value});
+  try {
+    const r = await api("/api/facts?" + qs);
+    if (!r.facts.length) return box.replaceChildren(el("p", "hint", "Chưa có tri thức nào (hệ thống trích dần khi máy rảnh)."));
+    const t = el("table"); const head = el("tr");
+    ["Chủ thể", "Quan hệ", "Giá trị", "Hiệu lực", "Tin cậy", "Nguồn", ""].forEach(h => head.append(el("th", null, h)));
+    t.append(head);
+    r.facts.forEach(f => {
+      const tr = el("tr");
+      tr.append(el("td", null, f.subject), el("td", null, f.predicate),
+                el("td", null, f.value + (f.unit ? " " + f.unit : "")),
+                el("td", null, (f.valid_from || "?").slice(0, 10) + " → " + (f.valid_to ? f.valid_to.slice(0, 10) : "nay")));
+      const st = el("td"); st.append(el("span", "badge b-" + f.status, STATUS_VI[f.status] || f.status), el("div", "hint", String(f.confidence)));
+      if (f.note) st.append(el("div", "hint", f.note));
+      tr.append(st);
+      const src = el("td"); src.append(fileLink({file_id: f.source_file_id, name: f.source_name, path: ""}));
+      src.append(el("div", "hint", "“" + (f.evidence || "") + "”")); tr.append(src);
+      const act = el("td"); act.className = "act";
+      if (isAdmin && f.status !== "approved") {
+        const ok = el("button", null, "Duyệt"), no = el("button", null, "Loại");
+        ok.onclick = () => api("/api/facts/review", {fact_id: f.fact_id, action: "approve"}).then(loadFacts);
+        no.onclick = () => api("/api/facts/review", {fact_id: f.fact_id, action: "reject"}).then(loadFacts);
+        act.append(ok, no);
+      }
+      tr.append(act); t.append(tr);
+    });
+    box.replaceChildren(t);
+  } catch (err) { box.replaceChildren(el("p", "hint", "Lỗi: " + err.message)); }
+}
+$("#fgo").onclick = loadFacts;
+$("#fq").onkeydown = e => { if (e.key === "Enter") loadFacts(); };
+
+// ---- Bộ nhớ kinh nghiệm ----
+const MEM_KIND = {lesson: ["Bài học", "b-conflicted"], example: ["Cách làm đúng", "b-trusted"],
+                  alias: ["Cách gọi tên", "b-usable"], preference: ["Lời dặn", "b-approved"]};
+async function loadMemory() {
+  const box = $("#memList"); box.replaceChildren(el("p", "hint", "Đang tải…"));
+  try {
+    const r = await api("/api/memories");
+    if (!r.memories.length) return box.replaceChildren(el("p", "hint", "Chưa học được gì. Hãy chat, bấm 👍/👎, hoặc sửa bot khi nó sai."));
+    const t = el("table"); const hr = el("tr");
+    ["Loại", "Đã học", "Dùng lại", "Từ", ""].forEach(h => hr.append(el("th", null, h))); t.append(hr);
+    r.memories.forEach(m => {
+      const tr = el("tr"); if (!m.active) tr.style.opacity = .45;
+      const [lbl, cls] = MEM_KIND[m.kind] || [m.kind, ""];
+      const k = el("td"); k.append(el("span", "badge " + cls, lbl));
+      const c = el("td"); c.append(el("div", null, m.content), el("div", "hint", "Khi nói: “" + m.trigger + "”"));
+      const btn = el("button", null, m.active ? "Tắt" : "Bật lại");
+      btn.onclick = () => api("/api/memories/toggle", {mem_id: m.mem_id, active: !m.active}).then(loadMemory);
+      const a = el("td"); a.className = "act"; a.append(btn);
+      tr.append(k, c, el("td", null, `${m.uses} lần`), el("td", "hint", `${m.owner || ""}\n${(m.created_at || "").slice(0, 16)}`), a);
+      t.append(tr);
+    });
+    box.replaceChildren(t);
+  } catch (err) { box.replaceChildren(el("p", "hint", "Lỗi: " + err.message)); }
+}
+
+// ---- Tiến độ học ----
+const levelColor = p => p <= 30 ? "#e53e3e" : p <= 70 ? "#d69e2e" : "#38a169";
+const fmtN = n => n.toLocaleString("vi-VN");
+let learnTimer;
+async function loadLearn() {
+  clearTimeout(learnTimer);
+  if (!$("#learn").classList.contains("on")) return;
+  try {
+    const p = await api("/api/progress");
+    const c = levelColor(p.percent);
+    $("#lpPct").textContent = p.percent + "%"; $("#lpPct").style.color = c;
+    $("#lpFill").style.width = p.percent + "%"; $("#lpFill").style.background = c;
+    $("#lpCount").textContent = `${fmtN(p.learned)} / ${fmtN(p.total - p.failed)} tệp đã được mở ra đọc nội dung` +
+      (p.failed ? ` · ${fmtN(p.failed)} tệp lỗi (hỏng/mã hóa) không đọc được` : "");
+    $("#lpState").textContent = p.job.running ? (p.job.force ? "Đang học ngay (không chờ máy rảnh)" : "Đang chạy · ") + " " + (p.job.message || "")
+                                              : "Đang nghỉ · lần chạy cuối: " + (p.job.last_run || "—");
+    const cur = p.job.current_path;
+    $("#lpNow").hidden = !(p.job.running && cur);
+    if (cur) {
+      const i = Math.max(cur.lastIndexOf("\\"), cur.lastIndexOf("/"));
+      $("#lpDir").textContent = cur.slice(0, i); $("#lpFile").textContent = cur.slice(i + 1);
+    }
+    if (p.types) {
+      $("#lpStack").replaceChildren(...p.types.map(t => {
+        const seg = el("div"); seg.style.cssText = `width:${t.share}%;background:${t.color}`;
+        seg.title = `${t.label}: ${fmtN(t.count)} tệp (${t.share}%)`;
+        if (t.share >= 6) seg.textContent = `${t.label} ${t.share}%`;
+        return seg;
+      }));
+      const tb = el("table"); const hr = el("tr");
+      ["Loại tệp", "Số tệp", "Tỉ lệ", "Đã học", ""].forEach(h => hr.append(el("th", null, h))); tb.append(hr);
+      p.types.forEach(t => {
+        const tr = el("tr");
+        const name = el("td"); const dot = el("span", "lp-dot"); dot.style.background = t.color;
+        name.append(dot, t.label, el("div", "hint", Object.entries(t.exts).map(([e, n]) => `${e} ${fmtN(n)}`).join(" · ")));
+        const bar = el("td"); const b = el("div", "lp-mini"); const f = el("div");
+        f.style.cssText = `width:${t.percent}%;background:${levelColor(t.percent)}`; b.append(f); bar.append(b);
+        tr.append(name, el("td", null, fmtN(t.count)), el("td", null, t.share + "%"),
+                  el("td", null, `${fmtN(t.learned)} (${t.percent}%)`), bar);
+        tb.append(tr);
+      });
+      $("#lpTypes").replaceChildren(tb);
+    }
+  } catch (err) { $("#lpState").textContent = "Lỗi: " + err.message; }
+  learnTimer = setTimeout(loadLearn, 3000);
+}
+
+let timer;
+async function loadStatus() {
+  clearTimeout(timer);
+  const s = await api("/api/status");
+  const rows = [["Đang chạy", s.job.running ? "Có" : "Không"], ["Tiến trình", s.job.message],
+                ["Lần chạy cuối", s.job.last_run || "—"], ["Số file", s.catalog.files],
+                ["Đã index", s.catalog.n_indexed], ["File riêng tư (chỉ admin)", s.catalog.private],
+                ["Theo dõi realtime", s.watcher.watching.join(", ")], ["Hàng đợi sự kiện", s.watcher.queued],
+                ["Sự kiện gần nhất", s.watcher.last_event || "—"],
+                ["Tri thức (fact)", Object.entries(s.facts).map(([k, v]) => `${STATUS_VI[k] || k}: ${v}`).join(" · ") || "0"],
+                ["Hỏi đáp đã ghi", `${s.qa.total || 0} (👍 ${s.qa.good || 0} · 👎 ${s.qa.bad || 0})`]];
+  $("#st").replaceChildren(...rows.flatMap(([k, v]) => [el("dt", null, k), el("dd", null, String(v ?? 0))]));
+  if ($("#admin").classList.contains("on")) timer = setTimeout(loadStatus, s.job.running ? 2000 : 10000);
+}
+$("#reindex").onclick = async () => { await api("/api/reindex", {}); loadStatus(); };
+$("#learnNow").onclick = async () => {
+  if (!confirm("Bot sẽ mở và đọc toàn bộ file ngay, GPU chạy liên tục nên máy sẽ nặng. Tiếp tục?")) return;
+  await api("/api/reindex", {force: true}); loadStatus();
+};
+
+boot();
+</script>
+</body>
+</html>

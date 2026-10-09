@@ -1,0 +1,42 @@
+{
+  "at": "2026-10-07T15:55:53",
+  "python": "3.14.6",
+  "catalog_files": 836109,
+  "norm": {
+    "norm_calls": 836109,
+    "norm_s": 0.45,
+    "norm_per_s": 1843823,
+    "telex_calls": 5000,
+    "telex_s": 0.46,
+    "telex_per_s": 10789
+  },
+  "unchanged_check": {
+    "lookups": 20000,
+    "lookup_s": 0.92,
+    "lookups_per_s": 21695,
+    "projected_770k_s": 35.5
+  },
+  "walk": {
+    "root": "C:\\Users\\TIEN THANH",
+    "dirs": 225150,
+    "files_seen": 1314121,
+    "candidates_stat": 665800,
+    "walk_s": 67.9,
+    "files_per_s": 19365
+  },
+  "hash": {
+    "files": 1,
+    "mb": 1,
+    "hash_s": 0.1,
+    "mb_per_s": 17.0,
+    "note": "có thể bị ảnh hưởng bởi cache đĩa"
+  },
+  "events": {
+    "emitted": 2000,
+    "emit_per_s": 55956,
+    "claimed_unique": 1000,
+    "claim_finish_per_s": 16263,
+    "finish_ms_p50": 0.02
+  },
+  "peak_python_mb": 66
+}

@@ -1,0 +1,12 @@
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+
+[project]
+name = "brain_core"
+requires-python = ">=3.10"
+version = "0.1.0"
+
+[tool.maturin]
+module-name = "brain_core"
+features = ["pyo3/extension-module"]

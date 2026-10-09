@@ -14,7 +14,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -55,6 +58,21 @@ class KnowledgeHit:
     def citation(self) -> str:
         where = f"{self.name}" + (f" ({self.loc})" if self.loc else "")
         return where
+
+
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+
+
+def _system_python_env() -> dict[str, str]:
+    """This process's environment without the worker's virtualenv."""
+    env = dict(os.environ)
+    venv = env.pop("VIRTUAL_ENV", None) or sys.prefix
+    for key in ("PYTHONHOME", "PYTHONPATH", "PYTHONEXECUTABLE", "__PYVENV_LAUNCHER__"):
+        env.pop(key, None)
+    prefix = os.path.normcase(os.path.abspath(venv))
+    env["PATH"] = os.pathsep.join(p for p in env.get("PATH", "").split(os.pathsep)
+                                  if p and not os.path.normcase(os.path.abspath(p)).startswith(prefix))
+    return env
 
 
 class KnowledgeProvider:
@@ -112,9 +130,15 @@ class KnowledgeProvider:
                             f"Company Brain not found at {self._source_dir} (set [knowledge] source_dir)")
         logger.info("starting Company Brain knowledge backend: %s -m brain serve (cwd=%s)",
                     self._python, self._source_dir)
-        subprocess.Popen([self._python, "-m", "brain", "serve"], cwd=str(self._source_dir),
+        # Company Brain runs on its own Python (3.14), not this worker's venv: drop the venv from the
+        # environment so "python" resolves to the system interpreter. It must also outlive the worker
+        # (other front-ends use it), so it leaves the worker's kill-on-close job.
+        env = _system_python_env()
+        python = shutil.which(self._python, path=env.get("PATH")) or self._python
+        subprocess.Popen([python, "-m", "brain", "serve"], cwd=str(self._source_dir), env=env,
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP, close_fds=True)
+                         creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB,
+                         close_fds=True)
         deadline = time.monotonic() + self._startup_timeout_s
         while time.monotonic() < deadline:
             if self.is_up():
@@ -137,9 +161,17 @@ class KnowledgeProvider:
         return results[: (limit or self._search_limit)]
 
     def read_document(self, file_id: str, max_bytes: int) -> tuple[str, str]:
-        """Return (text, content_type) for a knowledge document by its file id."""
+        """Return (text, content_type) for a knowledge document by its file id (or, leniently, its file name)."""
         self.ensure_running()
-        request = urllib.request.Request(f"{self._base}/api/file/{urllib.parse.quote(file_id)}", method="GET")
+        if not file_id.strip().isdigit():
+            # Planners sometimes pass the document name they saw in search results instead of its id.
+            wanted = file_id.strip().lower()
+            match = next((h for h in self.search(file_id, None) if h.name.lower() == wanted or h.path.lower() == wanted), None)
+            if match is None:
+                raise ToolError(ErrorCode.NOT_FOUND, f"no knowledge document named {file_id!r}; use a numeric file_id "
+                                                     "from knowledge.search")
+            file_id = match.file_id
+        request =urllib.request.Request(f"{self._base}/api/file/{urllib.parse.quote(file_id)}", method="GET")
         try:
             with self._opener.open(request, timeout=self._request_timeout_s) as response:
                 content_type = response.headers.get("Content-Type", "application/octet-stream")

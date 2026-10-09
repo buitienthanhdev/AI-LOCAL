@@ -1,0 +1,16 @@
+qdrant-client
+python-docx
+openpyxl
+python-pptx
+pypdf
+requests
+numpy
+watchdog
+pillow
+imageio-ffmpeg
+pywebview
+sounddevice
+tkinterdnd2
+pywin32; sys_platform == "win32"
+pytest
+comtypes>=1.4  # Windows UI Automation (điều khiển chuột/bàn phím: gui.py)
