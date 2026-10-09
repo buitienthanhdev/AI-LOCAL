@@ -42,6 +42,8 @@ pub struct ChatRequest {
     pub metadata: HashMap<String, String>,
     /// The caller needs a single JSON object back; backends with a JSON mode use it.
     pub json: bool,
+    /// Optional JSON schema for that object; a local llama.cpp server decodes under it (grammar).
+    pub schema: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]

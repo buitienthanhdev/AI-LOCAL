@@ -125,6 +125,7 @@ fn request(parts: Vec<Part>) -> ChatRequest {
         timeout: None,
         metadata: HashMap::new(),
         json: false,
+        schema: None,
     }
 }
 

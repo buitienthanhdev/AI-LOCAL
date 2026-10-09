@@ -36,7 +36,7 @@ class InFlight:
 
 
 # Contract tools the Rust core executes itself (core/rust-agent/src/native); the worker never sees them.
-CORE_NATIVE_TOOLS = {"shell.exec", "filesystem.read", "filesystem.write", "filesystem.list", "filesystem.stat",
+CORE_NATIVE_TOOLS = {"shell.exec", "python.exec", "filesystem.read", "filesystem.write", "filesystem.list", "filesystem.stat",
                      "system.environment", "system.open", "knowledge.status", "knowledge.search",
                      "knowledge.get_context", "knowledge.read_document", "knowledge.query", "knowledge.update",
                      "web.search", "web.fetch", "document.read", "memory.remember", "memory.forget"}

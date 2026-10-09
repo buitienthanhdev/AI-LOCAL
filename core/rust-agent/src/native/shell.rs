@@ -157,11 +157,17 @@ async fn pump(mut stream: impl tokio::io::AsyncRead + Unpin, limit: usize) -> (V
 /// were reported on stderr (e.g. "access denied" on a few folders during a recursive search) do not turn a
 /// useful result into a failure. Without this, `powershell -Command` exits 1 whenever any error record
 /// was written, even with `-ErrorAction SilentlyContinue`.
+///
+/// The output goes through `Out-String` inside the script: PowerShell formats objects (tables from
+/// Select-Object, Get-PSDrive...) lazily at the very end, and an `exit` makes it drop that pending output,
+/// so the planner saw an empty stdout and guessed the numbers.
 fn wrap_script(script: &str) -> String {
     format!(
         "{UTF8_PREAMBLE}$global:LASTEXITCODE = 0
 try {{
+. {{
 {script}
+}} | Out-String -Stream -Width 4096
 }} catch {{ [Console]::Error.WriteLine(($_ | Out-String)); exit 1 }}
 if ($LASTEXITCODE -is [int]) {{ exit $LASTEXITCODE }} else {{ exit 0 }}
 "

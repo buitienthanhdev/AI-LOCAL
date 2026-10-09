@@ -48,6 +48,8 @@ pub struct ChatRequest {
     pub metadata: HashMap<String, String>,
     /// The reply must be one JSON object (backends that support it are put in JSON mode).
     pub json: bool,
+    /// JSON schema the reply must follow; backends with constrained decoding (llama.cpp) enforce it.
+    pub schema: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -113,13 +115,27 @@ pub struct GatewayProvider {
     api_key: String,
 }
 
+/// Environment variables a benchmark sets to pin the brain and its generation settings
+/// (LGA_BRAIN=local_server, LGA_THINKING=on, LGA_TEMPERATURE=1.0, LGA_TOP_P=0.95, LGA_TOP_K=64).
+const BENCHMARK_KNOBS: [(&str, &str); 5] =
+    [("LGA_BRAIN", "brain"), ("LGA_THINKING", "thinking"), ("LGA_TEMPERATURE", "temperature"), ("LGA_TOP_P", "top_p"), ("LGA_TOP_K", "top_k")];
+
 fn request_body(request: &ChatRequest) -> Value {
+    let mut metadata = request.metadata.clone();
+    for (var, key) in BENCHMARK_KNOBS {
+        if let Ok(value) = std::env::var(var) {
+            if !value.trim().is_empty() {
+                metadata.insert(key.to_string(), value.trim().to_string());
+            }
+        }
+    }
     json!({
         "messages": request.messages,
         "model": request.model,
         "timeout_ms": request.timeout.as_millis() as u64,
-        "metadata": request.metadata,
+        "metadata": metadata,
         "response_format": if request.json { "json" } else { "text" },
+        "response_schema": request.schema,
     })
 }
 
