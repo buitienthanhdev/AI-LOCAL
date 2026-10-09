@@ -1,5 +1,6 @@
-//! Tools the core executes itself, in Rust, without the Python worker: `shell.exec`, `filesystem.*` and
-//! `system.environment` (contract: tools/system.json). They never touch UI Automation.
+//! Tools the core executes itself, in Rust, without the Python worker: `shell.exec`, `filesystem.*`,
+//! `system.*` (contract: tools/system.json), company knowledge (tools/knowledge.json), the web, documents
+//! and the user's notes (tools/web.json, tools/memory.json). They never touch UI Automation.
 //!
 //! `WorkerClient::call` routes these here; callers see the same `ToolResponse` envelope, error codes and
 //! verification semantics as for worker tools.
@@ -8,6 +9,7 @@ pub mod env;
 pub mod fs;
 pub mod knowledge;
 pub mod shell;
+pub mod web;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -22,7 +24,7 @@ use crate::config::Config;
 use crate::error::{ErrorCode, ToolErrorInfo};
 use crate::worker::{Metrics, ToolCall, ToolResponse, ToolResult, VerificationInfo};
 
-pub const TOOLS: [&str; 13] = [
+pub const TOOLS: [&str; 18] = [
     "shell.exec",
     "filesystem.read",
     "filesystem.write",
@@ -36,7 +38,17 @@ pub const TOOLS: [&str; 13] = [
     "knowledge.read_document",
     "knowledge.query",
     "knowledge.update",
+    "web.search",
+    "web.fetch",
+    "document.read",
+    "memory.remember",
+    "memory.forget",
 ];
+/// Default and largest number of characters returned by web.fetch / document.read.
+const DEFAULT_READ_CHARS: usize = 30_000;
+const MAX_READ_CHARS: usize = 200_000;
+/// Characters of a fetched page or document shown to the planner in the observation.
+const OBSERVATION_READ_CHARS: usize = 8000;
 /// Characters of each passage in knowledge.get_context, and hits listed in a search observation.
 const CONTEXT_PASSAGE_CHARS: usize = 700;
 const OBSERVATION_HITS: usize = 8;
@@ -89,6 +101,8 @@ pub struct NativeTools {
     chrome_path: String,
     prog_id: String,
     knowledge: knowledge::Knowledge,
+    web: web::Web,
+    memory: crate::memory::Memory,
     in_flight: Mutex<HashMap<String, Arc<Notify>>>,
 }
 
@@ -109,6 +123,8 @@ impl NativeTools {
             chrome_path: config.browser.chrome_path.clone(),
             prog_id: config.autocad.prog_id.clone(),
             knowledge: knowledge::Knowledge::new(config),
+            web: web::Web::new(),
+            memory: crate::memory::Memory::open(&config.path(&config.memory.persistent_db), crate::redact::Redactor::new())?,
             in_flight: Mutex::new(HashMap::new()),
         })
     }
@@ -382,6 +398,92 @@ impl NativeTools {
                     artifacts: vec![],
                     backend: "company-knowledge",
                 })
+            }
+            "web.search" => {
+                let query = str_arg(args, "query")?.trim().to_string();
+                let limit = args.get("limit").and_then(Value::as_u64).map_or(8, |n| (n as usize).clamp(1, 20));
+                let results = self.web.search(&query, limit).await.map_err(|e| fs::tool_error(ErrorCode::BackendUnavailable, format!("web search: {e:#}")))?;
+                let listing: Vec<String> = results.iter().enumerate().map(|(i, r)| format!("[{}] {}
+    {}
+    {}", i + 1, r.title, r.url, r.snippet)).collect();
+                let observation = if results.is_empty() {
+                    format!("No web results for {query:?}; try other words.")
+                } else {
+                    format!("{} web result(s) for {query:?}:
+{}", results.len(), listing.join("
+"))
+                };
+                let data = json!({"query": query, "results": results.iter().map(web::SearchResult::to_json).collect::<Vec<_>>()});
+                Ok(Outcome { data, checks: vec![], artifacts: vec![], observation, backend: "web" })
+            }
+            "web.fetch" => {
+                let url = str_arg(args, "url")?.trim().to_string();
+                let max = args.get("max_chars").and_then(Value::as_u64).map_or(DEFAULT_READ_CHARS, |n| (n as usize).clamp(500, MAX_READ_CHARS));
+                let page = self.web.fetch(&url, max).await.map_err(|e| fs::tool_error(ErrorCode::ExecutionFailed, format!("{url}: {e:#}")))?;
+                let observation = format!(
+                    "{} <{}>, {} characters{}:
+{}",
+                    if page.title.is_empty() { "Page" } else { &page.title },
+                    page.url,
+                    page.text.chars().count(),
+                    if page.truncated { ", truncated" } else { "" },
+                    page.text.chars().take(OBSERVATION_READ_CHARS).collect::<String>()
+                );
+                let data = json!({"url": page.url, "title": page.title, "text": page.text, "truncated": page.truncated});
+                Ok(Outcome { data, checks: vec![], artifacts: vec![], observation, backend: "web" })
+            }
+            "document.read" => {
+                let path = fs::absolute_path(str_arg(args, "path")?)?;
+                if !path.is_file() {
+                    return Err(fs::tool_error(ErrorCode::NotFound, format!("not found: {}", path.display())));
+                }
+                let max = args.get("max_chars").and_then(Value::as_u64).map_or(DEFAULT_READ_CHARS, |n| (n as usize).clamp(500, MAX_READ_CHARS));
+                let segments = self
+                    .knowledge
+                    .extract_file(&path, call.timeout)
+                    .await
+                    .map_err(|e| fs::tool_error(ErrorCode::ExecutionFailed, format!("{}: {e:#}", path.display())))?;
+                let full = segments
+                    .iter()
+                    .map(|(loc, text)| if loc.is_empty() || loc.starts_with("đầu") { text.clone() } else { format!("[{loc}]
+{text}") })
+                    .collect::<Vec<_>>()
+                    .join("
+
+");
+                let truncated = full.chars().count() > max;
+                let content: String = if truncated { full.chars().take(max).collect() } else { full };
+                let observation = if content.is_empty() {
+                    format!("{}: no text found in this file.", path.display())
+                } else {
+                    format!(
+                        "{}, {} section(s), {} characters{}:
+{}",
+                        path.display(),
+                        segments.len(),
+                        content.chars().count(),
+                        if truncated { ", truncated" } else { "" },
+                        content.chars().take(OBSERVATION_READ_CHARS).collect::<String>()
+                    )
+                };
+                let data = json!({"path": path.display().to_string(), "content": content, "sections": segments.len(), "truncated": truncated});
+                Ok(Outcome { data, checks: vec![], artifacts: vec![], observation, backend: "company-knowledge" })
+            }
+            "memory.remember" => {
+                let note = str_arg(args, "note")?;
+                let added = self.memory.remember(note).map_err(|e| fs::tool_error(ErrorCode::InvalidArgument, format!("{e:#}")))?;
+                let observation = if added { format!("Remembered: {note}") } else { format!("Already remembered: {note}") };
+                Ok(Outcome { data: json!({"note": note, "added": added}), checks: vec![], artifacts: vec![], observation, backend: "memory" })
+            }
+            "memory.forget" => {
+                let text = str_arg(args, "text")?;
+                let removed = self.memory.forget(text).map_err(|e| fs::tool_error(ErrorCode::InvalidArgument, format!("{e:#}")))?;
+                let observation = if removed.is_empty() {
+                    format!("No remembered note contains {text:?}.")
+                } else {
+                    format!("Forgot {} note(s): {}", removed.len(), removed.join(" | "))
+                };
+                Ok(Outcome { data: json!({"removed": removed}), checks: vec![], artifacts: vec![], observation, backend: "memory" })
             }
             other => Err(fs::tool_error(ErrorCode::UnknownTool, format!("unknown or unavailable tool {other:?}"))),
         }

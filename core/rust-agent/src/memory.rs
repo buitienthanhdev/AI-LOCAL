@@ -4,7 +4,8 @@
 //! * short-term: the planner's sliding window of recent steps (in `agent.rs`, never persisted here);
 //! * task memory: the task record in `memory/tasks/<id>.json` (`state.rs`);
 //! * persistent memory: this database: task history, successful procedures, known application
-//!   state, failure patterns and the recovery that worked.
+//!   state, failure patterns and the recovery that worked, and the notes the user asked the agent to
+//!   remember (preferences, facts about them), which every planner prompt carries.
 //! Everything is redacted before it is stored; secrets are never written.
 
 use std::collections::HashSet;
@@ -36,7 +37,12 @@ CREATE TABLE IF NOT EXISTS app_state (
     app TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL,
     PRIMARY KEY (app, key)
 );
+CREATE TABLE IF NOT EXISTS user_notes (
+    id INTEGER PRIMARY KEY, note TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
+);
 "#;
+/// Notes carried in every planner prompt (newest first).
+const MAX_PROMPT_NOTES: usize = 40;
 const MAX_STORED_TEXT: usize = 4000;
 const MIN_KEYWORD_CHARS: usize = 3;
 
@@ -61,15 +67,21 @@ pub struct Recall {
     pub procedures: Vec<Procedure>,
     pub failures: Vec<FailurePattern>,
     pub app_state: Vec<(String, String, String)>,
+    /// What the user asked to be remembered (always included, not ranked).
+    pub notes: Vec<String>,
 }
 
 impl Recall {
     pub fn is_empty(&self) -> bool {
-        self.procedures.is_empty() && self.failures.is_empty() && self.app_state.is_empty()
+        self.procedures.is_empty() && self.failures.is_empty() && self.app_state.is_empty() && self.notes.is_empty()
     }
 
     pub fn render(&self) -> String {
         let mut out = String::new();
+        for note in &self.notes {
+            out.push_str(&format!("- The user asked you to remember: {note}
+"));
+        }
         for p in &self.procedures {
             out.push_str(&format!("- Procedure that worked ({}x) for \"{}\": {}\n", p.success_count, p.goal, p.steps));
         }
@@ -180,6 +192,45 @@ impl Memory {
             .optional()?)
     }
 
+    /// Remember a note for future tasks. Returns false when the same note is already stored.
+    pub fn remember(&self, note: &str) -> Result<bool> {
+        let note = self.clean(note.trim());
+        anyhow::ensure!(!note.is_empty(), "the note is empty");
+        let added = self.conn()?.execute(
+            "INSERT INTO user_notes (note, created_at) VALUES (?1, ?2) ON CONFLICT(note) DO NOTHING",
+            params![note, Utc::now().to_rfc3339()],
+        )?;
+        Ok(added > 0)
+    }
+
+    /// Forget every note containing `text` (case-insensitive). Returns the removed notes.
+    pub fn forget(&self, text: &str) -> Result<Vec<String>> {
+        let needle = text.trim().to_lowercase();
+        anyhow::ensure!(!needle.is_empty(), "say which note to forget");
+        let conn = self.conn()?;
+        let matching: Vec<(i64, String)> = conn
+            .prepare("SELECT id, note FROM user_notes")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .filter_map(|r| r.ok())
+            .filter(|(_, note): &(i64, String)| note.to_lowercase().contains(&needle))
+            .collect();
+        for (id, _) in &matching {
+            conn.execute("DELETE FROM user_notes WHERE id = ?1", params![id])?;
+        }
+        Ok(matching.into_iter().map(|(_, note)| note).collect())
+    }
+
+    /// Remembered notes, newest first.
+    pub fn notes(&self, limit: usize) -> Result<Vec<String>> {
+        let conn = self.conn()?;
+        let notes = conn
+            .prepare("SELECT note FROM user_notes ORDER BY id DESC LIMIT ?1")?
+            .query_map(params![limit as i64], |r| r.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        Ok(notes)
+    }
+
     /// Items relevant to `goal`, ranked by keyword overlap.
     pub fn recall(&self, goal: &str, limit: usize) -> Result<Recall> {
         let wanted: HashSet<String> = keywords(goal).into_iter().collect();
@@ -222,10 +273,12 @@ impl Memory {
             .take(limit)
             .collect();
 
+        drop(conn);
         Ok(Recall {
             procedures: procedures.into_iter().take(limit).map(|(_, p)| p).collect(),
             failures: failures.into_iter().take(limit).map(|(_, f)| f).collect(),
             app_state,
+            notes: self.notes(MAX_PROMPT_NOTES)?,
         })
     }
 }
@@ -249,5 +302,19 @@ mod tests {
         let stored = m.app_state("autocad", "last_drawing").unwrap().unwrap();
         assert!(!stored.contains("hunter22"));
         assert_eq!(m.integrity_check().unwrap(), "ok");
+    }
+
+    #[test]
+    fn notes_are_remembered_recalled_and_forgotten() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = Memory::open(&dir.path().join("m.db"), Redactor::new()).unwrap();
+        assert!(m.remember("Tôi thích câu trả lời ngắn gọn").unwrap());
+        assert!(!m.remember("Tôi thích câu trả lời ngắn gọn").unwrap());
+        m.remember("Sếp của tôi tên Hùng").unwrap();
+        let recall = m.recall("việc gì đó không liên quan", 5).unwrap();
+        assert_eq!(recall.notes, vec!["Sếp của tôi tên Hùng", "Tôi thích câu trả lời ngắn gọn"]);
+        assert!(recall.render().contains("remember: Sếp của tôi tên Hùng"));
+        assert_eq!(m.forget("sếp").unwrap(), vec!["Sếp của tôi tên Hùng"]);
+        assert_eq!(m.notes(10).unwrap().len(), 1);
     }
 }

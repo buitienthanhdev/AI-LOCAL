@@ -216,12 +216,14 @@ const TOOLS = {
   "filesystem.stat": "Kiểm tra tệp", "system.environment": "Xem thông tin máy",
   "vision.ocr": "Đọc chữ trên màn hình", "vision.locate": "Tìm vị trí trên màn hình", "vision.describe": "Nhìn và mô tả màn hình",
   "knowledge.search": "Tra cứu tài liệu công ty", "knowledge.get_context": "Tra cứu tài liệu công ty", "knowledge.read_document": "Đọc tài liệu công ty",
+  "knowledge.query": "Tra danh mục tài liệu", "knowledge.update": "Học tài liệu mới", "web.search": "Tìm trên mạng", "web.fetch": "Đọc trang web",
+  "document.read": "Đọc tài liệu", "memory.remember": "Ghi nhớ", "memory.forget": "Quên ghi chú", "system.open": "Mở",
   "autocad.launch": "Mở AutoCAD", "autocad.new_document": "Tạo bản vẽ mới", "autocad.create_circle": "Vẽ hình tròn", "autocad.create_line": "Vẽ đường thẳng",
   "autocad.create_polyline": "Vẽ đa tuyến", "autocad.create_text": "Ghi chữ trong bản vẽ", "autocad.save": "Lưu bản vẽ", "autocad.export_pdf": "Xuất PDF",
   "autocad.export_dxf": "Xuất DXF", "autocad.verify_geometry": "Kiểm tra hình vẽ",
 };
 const AREA = { desktop: "Điều khiển Windows", browser: "Trình duyệt", shell: "PowerShell", filesystem: "Tệp tin", system: "Hệ thống",
-  vision: "Nhìn màn hình", knowledge: "Tri thức công ty", autocad: "AutoCAD" };
+  vision: "Nhìn màn hình", knowledge: "Tri thức công ty", autocad: "AutoCAD", web: "Internet", document: "Tài liệu", memory: "Ghi nhớ" };
 const friendly = tool => TOOLS[tool] || AREA[String(tool).split(".")[0]] || tool;
 const IDEAS = [
   ["📝", "Ghi chú nhanh", "Mở Notepad, viết \"Xin chào\" và lưu vào C:\\temp\\xinchao.txt"],

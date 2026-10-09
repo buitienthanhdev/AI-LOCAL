@@ -66,7 +66,15 @@ pub struct Backend {
     kind: Kind,
     attachments: Arc<AttachmentStore>,
     client: reqwest::Client,
+    /// Local server only: when the model was last asked to reload (see `reload_if_degraded`).
+    last_reload: Mutex<Option<std::time::Instant>>,
 }
+
+/// Below this generation speed a local model is (partly) running on the CPU, typically because it was
+/// loaded while another program held the GPU memory. The machine's GPU runs it at ~25 tokens/s.
+const DEGRADED_TOKENS_PER_SECOND: f64 = 8.0;
+/// A degraded model is reloaded at most this often (a reload that cannot do better must not loop).
+const RELOAD_INTERVAL: Duration = Duration::from_secs(600);
 
 fn truncate(text: &str) -> String {
     text.chars().take(MAX_ERROR_BODY_CHARS).collect()
@@ -94,7 +102,28 @@ impl Backend {
             kind,
             attachments,
             client,
+            last_reload: Mutex::new(None),
         }
+    }
+
+    /// A local llama.cpp router keeps a model where it was loaded: after loading next to another GPU program
+    /// it stays slow (CPU) even once the GPU is free. Ask the router to unload it so the next request loads it
+    /// again with the GPU memory available now. Fire and forget; servers without the endpoint ignore it.
+    fn reload_if_degraded(&self, model: &str) {
+        if !matches!(self.kind, Kind::OpenAiServer { .. }) || model.is_empty() {
+            return;
+        }
+        {
+            let mut last = self.last_reload.lock().expect("reload lock");
+            if last.is_some_and(|at| at.elapsed() < RELOAD_INTERVAL) {
+                return;
+            }
+            *last = Some(std::time::Instant::now());
+        }
+        let (client, url, model) = (self.client.clone(), format!("{}/models/unload", self.base_url), model.to_string());
+        tokio::spawn(async move {
+            let _ = client.post(url).timeout(Duration::from_secs(30)).json(&json!({"model": model})).send().await;
+        });
     }
 
     pub fn primary(name: &str, base_url: &str, default_model: &str, store: Arc<AttachmentStore>, connect: Duration,
@@ -401,10 +430,25 @@ impl Backend {
 
     async fn chat_once(&self, request: &ChatRequest, timeout: Duration) -> Result<Reply, BackendError> {
         let model = self.resolve_model(&request.model);
-        let response = self.post(request, false, timeout).await?;
+        let response = match self.post(request, false, timeout).await {
+            Ok(response) => response,
+            Err(e) => {
+                if e.message.ends_with("request timed out") {
+                    self.reload_if_degraded(&model);
+                }
+                return Err(e);
+            }
+        };
         let text = response.text().await.map_err(|e| self.transport_error(&e))?;
         let data: Value = serde_json::from_str(&text)
             .map_err(|_| BackendError::new(ErrorKind::Transient, format!("{}: response is not JSON", self.name)))?;
+        // llama.cpp reports its speed; enough tokens to measure, yet far too slow => reload on the GPU.
+        let timings = data.get("timings");
+        let speed = timings.and_then(|t| t.get("predicted_per_second")).and_then(Value::as_f64);
+        let generated = timings.and_then(|t| t.get("predicted_n")).and_then(Value::as_u64).unwrap_or(0);
+        if generated >= 16 && speed.is_some_and(|s| s < DEGRADED_TOKENS_PER_SECOND) {
+            self.reload_if_degraded(&model);
+        }
         let pointer = if matches!(self.kind, Kind::Ollama { .. }) { "/message" } else { "/choices/0/message" };
         let choice = data
             .pointer(pointer)

@@ -1,0 +1,93 @@
+{
+  "category": "web",
+  "description": "The internet, read over HTTPS without a browser: up-to-date facts the model cannot know (news, prices, exchange rates, weather, schedules, product and software documentation). Read-only.",
+  "tools": [
+    {
+      "name": "web.search",
+      "description": "Search the web (DuckDuckGo, Bing fallback). Returns titles, URLs and snippets. Then read the best one or two sources with web.fetch before answering; snippets alone are often outdated or partial.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 20
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string"
+          },
+          "results": {
+            "type": "array"
+          }
+        }
+      },
+      "timeout_ms": 30000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "web"
+    },
+    {
+      "name": "web.fetch",
+      "description": "Read a web page (http/https) as plain text: the article or main content, without menus and scripts. For PDFs or other files: download with shell.exec (Invoke-WebRequest -OutFile) then document.read.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "url": {
+            "type": "string",
+            "minLength": 1
+          },
+          "max_chars": {
+            "type": "integer",
+            "minimum": 500
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "timeout_ms": 40000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "web"
+    }
+  ]
+}
