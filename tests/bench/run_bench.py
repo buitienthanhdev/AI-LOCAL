@@ -52,6 +52,13 @@ PROFILES: dict[str, dict[str, str]] = {
                      "LGA_NATIVE_TOOLS": "on"},
     "json-think": {"LGA_BRAIN": "local_server", "LGA_THINKING": "on", "LGA_TEMPERATURE": "1.0", "LGA_TOP_P": "0.95", "LGA_TOP_K": "64",
                    "LGA_NATIVE_TOOLS": "off"},
+    # Ollama cloud models (through the local Ollama daemon; free plan models).
+    "cloud-gptoss": {"LGA_BRAIN": "cloud", "LGA_MODEL": "gpt-oss:120b-cloud", "LGA_THINKING": "on"},
+    "cloud-nemotron": {"LGA_BRAIN": "cloud", "LGA_MODEL": "nemotron-3-ultra:cloud", "LGA_THINKING": "on"},
+    "cloud-gemma31": {"LGA_BRAIN": "cloud", "LGA_MODEL": "gemma4:31b-cloud", "LGA_THINKING": "on"},
+    "cloud-gptoss20": {"LGA_BRAIN": "cloud", "LGA_MODEL": "gpt-oss:20b-cloud", "LGA_THINKING": "on"},
+    "cloud-nemotron-super": {"LGA_BRAIN": "cloud", "LGA_MODEL": "nemotron-3-super:cloud", "LGA_THINKING": "on"},
+    "cloud-nemotron-nano": {"LGA_BRAIN": "cloud", "LGA_MODEL": "nemotron-3-nano:30b-cloud", "LGA_THINKING": "on"},
     # Whatever the gateway's configured brain order picks (local first, cloud fallbacks): the product as shipped.
     "product": {},
 }
