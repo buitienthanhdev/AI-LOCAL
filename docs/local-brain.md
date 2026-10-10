@@ -88,7 +88,23 @@ use (target 100–200), and repeat important tasks to measure stability.
 | 6 tokens/s after every knowledge search | the 2 GB embedding model loaded on the GPU next to the planner | query embeddings on the CPU (`num_gpu 0`, < 1 s) |
 | loops of identical reads | thinking off | thinking on (benchmark) |
 
-## 6. Not done yet
+## 6. Operating applications
+
+* The window the agent works in is brought to the front before every click and keystroke aimed at it, and
+  again if another window took the front meanwhile, so input never lands in a window the person is using.
+  A click at screen coordinates first brings the window under that point to the front.
+* Buttons of modern applications (WPF, WinUI/XAML: Calculator, the new Notepad, Settings...) are pressed
+  through UI Automation Invoke, the Windows counterpart of a DOM click: the pointer does not move. Classic
+  Win32 buttons keep a real click (their Invoke can block while a dialog they open is shown). Text fields are
+  filled with `desktop.set_value` (UIA ValuePattern) when possible. Web pages are driven through the DOM
+  (Chrome DevTools Protocol), never the mouse.
+* While the agent operates applications, a thin always-on-top banner (click-through, never focused) asks the
+  person to keep their hands off and says how to stop it (the Stop button of the chat window). The person's
+  mouse and keyboard are never blocked.
+* A local server without a vision projector receives no screenshots (`vision = false`): the request goes
+  through with a note pointing to the vision.* tools instead of failing.
+
+## 7. Not done yet
 
 * Native tool calling through the Gemma 4 chat template instead of the JSON reply (the gateway also drives
   Gemini, which has no shared tool format here); the JSON schema already removes malformed replies.

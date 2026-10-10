@@ -12,6 +12,7 @@ pub mod llm;
 pub mod retry;
 pub mod policy;
 pub mod audit;
+pub mod banner;
 pub mod memory;
 pub mod state;
 pub mod agent;
