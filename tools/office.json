@@ -1,0 +1,353 @@
+{
+  "category": "office",
+  "description": "Microsoft Office through its own automation: Excel, Word, PowerPoint and Outlook with the user's real documents, open workbooks and mailbox.",
+  "tools": [
+    {
+      "name": "office.excel_read",
+      "description": "Read cells of an Excel workbook through Excel itself (formulas calculated; works on a workbook the user has open). path optional = the active workbook; range like 'A1:D20' (default: the used range); sheet default: the active one. Returns values and formulas.",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sheet": {
+            "type": "string"
+          },
+          "range": {
+            "type": "string"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "office.read"
+    },
+    {
+      "name": "office.excel_write",
+      "description": "Write a block of values starting at a cell in an Excel workbook through Excel (strings starting with '=' are formulas, e.g. '=SUM(B2:B4)'); creates the workbook or sheet when missing; saves by default. Reads the cells back.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "values"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sheet": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string",
+            "default": "A1"
+          },
+          "values": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "array",
+              "items": {}
+            }
+          },
+          "save": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.write"
+    },
+    {
+      "name": "office.word_read",
+      "description": "Read the text of a Word document through Word (also .doc and documents the user has open).",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "office.read"
+    },
+    {
+      "name": "office.word_write",
+      "description": "Edit a Word document through Word and save it: replace texts everywhere (replace: {old: new}), add a heading and/or paragraphs at the end. Creates the document when missing.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "replace": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "heading": {
+            "type": "string"
+          },
+          "append": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.write"
+    },
+    {
+      "name": "office.export_pdf",
+      "description": "Export a Word, Excel or PowerPoint file to PDF with Office itself (exact layout).",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path",
+          "output"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "output": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "(?i)\\.pdf$"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 180000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.write"
+    },
+    {
+      "name": "office.outlook_list",
+      "description": "List e-mails in Outlook (newest first): folder inbox|sent|drafts, count, unread_only, search text (subject, sender, body start). Returns entry_id for office.outlook_read.",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "folder": {
+            "enum": [
+              "inbox",
+              "sent",
+              "drafts"
+            ],
+            "default": "inbox"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 15
+          },
+          "unread_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "search": {
+            "type": "string"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "office.read"
+    },
+    {
+      "name": "office.outlook_read",
+      "description": "Read one e-mail in Outlook by entry_id (from office.outlook_list): sender, recipients, body, attachment names.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "entry_id"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "office.read"
+    },
+    {
+      "name": "office.outlook_draft",
+      "description": "Write an e-mail in Outlook and leave it as a draft opened on screen for the user to check and send. Prefer this to sending unless the user said to send.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "to",
+          "subject",
+          "body"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "to": {
+            "type": "string",
+            "minLength": 1
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cc": {
+            "type": "string"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.write"
+    },
+    {
+      "name": "office.outlook_send",
+      "description": "Send an e-mail through Outlook now (the user is always asked to confirm first). Only when the user explicitly asked to send.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "to",
+          "subject",
+          "body"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "to": {
+            "type": "string",
+            "minLength": 1
+          },
+          "subject": {
+            "type": "string",
+            "minLength": 1
+          },
+          "body": {
+            "type": "string",
+            "minLength": 1
+          },
+          "cc": {
+            "type": "string"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "high",
+      "requires_confirmation": true,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.send"
+    }
+  ]
+}
