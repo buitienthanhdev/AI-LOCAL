@@ -50,6 +50,9 @@ pub struct ChatRequest {
     pub json: bool,
     /// JSON schema the reply must follow; backends with constrained decoding (llama.cpp) enforce it.
     pub schema: Option<Value>,
+    /// The tools offered this turn ({name, description, parameters}); a backend with native tool calling
+    /// uses them instead of the JSON reply and the text catalog (see the gateway's chat API).
+    pub tools: Option<Vec<Value>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -116,9 +119,16 @@ pub struct GatewayProvider {
 }
 
 /// Environment variables a benchmark sets to pin the brain and its generation settings
-/// (LGA_BRAIN=local_server, LGA_THINKING=on, LGA_TEMPERATURE=1.0, LGA_TOP_P=0.95, LGA_TOP_K=64).
-const BENCHMARK_KNOBS: [(&str, &str); 5] =
-    [("LGA_BRAIN", "brain"), ("LGA_THINKING", "thinking"), ("LGA_TEMPERATURE", "temperature"), ("LGA_TOP_P", "top_p"), ("LGA_TOP_K", "top_k")];
+/// (LGA_BRAIN=local_server, LGA_THINKING=on, LGA_TEMPERATURE=1.0, LGA_TOP_P=0.95, LGA_TOP_K=64,
+/// LGA_NATIVE_TOOLS=on).
+const BENCHMARK_KNOBS: [(&str, &str); 6] = [
+    ("LGA_BRAIN", "brain"),
+    ("LGA_THINKING", "thinking"),
+    ("LGA_TEMPERATURE", "temperature"),
+    ("LGA_TOP_P", "top_p"),
+    ("LGA_TOP_K", "top_k"),
+    ("LGA_NATIVE_TOOLS", "native_tools"),
+];
 
 fn request_body(request: &ChatRequest) -> Value {
     let mut metadata = request.metadata.clone();
@@ -136,6 +146,7 @@ fn request_body(request: &ChatRequest) -> Value {
         "metadata": metadata,
         "response_format": if request.json { "json" } else { "text" },
         "response_schema": request.schema,
+        "tools": request.tools,
     })
 }
 

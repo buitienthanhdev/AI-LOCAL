@@ -65,6 +65,8 @@ impl ToolSpec {
 #[derive(Debug, Deserialize)]
 struct ContractFile {
     category: String,
+    #[serde(default)]
+    description: String,
     tools: Vec<ToolSpec>,
     #[serde(default, rename = "$defs")]
     defs: Map<String, Value>,
@@ -72,6 +74,8 @@ struct ContractFile {
 
 pub struct ToolCatalog {
     specs: BTreeMap<String, ToolSpec>,
+    /// One line per tool group (contract file), shown for groups that are not loaded.
+    category_descriptions: BTreeMap<String, String>,
     validators: BTreeMap<String, jsonschema::Validator>,
 }
 
@@ -134,6 +138,12 @@ fn core_tools() -> Vec<ToolSpec> {
                    "properties": {"question": {"type": "string", "minLength": 1}}}),
         ),
         base(
+            "tools.enable",
+            "Load a group listed under 'More tools' (desktop: operate Windows applications; browser: drive web pages; vision: look at the screen; autocad: AutoCAD drawings). Its tools are listed from your next turn on.",
+            json!({"type": "object", "required": ["category"], "additionalProperties": false,
+                   "properties": {"category": {"type": "string", "minLength": 1}}}),
+        ),
+        base(
             "task.fail",
             "Give up with an explanation when the task is impossible or blocked (e.g. needs Administrator rights).",
             json!({"type": "object", "required": ["reason"], "additionalProperties": false,
@@ -145,6 +155,7 @@ fn core_tools() -> Vec<ToolSpec> {
 impl ToolCatalog {
     pub fn load(tools_dir: &Path) -> Result<Self> {
         let mut specs = BTreeMap::new();
+        let mut category_descriptions = BTreeMap::new();
         let mut files: Vec<_> = std::fs::read_dir(tools_dir)
             .with_context(|| format!("reading {}", tools_dir.display()))?
             .filter_map(|e| e.ok().map(|e| e.path()))
@@ -158,6 +169,7 @@ impl ToolCatalog {
             let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
             let file: ContractFile =
                 serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+            category_descriptions.insert(file.category.clone(), file.description.clone());
             for mut spec in file.tools {
                 spec.category = file.category.clone();
                 spec.input_schema = with_defs(&spec.input_schema, &file.defs);
@@ -177,7 +189,7 @@ impl ToolCatalog {
                 .map_err(|e| anyhow::anyhow!("invalid input_schema for {name}: {e}"))?;
             validators.insert(name.clone(), validator);
         }
-        Ok(Self { specs, validators })
+        Ok(Self { specs, category_descriptions, validators })
     }
 
     pub fn get(&self, name: &str) -> Option<&ToolSpec> {
@@ -229,12 +241,34 @@ impl ToolCatalog {
         }
     }
 
-    /// Compact catalog for the planner prompt, restricted to tools the worker actually serves.
-    pub fn render_for_prompt(&self, available: &[String]) -> String {
+    /// Tool groups (contract categories) that have at least one available tool.
+    pub fn categories(&self, available: &[String]) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .specs
+            .values()
+            .filter(|s| !s.is_core_tool() && available.iter().any(|a| a == &s.name))
+            .map(|s| s.category.clone())
+            .collect();
+        out.dedup();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Compact catalog for the planner prompt, restricted to tools the worker actually serves. Groups not in
+    /// `loaded` are listed with one line each, so the planner knows they exist and can load them
+    /// (tools.enable); `None` renders everything.
+    pub fn render_for_prompt(&self, available: &[String], loaded: Option<&[String]>) -> String {
+        let is_loaded = |category: &str| loaded.is_none_or(|l| category == "task" || l.iter().any(|c| c == category));
         let mut out = String::new();
         let mut current = String::new();
+        let mut hidden: BTreeMap<String, usize> = BTreeMap::new();
         for spec in self.specs.values() {
             if !spec.is_core_tool() && !available.iter().any(|a| a == &spec.name) {
+                continue;
+            }
+            if !is_loaded(&spec.category) {
+                *hidden.entry(spec.category.clone()).or_default() += 1;
                 continue;
             }
             if spec.category != current {
@@ -246,6 +280,14 @@ impl ToolCatalog {
                 "- {} {args}\n  {} [risk={:?}, verification={:?}]\n",
                 spec.name, spec.description, spec.risk_level, spec.verification
             ));
+        }
+        if !hidden.is_empty() {
+            out.push_str("\n## More tools (not loaded; call tools.enable with the group to use them)\n");
+            for (category, count) in hidden {
+                let about = self.category_descriptions.get(&category).map(String::as_str).unwrap_or("");
+                let about: String = about.split(". ").next().unwrap_or(about).chars().take(220).collect();
+                out.push_str(&format!("- {category} ({count} tools): {about}\n"));
+            }
         }
         out
     }
@@ -303,6 +345,18 @@ mod tests {
     }
 
     #[test]
+    fn groups_not_loaded_are_summarised() {
+        let c = catalog();
+        let available = vec!["desktop.click".to_string(), "filesystem.read".to_string(), "autocad.launch".to_string()];
+        let text = c.render_for_prompt(&available, Some(&["system".to_string()]));
+        assert!(text.contains("- filesystem.read"));
+        assert!(!text.contains("- desktop.click"));
+        assert!(text.contains("More tools") && text.contains("- desktop (1 tools)") && text.contains("- autocad (1 tools)"));
+        assert!(text.contains("tools.enable"), "the core tools are always listed");
+        assert_eq!(c.categories(&available), vec!["autocad", "desktop", "system"]);
+    }
+
+    #[test]
     fn contract_loads_with_core_tools() {
         let c = catalog();
         assert!(c.get("desktop.click").is_some());
@@ -332,7 +386,7 @@ mod tests {
     #[test]
     fn prompt_catalog_lists_only_available_tools() {
         let c = catalog();
-        let text = c.render_for_prompt(&["desktop.click".to_string()]);
+        let text = c.render_for_prompt(&["desktop.click".to_string()], None);
         assert!(text.contains("desktop.click"));
         assert!(!text.contains("desktop.drag"));
         assert!(text.contains("task.complete"));
