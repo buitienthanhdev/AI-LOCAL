@@ -32,7 +32,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 AGENT = ROOT / "target" / "release" / "agent.exe"
-TASKS = Path(__file__).with_name("tasks.json")
+TASK_FILES = sorted(Path(__file__).parent.glob("tasks*.json"))
 WORK = Path(r"C:\temp\lga-bench")
 REPORTS = ROOT / "logs" / "bench"
 TASK_TIMEOUT_S = 900
@@ -47,6 +47,11 @@ PROFILES: dict[str, dict[str, str]] = {
     # Low temperature: near-deterministic tool calls.
     "precise": {"LGA_BRAIN": "local_server", "LGA_THINKING": "off", "LGA_TEMPERATURE": "0.2", "LGA_TOP_P": "0.95", "LGA_TOP_K": "40"},
     "precise-think": {"LGA_BRAIN": "local_server", "LGA_THINKING": "on", "LGA_TEMPERATURE": "0.2", "LGA_TOP_P": "0.95", "LGA_TOP_K": "40"},
+    # Same, with the model's native tool calling instead of the schema-constrained JSON reply.
+    "native-think": {"LGA_BRAIN": "local_server", "LGA_THINKING": "on", "LGA_TEMPERATURE": "1.0", "LGA_TOP_P": "0.95", "LGA_TOP_K": "64",
+                     "LGA_NATIVE_TOOLS": "on"},
+    "json-think": {"LGA_BRAIN": "local_server", "LGA_THINKING": "on", "LGA_TEMPERATURE": "1.0", "LGA_TOP_P": "0.95", "LGA_TOP_K": "64",
+                   "LGA_NATIVE_TOOLS": "off"},
     # Whatever the gateway's configured brain order picks (local first, cloud fallbacks): the product as shipped.
     "product": {},
 }
@@ -74,6 +79,31 @@ def prepare(task: dict, folder: Path) -> None:
         Path(path).write_text(content, encoding="utf-8")
     for path, size in setup.get("sized_files", {}).items():
         Path(path).write_bytes(b"\0" * int(size))
+    for path in setup.get("dirs", []):
+        Path(path).mkdir(parents=True, exist_ok=True)
+    if z := setup.get("zip"):
+        import zipfile
+        with zipfile.ZipFile(z["path"], "w") as zf:
+            for name, content in z["files"].items():
+                zf.writestr(name, content)
+    if x := setup.get("xlsx"):
+        import openpyxl
+        wb = openpyxl.Workbook()
+        for row in x["rows"]:
+            wb.active.append(row)
+        wb.save(x["path"])
+    if dx := setup.get("docx"):
+        import docx
+        doc = docx.Document()
+        for para in dx["paragraphs"]:
+            doc.add_paragraph(para)
+        doc.save(dx["path"])
+    now = time.time()
+    for path, offset in setup.get("mtimes", {}).items():
+        os.utime(path, (now + offset, now + offset))
+    if note := setup.get("memory_note"):
+        with sqlite3.connect(ROOT / "memory" / "persistent.db") as conn:
+            conn.execute("INSERT OR IGNORE INTO user_notes (note, created_at) VALUES (?, ?)", (note, dt.datetime.now(dt.timezone.utc).isoformat()))
     if rows := setup.get("csv_rows"):
         with open(rows["path"], "w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
@@ -112,6 +142,28 @@ def check(c: dict, run: dict) -> tuple[bool, str]:
         return any(a.lower() in low for a in c["any"]), f"answer mentions one of {c['any']}"
     if kind == "summary_regex":
         return re.search(c["pattern"], summary) is not None, f"answer matches {c['pattern']}"
+    if kind == "summary_not_regex":
+        return re.search(c["pattern"], summary) is None, f"answer does not match {c['pattern']}"
+    if kind == "summary_not_contains":
+        return not any(a.lower() in low for a in c["any"]), f"answer does not mention {c['any']}"
+    if kind == "summary_cmd":
+        expected = subprocess.run(["powershell", "-NoProfile", "-Command", c["ps"]], capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace").stdout.strip()
+        if not expected:
+            return False, "expected value unavailable"
+        found = re.search(rf"\b{re.escape(expected)}\b", summary, re.I) if c.get("word") else expected.lower() in low
+        return bool(found), f"answer contains the real value {expected!r}"
+    if kind == "no_step_succeeded":
+        return not any(t.startswith(c["prefix"]) for t in tools), f"no successful {c['prefix']} step"
+    if kind == "memory_missing":
+        with sqlite3.connect(ROOT / "memory" / "persistent.db") as conn:
+            n = conn.execute("SELECT COUNT(*) FROM user_notes WHERE note LIKE ?", (f"%{c['text']}%",)).fetchone()[0]
+        return n == 0, f"no remembered note contains {c['text']}"
+    if kind == "no_window":
+        out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                              f"(Get-Process | Where-Object {{ $_.MainWindowTitle -like '*{c['title']}*' }}).Count"],
+                             capture_output=True, text=True).stdout.strip()
+        return out in ("", "0"), f"no window titled *{c['title']}* left open"
     if kind == "max_steps":
         return len(run.get("steps", [])) <= c["n"], f"{len(run.get('steps', []))} steps <= {c['n']}"
     if kind == "tool_used":
@@ -119,11 +171,49 @@ def check(c: dict, run: dict) -> tuple[bool, str]:
         return ok, f"used {c.get('name') or c.get('prefix')}"
     if kind == "file_exists":
         return Path(c["path"]).is_file(), f"{c['path']} exists"
+    if kind == "dir_missing":
+        return not Path(c["path"]).exists(), f"{c['path']} removed"
+    if kind == "file_count":
+        n = len(list(Path(c["path"]).glob(c["pattern"].replace("\\", "/"))))
+        return n == c["n"], f"{n} files match {c['pattern']} (want {c['n']})"
+    if kind == "zip_contains":
+        import zipfile
+        try:
+            names = {Path(n).name for n in zipfile.ZipFile(c["path"]).namelist()}
+        except Exception as e:  # noqa: BLE001
+            return False, f"zip unreadable: {e}"
+        return set(c["names"]) <= names, f"zip has {c['names']}"
+    if kind == "docx_contains":
+        try:
+            import docx
+            text = "\n".join(p.text for p in docx.Document(c["path"]).paragraphs)
+        except Exception as e:  # noqa: BLE001
+            return False, f"document unreadable: {e}"
+        return all(t in text for t in c["texts"]), f"document has {c['texts']}"
+    if kind == "pptx_titles":
+        try:
+            import pptx
+            slides = list(pptx.Presentation(c["path"]).slides)
+            titles = [" ".join(s.shapes.title.text.split()) if s.shapes.title is not None else
+                      " ".join(sh.text_frame.text for sh in s.shapes if sh.has_text_frame) for s in slides]
+        except Exception as e:  # noqa: BLE001
+            return False, f"presentation unreadable: {e}"
+        ok = len(slides) == len(c["titles"]) and all(want in got for want, got in zip(c["titles"], titles))
+        return ok, f"slides {titles} == {c['titles']}"
+    if kind == "csv_rows":
+        p = Path(c["path"])
+        if not p.is_file():
+            return False, f"{p} missing"
+        rows = [r for r in csv.reader(p.read_text(encoding="utf-8-sig").splitlines()) if any(x.strip() for x in r)]
+        return len(rows) == c["rows"], f"{len(rows)} CSV rows == {c['rows']}"
+    if kind == "pdf_valid":
+        p = Path(c["path"])
+        return p.is_file() and p.read_bytes()[:5] == b"%PDF-", f"{p.name} is a PDF"
     if kind == "dir_exists":
         return Path(c["path"]).is_dir(), f"{c['path']} is a folder"
     if kind == "file_missing":
         return not Path(c["path"]).exists(), f"{c['path']} absent"
-    if kind in ("file_contains", "file_regex"):
+    if kind in ("file_contains", "file_regex", "file_not_contains"):
         p = Path(c["path"])
         if not p.is_file():
             return False, f"{p} missing"
@@ -131,6 +221,8 @@ def check(c: dict, run: dict) -> tuple[bool, str]:
         text = next((raw.decode(enc) for enc in ("utf-8-sig", "utf-16") if _decodes(raw, enc)), raw.decode("latin-1"))
         if kind == "file_contains":
             return c["text"] in text, f"{p.name} contains {c['text']!r}"
+        if kind == "file_not_contains":
+            return c["text"] not in text, f"{p.name} no longer contains {c['text']!r}"
         return re.search(c["pattern"], text) is not None, f"{p.name} matches {c['pattern']}"
     if kind == "json_equals":
         try:
@@ -138,7 +230,7 @@ def check(c: dict, run: dict) -> tuple[bool, str]:
         except Exception as e:  # noqa: BLE001
             return False, f"invalid JSON: {e}"
         return all(data.get(k) == v for k, v in c["value"].items()), f"JSON has {c['value']}"
-    if kind in ("xlsx", "xlsx_rows"):
+    if kind in ("xlsx", "xlsx_rows", "xlsx_has"):
         try:
             import openpyxl
             wb = openpyxl.load_workbook(c["path"])
@@ -147,6 +239,10 @@ def check(c: dict, run: dict) -> tuple[bool, str]:
         ws = wb.worksheets[0]
         if kind == "xlsx_rows":
             return ws.max_row == c["rows"], f"{ws.max_row} rows == {c['rows']}"
+        if kind == "xlsx_has":
+            values = [v for row in ws.iter_rows(values_only=True) for v in row if v is not None]
+            missing = [w for w in c["values"] if not any(v == w or str(v).strip() == str(w) for v in values)]
+            return not missing, f"workbook has {c['values']}"
         for ref, want in c.get("cells", {}).items():
             got = ws[ref].value
             if isinstance(want, (int, float)):
@@ -321,19 +417,20 @@ def main() -> int:
     ap.add_argument("--profile", default="baseline", choices=sorted(PROFILES))
     ap.add_argument("--only", default="")
     ap.add_argument("--skip", default="")
+    ap.add_argument("--categories", default="", help="comma-separated categories to run")
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--compare", nargs="+")
     args = ap.parse_args()
     if args.compare:
         compare(args.compare)
         return 0
-    tasks = json.loads(TASKS.read_text(encoding="utf-8"))["tasks"]
+    tasks = [t for f in TASK_FILES for t in json.loads(f.read_text(encoding="utf-8"))["tasks"]]
+    ap_categories = {t for t in args.categories.split(",") if t}
+    if ap_categories:
+        tasks = [t for t in tasks if t["category"] in ap_categories]
     only = {t for t in args.only.split(",") if t}
     skip = {t for t in args.skip.split(",") if t}
     tasks = [t for t in tasks if (not only or t["id"] in only) and t["id"] not in skip]
-    if any(t.get("requires") == "autocad" for t in tasks) and not autocad_running():
-        print("AutoCAD is not running: skipping AutoCAD tasks")
-        tasks = [t for t in tasks if t.get("requires") != "autocad"]
     knobs = PROFILES[args.profile]
     started = dt.datetime.now()
     runs = []

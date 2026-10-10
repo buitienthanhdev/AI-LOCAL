@@ -44,6 +44,11 @@ pub struct ChatRequest {
     pub json: bool,
     /// Optional JSON schema for that object; a local llama.cpp server decodes under it (grammar).
     pub schema: Option<serde_json::Value>,
+    /// Tools the caller offers ({name, description, parameters}). Backends with native tool calling enabled
+    /// receive them as functions; their calls come back as the planner JSON reply
+    /// {"thought", "actions": [{"tool", "args"}]}, and the "\n# Tools\n" section of the system message (the
+    /// text form of the same tools) is not sent. Other backends ignore them.
+    pub tools: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Serialize)]

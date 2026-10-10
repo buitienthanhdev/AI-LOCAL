@@ -129,7 +129,8 @@ pub fn parse_chat_request(body: &Value) -> Result<ChatRequest, String> {
     let model = object.get("model").and_then(Value::as_str).filter(|m| !m.is_empty()).unwrap_or("auto").to_string();
     let json = object.get("response_format").and_then(Value::as_str) == Some("json");
     let schema = object.get("response_schema").filter(|s| s.is_object()).cloned();
-    Ok(ChatRequest { messages, model, timeout, metadata, json, schema })
+    let tools = object.get("tools").and_then(Value::as_array).filter(|t| !t.is_empty()).cloned();
+    Ok(ChatRequest { messages, model, timeout, metadata, json, schema, tools })
 }
 
 fn parse_json(body: &Bytes) -> Result<Value, String> {

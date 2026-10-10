@@ -126,6 +126,7 @@ fn request(parts: Vec<Part>) -> ChatRequest {
         metadata: HashMap::new(),
         json: false,
         schema: None,
+        tools: None,
     }
 }
 

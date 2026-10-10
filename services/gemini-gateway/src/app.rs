@@ -198,6 +198,7 @@ pub fn assemble(config: &Config, redactor: Arc<Redactor>) -> Result<Assembly> {
             temperature: s.local_server.temperature,
             top_p: s.local_server.top_p,
             top_k: s.local_server.top_k,
+            native_tools: s.local_server.native_tools,
         };
         server.release = s.local_server.release.clone();
         server.managed = !s.local_server.launch.is_empty();

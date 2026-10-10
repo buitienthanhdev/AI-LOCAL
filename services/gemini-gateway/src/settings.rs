@@ -56,6 +56,9 @@ pub struct LocalServerCfg {
     pub top_p: Option<f64>,
     #[serde(default)]
     pub top_k: Option<u32>,
+    /// Use the model's native tool calling (its chat template's tool format) instead of the JSON reply.
+    #[serde(default)]
+    pub native_tools: bool,
     /// Other llama.cpp routers (e.g. LlamaApp's, "http://127.0.0.1:9931") whose loaded models are unloaded
     /// before this server starts or when it runs too slowly: two copies of the model do not fit the GPU.
     #[serde(default)]

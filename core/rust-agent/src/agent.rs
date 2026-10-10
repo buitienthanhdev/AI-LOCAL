@@ -167,6 +167,33 @@ pub struct TaskRunner<'a> {
     environment: String,
     /// task.complete attempts rejected so far in this run.
     completion_rejections: u32,
+    /// Tool groups shown in full to the planner (the others are listed in one line each until enabled).
+    loaded_groups: Vec<String>,
+}
+
+/// Tool groups always shown in full; the rest load when the request mentions them or the planner asks.
+const BASE_GROUPS: [&str; 6] = ["system", "knowledge", "web", "documents", "memory", "task"];
+/// Words (lower case, without accents) that load a group from the start.
+const GROUP_TRIGGERS: [(&str, &[&str]); 4] = [
+    ("desktop", &["mo ", "open", "click", "bam ", "nhan ", "cua so", "window", "ung dung", "app", "notepad", "word", "excel",
+                  "powerpoint", "paint", "go ", "type", "nhap ", "man hinh", "screen", "chuot", "mouse", "ban phim",
+                  "keyboard", "dong ", "close", "zalo", "chrome", "luu ", "save", "giao dien", "phan mem"]),
+    ("browser", &["trang web", "website", "web page", "dang nhap", "login", "form", "trinh duyet", "browser", "youtube",
+                  "facebook", "dien ", "tai ve", "download", "google", "http"]),
+    ("vision", &["man hinh", "screen", "nhin", "anh chup", "screenshot", "hinh anh", "thay gi", "doc chu tren"]),
+    ("autocad", &["autocad", "cad", "ban ve", "mat bang", "dwg", "dxf", "ve "]),
+];
+
+/// The groups a request needs from the start, from its words (and the previous request it follows up).
+fn groups_for(text: &str) -> Vec<String> {
+    let normalized = format!(" {} ", brain_core::text::norm(text));
+    let mut groups: Vec<String> = BASE_GROUPS.iter().map(|g| g.to_string()).collect();
+    for (group, words) in GROUP_TRIGGERS {
+        if words.iter().any(|w| normalized.contains(w)) {
+            groups.push(group.to_string());
+        }
+    }
+    groups
 }
 
 /// After this many rejected completions the task is completed anyway, with the unmet checks reported to
@@ -220,7 +247,7 @@ fn normalize_completion(args: &Value) -> Value {
 /// validated against each tool's own schema before anything runs.
 fn planner_reply_schema(available: &[String]) -> Value {
     let mut tools: Vec<&str> = available.iter().map(String::as_str).collect();
-    for core in ["task.complete", "task.fail", "task.ask_user"] {
+    for core in ["task.complete", "task.fail", "task.ask_user", "tools.enable"] {
         if !tools.contains(&core) {
             tools.push(core);
         }
@@ -303,6 +330,7 @@ impl<'a> TaskRunner<'a> {
             pending_failures: Vec::new(),
             environment: String::new(),
             completion_rejections: 0,
+            loaded_groups: groups_for(&format!("{} {}", record.goal, record.conversation.join(" "))),
         })
     }
 
@@ -435,6 +463,20 @@ impl<'a> TaskRunner<'a> {
                         }
                         break;
                     }
+                    "tools.enable" => {
+                        let group = action.args.get("category").and_then(Value::as_str).unwrap_or_default().trim().to_lowercase();
+                        let served: Vec<String> = self.rt.worker().await?.tools().to_vec();
+                        let known = self.rt.catalog.categories(&served);
+                        if known.contains(&group) {
+                            if !self.loaded_groups.contains(&group) {
+                                self.loaded_groups.push(group.clone());
+                            }
+                            self.notices.push(format!("The {group} tools are now listed under Tools; use them."));
+                        } else {
+                            self.notices.push(format!("tools.enable: no tool group {group:?}; groups: {}", known.join(", ")));
+                        }
+                        break;
+                    }
                     "task.fail" => {
                         let reason = action.args.get("reason").and_then(Value::as_str).unwrap_or("planner gave up").to_string();
                         record.final_summary = Some(reason.clone());
@@ -474,6 +516,18 @@ impl<'a> TaskRunner<'a> {
         }
     }
 
+    /// Native declarations of the offered tools plus the task.* / tools.enable core tools.
+    fn tool_declarations(&self, offered: &[String]) -> Vec<Value> {
+        let core = ["task.complete", "task.fail", "task.ask_user", "tools.enable"];
+        offered
+            .iter()
+            .map(String::as_str)
+            .chain(core.into_iter().filter(|c| !offered.iter().any(|o| o == c)))
+            .filter_map(|name| self.rt.catalog.get(name))
+            .map(|spec| json!({"name": spec.name, "description": spec.description, "parameters": spec.input_schema}))
+            .collect()
+    }
+
     /// Ask the planner for the next action. Returns None when the reply was unusable (counted as a failure).
     async fn plan_next(&mut self, record: &mut TaskRecord) -> Result<Option<Vec<PlannerAction>>> {
         let agent_cfg = self.rt.config.agent.clone();
@@ -483,7 +537,20 @@ impl<'a> TaskRunner<'a> {
         if self.environment.is_empty() {
             self.environment = describe_computer();
         }
-        let system = system_prompt(&self.rt.catalog.render_for_prompt(&available), self.rt.policy.mode(), &agent_cfg.language, &self.environment);
+        // Steps already taken with a group's tools keep it loaded (a resumed task, a fallback brain).
+        for step in &record.steps {
+            let group = self.rt.catalog.get(&step.tool).map(|s| s.category.clone()).unwrap_or_default();
+            if !group.is_empty() && !self.loaded_groups.contains(&group) {
+                self.loaded_groups.push(group);
+            }
+        }
+        let catalog = self.rt.catalog.render_for_prompt(&available, Some(&self.loaded_groups));
+        let system = system_prompt(&catalog, self.rt.policy.mode(), &agent_cfg.language, &self.environment);
+        let offered: Vec<String> = available
+            .iter()
+            .filter(|t| self.rt.catalog.get(t).is_some_and(|s| self.loaded_groups.contains(&s.category)))
+            .cloned()
+            .collect();
         let now = chrono::Local::now().format("%A %Y-%m-%d %H:%M (UTC%:z)").to_string();
         let recall = self.rt.memory.recall(&record.goal, max_recalled)?.render();
         let mut attachments = Vec::new();
@@ -515,7 +582,8 @@ impl<'a> TaskRunner<'a> {
                 timeout: Duration::from_millis(llm_cfg.request_timeout_ms),
                 metadata: HashMap::from([("task_id".into(), record.task_id.clone())]),
                 json: true,
-                schema: Some(planner_reply_schema(&available)),
+                schema: Some(planner_reply_schema(&offered)),
+                tools: Some(self.tool_declarations(&offered)),
             };
             let reply = self.chat_with_retry(record, request).await?;
             match parse_reply(&reply) {
@@ -877,6 +945,7 @@ impl<'a> TaskRunner<'a> {
             metadata: HashMap::from([("task_id".into(), record.task_id.clone()), ("role".into(), "verifier".into())]),
             json: true,
             schema: None,
+            tools: None,
         };
         let reply = self.chat_with_retry(record, request).await?;
         let verdict = crate::planner::extract_json_value(&reply);
@@ -1047,6 +1116,16 @@ impl<'a> TaskRunner<'a> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn requests_load_the_tool_groups_they_mention() {
+        let g = super::groups_for("Vẽ mặt bằng nhà cấp 4 trong AutoCAD");
+        assert!(g.contains(&"autocad".to_string()) && !g.contains(&"browser".to_string()));
+        let g = super::groups_for("Mở Notepad, gõ dòng chữ rồi lưu");
+        assert!(g.contains(&"desktop".to_string()));
+        let g = super::groups_for("Ổ C còn trống bao nhiêu GB?");
+        assert_eq!(g.len(), super::BASE_GROUPS.len(), "{g:?}");
+    }
+
     use super::*;
 
     #[test]

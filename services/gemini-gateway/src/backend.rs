@@ -62,6 +62,7 @@ pub struct Reply {
 /// Generation settings of a local OpenAI-compatible server.
 #[derive(Debug, Clone, Default)]
 pub struct Generation {
+    pub native_tools: bool,
     pub thinking: bool,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
@@ -81,6 +82,8 @@ pub struct Backend {
     degraded_until: Mutex<Option<std::time::Instant>>,
     /// Local server only: slow answers (or timeouts) in a row.
     slow_streak: std::sync::atomic::AtomicU32,
+    /// Local server only: when the other routers were last checked for a second copy of the model.
+    last_release_check: Mutex<Option<std::time::Instant>>,
     /// Local server only: thinking mode and sampling.
     pub generation: Generation,
     /// Local server only: other llama.cpp routers whose loaded models are unloaded before this server starts
@@ -122,6 +125,15 @@ async fn release_servers(client: &reqwest::Client, bases: &[String], name: &str)
     }
 }
 
+/// Function names allow [a-zA-Z0-9_-] only: "desktop.click" travels as "desktop__click".
+fn native_name(tool: &str) -> String {
+    tool.replace('.', "__")
+}
+
+fn tool_name(native: &str) -> String {
+    native.replace("__", ".")
+}
+
 fn truncate(text: &str) -> String {
     text.chars().take(MAX_ERROR_BODY_CHARS).collect()
 }
@@ -151,15 +163,42 @@ impl Backend {
             last_reload: Mutex::new(None),
             degraded_until: Mutex::new(None),
             slow_streak: std::sync::atomic::AtomicU32::new(0),
+            last_release_check: Mutex::new(None),
             generation: Generation::default(),
             release: Vec::new(),
             managed: false,
         }
     }
 
+    /// The tools to declare natively, when this backend uses native tool calling for this request.
+    fn native_tools<'a>(&self, request: &'a ChatRequest) -> Option<&'a Vec<Value>> {
+        if !matches!(self.kind, Kind::OpenAiServer { .. }) {
+            return None;
+        }
+        let on = request.metadata.get("native_tools").map_or(self.generation.native_tools, |v| v == "on" || v == "true");
+        request.tools.as_ref().filter(|_| on)
+    }
+
     /// Unload every model the configured other routers hold (best effort, a few seconds at most).
     pub async fn release_other_servers(&self) {
         release_servers(&self.client, &self.release, &self.name).await;
+    }
+
+    /// The assistant has priority on the GPU: before answering, a model another router loaded meanwhile (e.g.
+    /// LlamaApp's chat) is unloaded, since both copies do not fit and both would crawl. Checked at most every
+    /// 10 s (one local HTTP request).
+    async fn claim_gpu(&self) {
+        if !self.managed || self.release.is_empty() {
+            return;
+        }
+        {
+            let mut last = self.last_release_check.lock().expect("release lock");
+            if last.is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
+                return;
+            }
+            *last = Some(std::time::Instant::now());
+        }
+        self.release_other_servers().await;
     }
 
     /// Stop the llama.cpp server this gateway started (matched by its port on the command line).
@@ -366,6 +405,26 @@ impl Backend {
             if let Some(k) = meta("top_k").and_then(|v| v.parse::<u32>().ok()).or(g.top_k) {
                 payload["top_k"] = json!(k);
             }
+            if let Some(tools) = self.native_tools(request) {
+                // Native tool calling: the model's chat template renders the declarations and its parser
+                // returns the calls; the text catalog in the system message would only duplicate them.
+                payload["tools"] = json!(tools
+                    .iter()
+                    .map(|t| json!({"type": "function", "function": {
+                        "name": native_name(t["name"].as_str().unwrap_or_default()),
+                        "description": t["description"], "parameters": t["parameters"]}}))
+                    .collect::<Vec<_>>());
+                payload["tool_choice"] = json!("required");
+                payload["parallel_tool_calls"] = json!(true);
+                if let Some(obj) = payload.as_object_mut() {
+                    obj.remove("response_format");
+                }
+                if let Some(system) = payload["messages"].as_array_mut().and_then(|m| m.first_mut()).filter(|m| m["role"] == "system") {
+                    let text = system["content"].as_str().unwrap_or_default();
+                    let head = text.split_once("\n# Tools\n").map_or(text, |(h, _)| h);
+                    system["content"] = json!(format!("{head}\n\n# Tool calling\nNative tool calling is on: instead of the JSON reply described above, call the tools directly (several calls run in order, a task.* call last). Your reasoning goes in your thoughts."));
+                }
+            }
         }
         if let Kind::Ollama { .. } = self.kind {
             payload["think"] = json!(false);
@@ -555,6 +614,7 @@ impl Backend {
 
     async fn chat_once(&self, request: &ChatRequest, timeout: Duration) -> Result<Reply, BackendError> {
         let model = self.resolve_model(&request.model);
+        self.claim_gpu().await;
         let response = match self.post(request, false, timeout).await {
             Ok(response) => response,
             Err(e) => {
@@ -585,7 +645,29 @@ impl Backend {
         let choice = data
             .pointer(pointer)
             .ok_or_else(|| BackendError::new(ErrorKind::Transient, format!("{}: unexpected response shape", self.name)))?;
-        let content = choice.get("content").and_then(Value::as_str).unwrap_or("").to_string();
+        let mut content = choice.get("content").and_then(Value::as_str).unwrap_or("").to_string();
+        if let Some(calls) = choice.get("tool_calls").and_then(Value::as_array).filter(|c| !c.is_empty()) {
+            // Native tool calls back into the planner reply the caller asked for.
+            let actions: Vec<Value> = calls
+                .iter()
+                .map(|c| {
+                    let name = c.pointer("/function/name").and_then(Value::as_str).unwrap_or_default();
+                    let raw = c.pointer("/function/arguments").cloned().unwrap_or(Value::Null);
+                    let args = match raw {
+                        Value::String(s) => serde_json::from_str(&s).unwrap_or(json!({})),
+                        Value::Object(_) => raw,
+                        _ => json!({}),
+                    };
+                    json!({"tool": tool_name(name), "args": args})
+                })
+                .collect();
+            let thought = if content.trim().is_empty() {
+                choice.get("reasoning_content").and_then(Value::as_str).unwrap_or("").chars().rev().take(300).collect::<String>().chars().rev().collect()
+            } else {
+                content.trim().to_string()
+            };
+            content = json!({"thought": thought, "actions": actions}).to_string();
+        }
         if content.trim().is_empty() {
             return Err(BackendError::new(ErrorKind::Transient, format!("{}: empty reply from the model", self.name)));
         }
