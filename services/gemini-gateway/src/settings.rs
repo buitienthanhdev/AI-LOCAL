@@ -59,6 +59,10 @@ pub struct LocalServerCfg {
     /// Use the model's native tool calling (its chat template's tool format) instead of the JSON reply.
     #[serde(default)]
     pub native_tools: bool,
+    /// The server can read images (llama.cpp with its vision projector, mmproj). When false, screenshots are
+    /// left out of the request with a note, instead of the server refusing the whole request.
+    #[serde(default = "default_true")]
+    pub vision: bool,
     /// Other llama.cpp routers (e.g. LlamaApp's, "http://127.0.0.1:9931") whose loaded models are unloaded
     /// before this server starts or when it runs too slowly: two copies of the model do not fit the GPU.
     #[serde(default)]
@@ -161,4 +165,8 @@ pub struct FallbackCfg {
 
 pub fn ms(value: u64) -> Duration {
     Duration::from_millis(value)
+}
+
+fn default_true() -> bool {
+    true
 }

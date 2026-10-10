@@ -98,7 +98,7 @@
     },
     {
       "name": "desktop.click",
-      "description": "Click an element (by element_id, preferred) or a screen point. count=2 double-clicks.",
+      "description": "Click an element (by element_id, preferred) or a screen point. count=2 double-clicks. The element's window is brought to the front first; a left single click on a button of a modern app (WPF, WinUI/XAML) is done through UI Automation Invoke without moving the mouse (data.method says which).",
       "input_schema": {
         "type": "object", "additionalProperties": false,
         "oneOf": [{"required": ["element_id"]}, {"required": ["x", "y"]}],
@@ -108,7 +108,7 @@
           "count": {"type": "integer", "enum": [1, 2], "default": 1}
         }
       },
-      "output_schema": {"type": "object", "required": ["x", "y"], "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}, "element": {"$ref": "#/$defs/element"}}},
+      "output_schema": {"type": "object", "required": ["method"], "properties": {"method": {"enum": ["mouse", "uia_invoke"]}, "x": {"type": "integer"}, "y": {"type": "integer"}, "element": {"$ref": "#/$defs/element"}}},
       "timeout_ms": 15000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
       "verification": "observe", "policy_category": "desktop.input"
     },

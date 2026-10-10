@@ -60,9 +60,10 @@ pub struct Reply {
 }
 
 /// Generation settings of a local OpenAI-compatible server.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Generation {
     pub native_tools: bool,
+    pub vision: bool,
     pub thinking: bool,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
@@ -122,6 +123,12 @@ async fn release_servers(client: &reqwest::Client, bases: &[String], name: &str)
                 .json(&json!({"model": id})).send().await.is_ok_and(|r| r.status().is_success());
             crate::log::info(&format!("{name}: unloaded {id} from {base} to free GPU memory ({})", if unloaded { "ok" } else { "failed" }));
         }
+    }
+}
+
+impl Default for Generation {
+    fn default() -> Self {
+        Self { native_tools: false, vision: true, thinking: false, temperature: None, top_p: None, top_k: None }
     }
 }
 
@@ -460,6 +467,12 @@ impl Backend {
         }
         if !message.has_images() {
             return Ok(json!({"role": message.role, "content": message.text()}));
+        }
+        if matches!(self.kind, Kind::OpenAiServer { .. }) && !self.generation.vision {
+            let note = "
+
+(Screenshots were attached but this model cannot see images: use vision.describe, vision.locate or vision.ocr to look at the screen.)";
+            return Ok(json!({"role": message.role, "content": format!("{}{note}", message.text())}));
         }
         let mut content = Vec::new();
         for part in &message.parts {

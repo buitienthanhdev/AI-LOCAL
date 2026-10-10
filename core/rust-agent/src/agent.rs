@@ -169,7 +169,16 @@ pub struct TaskRunner<'a> {
     completion_rejections: u32,
     /// Tool groups shown in full to the planner (the others are listed in one line each until enabled).
     loaded_groups: Vec<String>,
+    /// Shown while the agent operates applications with the mouse and keyboard.
+    banner: Option<crate::banner::Banner>,
 }
+
+/// Steps that operate applications directly: the person should keep their hands off meanwhile.
+const HANDS_ON_TOOLS: [&str; 11] = [
+    "desktop.click", "desktop.type", "desktop.press_key", "desktop.hotkey", "desktop.drag", "desktop.scroll",
+    "desktop.move_mouse", "desktop.launch_app", "desktop.focus_window", "desktop.close_app", "desktop.set_value",
+];
+const BANNER_TEXT: &str = "Trợ lý đang điều khiển máy tính — xin tạm thời không dùng chuột, bàn phím. Muốn dừng: bấm Dừng trong cửa sổ Trợ lý.";
 
 /// Tool groups always shown in full; the rest load when the request mentions them or the planner asks.
 const BASE_GROUPS: [&str; 6] = ["system", "knowledge", "web", "documents", "memory", "task"];
@@ -331,6 +340,7 @@ impl<'a> TaskRunner<'a> {
             environment: String::new(),
             completion_rejections: 0,
             loaded_groups: groups_for(&format!("{} {}", record.goal, record.conversation.join(" "))),
+            banner: None,
         })
     }
 
@@ -483,6 +493,7 @@ impl<'a> TaskRunner<'a> {
                         return self.finish(record, TaskStatus::Failed, &reason);
                     }
                     "task.ask_user" => {
+                        self.banner = None; // the person has to answer: hands back on
                         let question = action.args.get("question").and_then(Value::as_str).unwrap_or_default().to_string();
                         record.pending_question = Some(question.clone());
                         self.set_status(record, TaskStatus::NeedsUser, Some(&question))?;
@@ -742,6 +753,9 @@ impl<'a> TaskRunner<'a> {
             Verdict::Allow => {}
         }
         self.set_status(record, TaskStatus::Executing, None)?;
+        if self.banner.is_none() && HANDS_ON_TOOLS.contains(&spec.name.as_str()) {
+            self.banner = crate::banner::Banner::show(BANNER_TEXT);
+        }
         self.run_tool(record, &spec, step, decision.args).await
     }
 

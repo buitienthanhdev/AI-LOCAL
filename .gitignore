@@ -60,3 +60,4 @@ runtime/
 services/company-brain/data/
 services/company-brain/rust/target/
 services/company-brain/.pytest_cache/
+configs/config.toml.bak*

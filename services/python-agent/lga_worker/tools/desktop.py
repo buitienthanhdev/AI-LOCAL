@@ -165,15 +165,22 @@ def register(registry: ToolRegistry) -> None:
         provider = await ctx.services.desktop()
         element = None
         if "element_id" in args:
-            x, y = await _sta(ctx, provider, provider.element_center, args["element_id"])
             element = (await _sta(ctx, provider, provider.describe_element, args["element_id"])).to_dict()
+            if args["button"] == "left" and args["count"] == 1 and await _sta(ctx, provider, provider.try_invoke, args["element_id"]):
+                # Pressed through UI Automation: the pointer never moved.
+                return ToolOutcome(data={"element": element, "method": "uia_invoke"}, backend=BACKEND,
+                                   observation=f"Pressed {args['element_id']} through UI Automation (no mouse). "
+                                   + await _foreground_note(ctx, provider))
+            await _sta(ctx, provider, provider.bring_to_front, await _sta(ctx, provider, provider.element_window, args["element_id"]))
+            x, y = await _sta(ctx, provider, provider.element_center, args["element_id"])
         else:
             x, y = args["x"], args["y"]
+            await _sta(ctx, provider, provider.bring_point_window_to_front, x, y)
         if args["count"] == 2:
             await _sta(ctx, provider, provider.double_click, x, y)
         else:
             await _sta(ctx, provider, provider.click, x, y, args["button"])
-        data: dict[str, Any] = {"x": x, "y": y}
+        data: dict[str, Any] = {"x": x, "y": y, "method": "mouse"}
         if element is not None:
             data["element"] = element
         what = f"{args['element_id']} at ({x},{y})" if element else f"({x},{y})"

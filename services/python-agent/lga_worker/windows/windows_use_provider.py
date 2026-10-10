@@ -58,6 +58,10 @@ from lga_worker.windows.provider import (
 logger = logging.getLogger(__name__)
 
 # desktop.type: longer text is pasted via the clipboard; shorter text is typed in focus-checked chunks.
+# Bringing the working window back before input: Windows usually allows it at once.
+FOREGROUND_TIMEOUT_S = 1.5
+# UI frameworks whose UIA Invoke returns immediately (see try_invoke).
+INVOKE_FRAMEWORKS = frozenset({"WPF", "XAML", "DirectUI", "WinUI"})
 PASTE_THRESHOLD_CHARS = 200
 TYPE_CHUNK_CHARS = 40
 PASTE_SETTLE_S = 0.5
@@ -179,6 +183,8 @@ class WindowsUseProvider(WindowsControlProvider):
         self._start_apps: dict[str, str] = {}
         self._start_apps_loaded_at = 0.0
         self._powershell: str | None = None
+        # The window the agent is working in: brought back to the front before any input aimed at it.
+        self._target_hwnd: int | None = None
 
     # ------------------------------------------------------------------------------------------
     # lifecycle (runs on the STA thread)
@@ -269,6 +275,7 @@ class WindowsUseProvider(WindowsControlProvider):
         window, kind = self._wait_for_launched_window(
             before, pid, expected_process, display_name, expect_title, time.monotonic() + timeout_s
         )
+        self.set_target(window.hwnd)
         return LaunchResult(pid=pid if pid else window.pid, window=window, match_kind=kind,
                             resolved_target=resolved)
 
@@ -358,6 +365,7 @@ class WindowsUseProvider(WindowsControlProvider):
     def focus_window(self, hwnd: int, timeout_s: float) -> WindowInfo:
         if not win32.is_window(hwnd):
             raise ToolError(ErrorCode.WINDOW_NOT_FOUND, f"window {hwnd} does not exist")
+        self.set_target(hwnd)
         win32.allow_set_foreground()
         self._desktop.bring_window_to_top(hwnd)
         deadline = time.monotonic() + timeout_s
@@ -370,6 +378,72 @@ class WindowsUseProvider(WindowsControlProvider):
         raise ToolError(ErrorCode.EXECUTION_FAILED,
                         "Windows refused to move the window to the foreground (focus-stealing prevention)",
                         retryable=True, details={"foreground_hwnd": win32.foreground_hwnd()})
+
+    # ------------------------------------------------------------------------------------------
+    # working window: input only ever goes to the window the agent works in
+    # ------------------------------------------------------------------------------------------
+    def set_target(self, hwnd: int | None) -> None:
+        if hwnd and win32.is_window(hwnd):
+            self._target_hwnd = win32gui.GetAncestor(hwnd, win32con.GA_ROOT) or hwnd
+
+    def _in_front(self, hwnd: int) -> bool:
+        foreground = win32.foreground_hwnd()
+        if not foreground:
+            return False
+        if foreground == hwnd or win32gui.GetWindow(foreground, win32con.GW_OWNER) == hwnd:
+            return True
+        # A dialog or popup of the same program (Save As, a menu) counts as the same work; another ordinary
+        # window of it (a second Notepad document) does not.
+        return win32.window_pid(foreground) == win32.window_pid(hwnd) and not win32.is_user_window(foreground)
+
+    def bring_to_front(self, hwnd: int | None = None) -> bool:
+        """Put the working window (or `hwnd`, which becomes the working window) in front. True when it is."""
+        if hwnd:
+            self.set_target(hwnd)
+        target = self._target_hwnd
+        if not target or not win32.is_window(target):
+            return False
+        if self._in_front(target):
+            return True
+        try:
+            self.focus_window(target, FOREGROUND_TIMEOUT_S)
+        except ToolError:
+            return self._in_front(target)
+        return True
+
+    def bring_point_window_to_front(self, x: int, y: int) -> None:
+        """Before a click at a screen point: the window under it comes to the front first."""
+        hwnd = win32gui.WindowFromPoint((x, y))
+        if hwnd:
+            root = win32gui.GetAncestor(hwnd, win32con.GA_ROOT) or hwnd
+            if not self._in_front(root):
+                self.bring_to_front(root)
+            else:
+                self.set_target(root)
+
+    def try_invoke(self, element_id: str) -> bool:
+        """Press a button-like element through UI Automation (the Windows counterpart of a DOM click): no
+        mouse movement, works whatever is under the pointer. Only for UI frameworks whose Invoke returns at
+        once (WPF, XAML/WinUI, DirectUI); classic Win32 buttons can block inside Invoke while a modal dialog
+        they open is shown, so those keep a real click."""
+        entry = self._resolve(element_id)
+        control = entry.control
+        try:
+            framework = (control.FrameworkId or "").strip()
+        except Exception:
+            return False
+        if framework not in INVOKE_FRAMEWORKS:
+            return False
+        pattern = control.GetPattern(self.uia.PatternId.InvokePattern)
+        if pattern is None:
+            return False
+        self.bring_to_front(entry.locator.window_hwnd)
+        pattern.Invoke()
+        time.sleep(self._settings.settle_s)
+        return True
+
+    def element_window(self, element_id: str) -> int:
+        return self._resolve(element_id).locator.window_hwnd
 
     def list_windows(self) -> list[WindowInfo]:
         return win32.list_user_windows()
@@ -462,6 +536,7 @@ class WindowsUseProvider(WindowsControlProvider):
         """
         if not text:
             return
+        self.bring_to_front()
         target = win32gui.GetForegroundWindow()
         if len(text) > PASTE_THRESHOLD_CHARS:
             self._paste_text(text, target)
@@ -507,12 +582,14 @@ class WindowsUseProvider(WindowsControlProvider):
 
     def press_key(self, key: str, repeat: int) -> None:
         vk = self._virtual_key(key)
+        self.bring_to_front()
         for _ in range(repeat):
             self.uia.SendKey(vk, waitTime=KEY_EVENT_GAP_S)
         time.sleep(self._settings.settle_s)
 
     def hotkey(self, keys: list[str]) -> None:
         codes = [self._virtual_key(k) for k in keys]
+        self.bring_to_front()
         pressed: list[int] = []
         try:
             for vk in codes:
@@ -702,6 +779,7 @@ class WindowsUseProvider(WindowsControlProvider):
 
     def focus_element(self, element_id: str) -> UIElement:
         entry = self._resolve(element_id)
+        self.bring_to_front(entry.locator.window_hwnd)
         if not entry.control.SetFocus():
             raise ToolError(ErrorCode.EXECUTION_FAILED, f"element {element_id} refused keyboard focus", retryable=True)
         time.sleep(self._settings.settle_s)
