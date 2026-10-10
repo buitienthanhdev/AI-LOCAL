@@ -388,10 +388,13 @@ impl Backend {
         }
         let mut payload = json!({"messages": messages, "stream": stream});
         if let Kind::Ollama { num_ctx } = self.kind {
-            // Same num_ctx as Company Brain's calls, so the shared model is not reloaded.
-            payload["options"] = json!({"num_ctx": num_ctx});
+            // Same num_ctx as Company Brain's calls, so the shared model is not reloaded (0: a cloud model).
+            if num_ctx > 0 {
+                payload["options"] = json!({"num_ctx": num_ctx});
+            }
             if request.json {
-                payload["format"] = json!("json");
+                // Ollama decodes under a JSON schema when given one.
+                payload["format"] = request.schema.clone().unwrap_or_else(|| json!("json"));
             }
         }
         if let Kind::OpenAiServer { .. } = self.kind {
@@ -434,7 +437,8 @@ impl Backend {
             }
         }
         if let Kind::Ollama { .. } = self.kind {
-            payload["think"] = json!(false);
+            let thinking = request.metadata.get("thinking").map_or(self.generation.thinking, |v| v == "on" || v == "true");
+            payload["think"] = json!(thinking);
         }
         if let (Kind::GeminiApi { .. } | Kind::OpenAiServer { .. }, true) = (&self.kind, request.json) {
             payload["response_format"] = json!({"type": "json_object"});
@@ -508,6 +512,8 @@ impl Backend {
                     404 => BackendError::with_status(ErrorKind::Capability, format!("{name}: {message}"), status),
                     400 => BackendError::with_status(ErrorKind::ClientError, format!("{name}: {message}"), status),
                     429 | 503 => BackendError::with_status(ErrorKind::RateLimited, format!("{name}: busy: {message}"), status),
+                    // Ollama cloud: usage limit reached or a model outside the free plan.
+                    401..=403 => BackendError::with_status(ErrorKind::RateLimited, format!("{name}: {message}"), status),
                     _ => BackendError::with_status(ErrorKind::BackendDown, format!("{name}: error {status}: {message}"), status),
                 }
             }
@@ -808,7 +814,8 @@ impl Backend {
             Kind::Ollama { .. } => {
                 let models = self.list_models().await?;
                 let wanted = self.default_model.as_str();
-                let found = models.iter().any(|m| m.id == wanted || m.id == format!("{wanted}:latest"));
+                // Cloud models ("...-cloud", "...:cloud") run on Ollama's servers and need no local copy.
+                let found = wanted.ends_with("cloud") || models.iter().any(|m| m.id == wanted || m.id == format!("{wanted}:latest"));
                 Ok(if found {
                     ProbeResult { state: BackendState::Ready, detail: format!("local model {wanted}"), capabilities: Capabilities { chat: true, images: true } }
                 } else {

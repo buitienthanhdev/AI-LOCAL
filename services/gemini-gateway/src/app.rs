@@ -211,6 +211,17 @@ pub fn assemble(config: &Config, redactor: Arc<Redactor>) -> Result<Assembly> {
         }
         routes.push(route);
     }
+    // A large Ollama cloud model through the local Ollama daemon.
+    if s.cloud.enabled && !s.cloud.model.trim().is_empty() {
+        loopback_port(&s.cloud.base_url)?;
+        let mut cloud = Backend::local("cloud", &s.cloud.base_url, s.cloud.model.trim(), 0, Arc::clone(&store), connect);
+        cloud.generation.thinking = s.cloud.thinking;
+        let mut route = Route::new(cloud, CircuitBreaker::new(breaker), None, ms(0)).with_attempt_timeout(ms(s.cloud.attempt_timeout_ms));
+        if let Some(ollama) = find_ollama(&s.local.ollama) {
+            route = route.with_on_demand_start(ollama, vec!["serve".into()]);
+        }
+        routes.push(route);
+    }
     // Local model: the agent keeps working when Gemini Web is down or Google throttles the account.
     let l = &s.local;
     if l.enabled {

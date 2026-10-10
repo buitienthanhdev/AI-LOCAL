@@ -25,6 +25,9 @@ pub struct GatewaySettings {
     pub fallback: FallbackCfg,
     #[serde(default)]
     pub local: LocalCfg,
+    /// A large model on Ollama's cloud, reached through the local Ollama daemon (signed in with `ollama signin`).
+    #[serde(default)]
+    pub cloud: CloudCfg,
     #[serde(default)]
     pub api: ApiCfg,
     #[serde(default)]
@@ -113,6 +116,25 @@ pub struct LocalCfg {
 impl Default for LocalCfg {
     fn default() -> Self {
         Self { enabled: false, base_url: "http://127.0.0.1:11434".into(), model: "gemma4:12b".into(), num_ctx: 16384, ollama: String::new() }
+    }
+}
+
+/// Ollama cloud model (e.g. "gpt-oss:120b-cloud"): far larger than anything the local GPU can hold. Prompts
+/// and screenshots leave the PC for Ollama's servers.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct CloudCfg {
+    pub enabled: bool,
+    pub base_url: String,
+    pub model: String,
+    /// Reasoning before answering (models that support it).
+    pub thinking: bool,
+    pub attempt_timeout_ms: u64,
+}
+
+impl Default for CloudCfg {
+    fn default() -> Self {
+        Self { enabled: false, base_url: "http://127.0.0.1:11434".into(), model: "gpt-oss:120b-cloud".into(), thinking: true, attempt_timeout_ms: 120_000 }
     }
 }
 

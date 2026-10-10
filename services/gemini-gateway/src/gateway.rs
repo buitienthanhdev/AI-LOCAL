@@ -277,6 +277,15 @@ impl Gateway {
     }
 
     pub async fn chat(&self, request: &ChatRequest) -> Result<ChatResult, GatewayError> {
+        // A benchmark pinning one brain may also name its model (metadata "model").
+        let overridden;
+        let request = match request.metadata.get("model").filter(|m| !m.is_empty() && request.metadata.contains_key("brain")) {
+            Some(model) => {
+                overridden = ChatRequest { model: model.clone(), ..request.clone() };
+                &overridden
+            }
+            None => request,
+        };
         self.check_attachments(request)?;
         let deadline = self.deadline(request);
         let started = Instant::now();
