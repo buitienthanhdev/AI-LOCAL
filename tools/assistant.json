@@ -1,0 +1,196 @@
+{
+  "category": "assistant",
+  "description": "The assistant's own helpers: run requests later or regularly, notify the user, use the clipboard.",
+  "tools": [
+    {
+      "name": "schedule.create",
+      "description": "Run a request later or regularly with the assistant (a Windows scheduled task; a notification shows when it finishes). repeat: once (date YYYY-MM-DD + time HH:MM), daily (time), weekly (days ['mon',...] + time), every_minutes (every_minutes >= 5). request: the full instruction in the user's words, self-contained.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "name",
+          "request",
+          "repeat"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_\\- ]{1,60}$"
+          },
+          "request": {
+            "type": "string",
+            "minLength": 1
+          },
+          "repeat": {
+            "enum": [
+              "once",
+              "daily",
+              "weekly",
+              "every_minutes"
+            ]
+          },
+          "date": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string",
+            "pattern": "^[0-2][0-9]:[0-5][0-9]$"
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "every_minutes": {
+            "type": "integer",
+            "minimum": 5
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "schedule"
+    },
+    {
+      "name": "schedule.list",
+      "description": "List the scheduled requests with their next run and last result.",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "schedule"
+    },
+    {
+      "name": "schedule.delete",
+      "description": "Delete a scheduled request by name.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "schedule"
+    },
+    {
+      "name": "notify.show",
+      "description": "Show a Windows notification to the user (e.g. a reminder or a finished long job).",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "title",
+          "message"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "possible",
+      "policy_category": "notify"
+    },
+    {
+      "name": "clipboard.read",
+      "description": "Read the text on the clipboard.",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "clipboard"
+    },
+    {
+      "name": "clipboard.write",
+      "description": "Put text on the clipboard (for the user to paste).",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "text": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "possible",
+      "policy_category": "clipboard"
+    }
+  ]
+}

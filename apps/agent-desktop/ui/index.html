@@ -220,10 +220,14 @@ const TOOLS = {
   "document.read": "Đọc tài liệu", "memory.remember": "Ghi nhớ", "memory.forget": "Quên ghi chú", "system.open": "Mở",
   "autocad.launch": "Mở AutoCAD", "autocad.new_document": "Tạo bản vẽ mới", "autocad.create_circle": "Vẽ hình tròn", "autocad.create_line": "Vẽ đường thẳng",
   "autocad.create_polyline": "Vẽ đa tuyến", "autocad.create_text": "Ghi chữ trong bản vẽ", "autocad.save": "Lưu bản vẽ", "autocad.export_pdf": "Xuất PDF",
-  "autocad.export_dxf": "Xuất DXF", "autocad.draw_floor_plan": "Vẽ mặt bằng nhà", "autocad.verify_geometry": "Kiểm tra hình vẽ",
+  "autocad.export_dxf": "Xuất DXF", "autocad.draw_floor_plan": "Vẽ mặt bằng nhà",
+  "office.excel_read": "Đọc Excel", "office.excel_write": "Ghi Excel", "office.word_read": "Đọc Word", "office.word_write": "Sửa Word",
+  "office.export_pdf": "Xuất PDF", "office.outlook_list": "Xem hộp thư", "office.outlook_read": "Đọc email", "office.outlook_draft": "Soạn email",
+  "office.outlook_send": "Gửi email", "schedule.create": "Hẹn giờ làm việc", "schedule.list": "Xem lịch hẹn", "schedule.delete": "Xóa lịch hẹn",
+  "notify.show": "Hiện thông báo", "clipboard.read": "Đọc clipboard", "clipboard.write": "Chép vào clipboard", "tools.enable": "Nạp thêm công cụ", "autocad.verify_geometry": "Kiểm tra hình vẽ",
 };
 const AREA = { desktop: "Điều khiển Windows", browser: "Trình duyệt", shell: "PowerShell", filesystem: "Tệp tin", system: "Hệ thống",
-  vision: "Nhìn màn hình", knowledge: "Tri thức công ty", autocad: "AutoCAD", web: "Internet", document: "Tài liệu", memory: "Ghi nhớ" };
+  vision: "Nhìn màn hình", knowledge: "Tri thức công ty", autocad: "AutoCAD", web: "Internet", document: "Tài liệu", memory: "Ghi nhớ", office: "Office", schedule: "Hẹn giờ", notify: "Thông báo", clipboard: "Clipboard" };
 const friendly = tool => TOOLS[tool] || AREA[String(tool).split(".")[0]] || tool;
 const IDEAS = [
   ["📝", "Ghi chú nhanh", "Mở Notepad, viết \"Xin chào\" và lưu vào C:\\temp\\xinchao.txt"],

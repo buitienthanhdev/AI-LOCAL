@@ -181,9 +181,11 @@ const HANDS_ON_TOOLS: [&str; 11] = [
 const BANNER_TEXT: &str = "Trợ lý đang điều khiển máy tính — xin tạm thời không dùng chuột, bàn phím. Muốn dừng: bấm Dừng trong cửa sổ Trợ lý.";
 
 /// Tool groups always shown in full; the rest load when the request mentions them or the planner asks.
-const BASE_GROUPS: [&str; 6] = ["system", "knowledge", "web", "documents", "memory", "task"];
+const BASE_GROUPS: [&str; 7] = ["system", "knowledge", "web", "documents", "memory", "assistant", "task"];
 /// Words (lower case, without accents) that load a group from the start.
-const GROUP_TRIGGERS: [(&str, &[&str]); 4] = [
+const GROUP_TRIGGERS: [(&str, &[&str]); 5] = [
+    ("office", &["excel", "word", "powerpoint", "outlook", "email", "e-mail", "mail", "thu dien tu", "gui thu", "hop thu", "pdf",
+                 ".xlsx", ".docx", ".pptx", "bang tinh", "van ban"]),
     ("desktop", &["mo ", "open", "click", "bam ", "nhan ", "cua so", "window", "ung dung", "app", "notepad", "word", "excel",
                   "powerpoint", "paint", "go ", "type", "nhap ", "man hinh", "screen", "chuot", "mouse", "ban phim",
                   "keyboard", "dong ", "close", "zalo", "chrome", "luu ", "save", "giao dien", "phan mem"]),
