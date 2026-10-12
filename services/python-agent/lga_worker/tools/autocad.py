@@ -351,6 +351,61 @@ def register(registry: ToolRegistry) -> None:
             backend=BACKEND,
         )
 
+    @registry.handler("autocad.draw_image")
+    async def draw_image(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        from PIL import Image
+
+        from lga_worker.paint import sketch as sketching
+        from lga_worker.paint import vectorize
+        from lga_worker.paint.model import Canvas
+
+        source = Path(args["image_path"])
+        if not source.is_file():
+            raise ToolError(ErrorCode.NOT_FOUND, f"image not found: {source}")
+        try:
+            with Image.open(source) as opened:
+                picture = opened.convert("RGB")
+        except OSError as exc:
+            raise ToolError(ErrorCode.INVALID_ARGUMENT, f"{source.name} is not an image I can read: {exc}") from exc
+        if min(picture.size) < 16:
+            raise ToolError(ErrorCode.INVALID_ARGUMENT, f"{source.name} is too small ({picture.width}x{picture.height})")
+        detail = str(args.get("detail") or vectorize.DEFAULT_DETAIL)
+        width = float(args.get("width") or 1000.0)
+        sheet = Canvas(1152, 648)  # only its proportions matter: the picture is fitted into a 1000 x 562 unit sheet
+        traced = await asyncio.to_thread(sketching.sketch, picture, sheet, detail=detail,
+                                         colors=int(args.get("colors") or sketching.DEFAULT_COLORS),
+                                         shading=bool(args.get("shading", True)))
+        scale = width / 1000.0
+        height = sheet.unit_height * scale
+        cad = [(tuple((x * scale, height - y * scale) for x, y in s.points), sketching.hex_to_rgb(s.color), s.closed)
+               for s in traced.strokes]
+        provider = await _provider(ctx)
+        paper = str(args.get("paper") or "white")
+        result = await _sta(ctx, provider, provider.draw_strokes, cad, bool(args.get("new_document", True)), paper,
+                            sketching.aci_nearest, budget_s=max(60.0, ctx.remaining_s() - 5.0))
+        rendered = sketching.render(traced.strokes, sheet)
+        likeness = await asyncio.to_thread(vectorize.fidelity, picture, rendered, sheet)
+        added = result.entities_after - result.entities_before
+        complete = result.drawn == len(traced.strokes) and added == result.drawn
+        note = ""
+        if result.background == "white":
+            was = result.previous_background
+            note = (f" The model-space background was set to white (it was {was:#08x}) so pencil lines of any colour show;"
+                    " change it back under Options > Display > Colors if you prefer black.")
+        return ToolOutcome(
+            data={"document": result.document, "strokes": result.drawn, "contours": traced.stats["contours"],
+                  "hatch_lines": traced.stats["hatch_lines"], "layers": result.layers, "colors": traced.stats["colors"],
+                  "true_color": result.true_color, "background": result.background, "sheet": [width, round(height, 1)],
+                  "fidelity": likeness, "source": str(source), "detail": detail},
+            checks=[Check("strokes_drawn", complete, f"{added} entities added for {len(traced.strokes)} strokes")],
+            observation=(f"Sketched {source.name} in {result.document} as {traced.stats['contours']} coloured contours and "
+                         f"{traced.stats['hatch_lines']} shading lines on {result.layers} colour layers "
+                         f"({'true colour' if result.true_color else 'nearest index colours'}), one undo step; sheet "
+                         f"{width:g} x {height:.0f} units; likeness to the picture: structural similarity "
+                         f"{likeness['ssim']}.{note}"),
+            backend=BACKEND,
+        )
+
     @registry.handler("autocad.erase")
     async def erase(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
         provider = await _provider(ctx)

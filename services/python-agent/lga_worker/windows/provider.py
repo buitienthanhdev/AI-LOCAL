@@ -96,6 +96,8 @@ class UIElement:
     has_focus: bool
     value: str | None = None
     patterns: list[str] = field(default_factory=list)
+    # Short state words from UI Automation: "focused", "on"/"off", "expanded"/"collapsed", "selected".
+    state: str = ""
 
     @property
     def locator(self) -> ElementLocator:
@@ -118,6 +120,7 @@ class UIElement:
             "has_focus": self.has_focus,
             "value": self.value,
             "patterns": self.patterns,
+            "state": self.state,
         }
 
 
@@ -141,6 +144,8 @@ class UISnapshot:
     window: WindowInfo | None
     elements: list[UIElement]
     truncated: bool
+    # Text the window shows (labels, status bars, document contents), top to bottom.
+    texts: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -148,6 +153,7 @@ class UISnapshot:
             "window": self.window.to_dict() if self.window else None,
             "elements": [e.to_dict() for e in self.elements],
             "truncated": self.truncated,
+            "texts": self.texts,
         }
 
 
@@ -159,6 +165,8 @@ class LaunchResult:
     # "existing_window": the app was already running and its window came to the foreground.
     match_kind: Literal["new_window", "existing_window"]
     resolved_target: str
+    # Something the planner should know about the window it got (title differs, a fresh tab was opened).
+    note: str = ""
 
 
 @dataclass(frozen=True)
@@ -166,6 +174,8 @@ class CloseResult:
     closed: bool
     # When the window refused to close (e.g. "Save changes?" dialog), the blocking dialog.
     blocking_dialog: WindowInfo | None
+    dialog_buttons: list[str] = field(default_factory=list)
+    dialog_text: str = ""
 
 
 @dataclass(frozen=True)

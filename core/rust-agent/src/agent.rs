@@ -28,7 +28,7 @@ use crate::policy::{Policy, Verdict};
 use crate::redact::Redactor;
 use crate::retry::Backoff;
 use crate::secrets::resolve_secret;
-use crate::state::{StepRecord, StepStatus, TaskRecord, TaskStatus, TaskStore};
+use crate::state::{StepRecord, StepStatus, TaskRecord, TaskStatus, TaskStore, PLANNER_IMAGE_EXTENSIONS};
 use crate::tools::{ToolCatalog, ToolSpec, VerificationMode};
 use crate::worker::{ToolCall, ToolResponse, WorkerClient, WorkerError};
 
@@ -151,6 +151,15 @@ struct StepOutcome {
     record: StepRecord,
     observation_for_planner: Option<String>,
     screenshot: Option<PathBuf>,
+    /// A state the planner must deal with before the batch goes on (a dialog opened, the window closed).
+    surprise: Option<String>,
+}
+
+/// What an automatic look at the desktop or browser returned.
+struct Observation {
+    text: String,
+    screenshot: Option<PathBuf>,
+    surprise: Option<String>,
 }
 
 pub struct TaskRunner<'a> {
@@ -174,16 +183,17 @@ pub struct TaskRunner<'a> {
 }
 
 /// Steps that operate applications directly: the person should keep their hands off meanwhile.
-const HANDS_ON_TOOLS: [&str; 11] = [
+const HANDS_ON_TOOLS: [&str; 16] = [
     "desktop.click", "desktop.type", "desktop.press_key", "desktop.hotkey", "desktop.drag", "desktop.scroll",
     "desktop.move_mouse", "desktop.launch_app", "desktop.focus_window", "desktop.close_app", "desktop.set_value",
+    "paint.draw", "paint.draw_image", "art.draw", "art.paint", "desktop.save_as",
 ];
 const BANNER_TEXT: &str = "Trợ lý đang điều khiển máy tính — xin tạm thời không dùng chuột, bàn phím. Muốn dừng: bấm Dừng trong cửa sổ Trợ lý.";
 
 /// Tool groups always shown in full; the rest load when the request mentions them or the planner asks.
 const BASE_GROUPS: [&str; 7] = ["system", "knowledge", "web", "documents", "memory", "assistant", "task"];
 /// Words (lower case, without accents) that load a group from the start.
-const GROUP_TRIGGERS: [(&str, &[&str]); 5] = [
+const GROUP_TRIGGERS: [(&str, &[&str]); 7] = [
     ("office", &["excel", "word", "powerpoint", "outlook", "email", "e-mail", "mail", "thu dien tu", "gui thu", "hop thu", "pdf",
                  ".xlsx", ".docx", ".pptx", "bang tinh", "van ban"]),
     ("desktop", &["mo ", "open", "click", "bam ", "nhan ", "cua so", "window", "ung dung", "app", "notepad", "word", "excel",
@@ -193,13 +203,21 @@ const GROUP_TRIGGERS: [(&str, &[&str]); 5] = [
                   "facebook", "dien ", "tai ve", "download", "google", "http"]),
     ("vision", &["man hinh", "screen", "nhin", "anh chup", "screenshot", "hinh anh", "thay gi", "doc chu tren"]),
     ("autocad", &["autocad", "cad", "ban ve", "mat bang", "dwg", "dxf", "ve "]),
+    ("paint", &["paint", "mspaint"]),
+    ("art", &["ve ", "draw", "tranh", "paint", "mspaint", "autocad", "dwg", "sketch", "ki hoa", "svg", "doraemon", "photo", "hinh anh"]),
 ];
+/// Words that mean AutoCAD even when the request also says "paint" (a bare "ve " only means drawing).
+const AUTOCAD_STRONG: [&str; 5] = ["autocad", "dwg", "dxf", "mat bang", "ban ve"];
 
 /// The groups a request needs from the start, from its words (and the previous request it follows up).
 fn groups_for(text: &str) -> Vec<String> {
     let normalized = format!(" {} ", brain_core::text::norm(text));
     let mut groups: Vec<String> = BASE_GROUPS.iter().map(|g| g.to_string()).collect();
     for (group, words) in GROUP_TRIGGERS {
+        // "ve doraemon bang paint" is a Paint drawing, not an AutoCAD one: the bare word "ve " must not load AutoCAD.
+        if group == "autocad" && normalized.contains("paint") && !AUTOCAD_STRONG.iter().any(|w| normalized.contains(w)) {
+            continue;
+        }
         if words.iter().any(|w| normalized.contains(w)) {
             groups.push(group.to_string());
         }
@@ -207,6 +225,8 @@ fn groups_for(text: &str) -> Vec<String> {
     groups
 }
 
+/// Attached images sent to the planner with every turn (documents are read with tools instead).
+const MAX_USER_IMAGES_PER_TURN: usize = 4;
 /// After this many rejected completions the task is completed anyway, with the unmet checks reported to
 /// the user, instead of failing work that was actually done because a check was phrased badly.
 const MAX_COMPLETION_REJECTIONS: u32 = 2;
@@ -301,6 +321,11 @@ fn now_ms(started: Instant) -> u64 {
     started.elapsed().as_millis() as u64
 }
 
+/// Whitespace-insensitive, case-insensitive form of a text for completion checks.
+fn normalize_text(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
 fn json_matches(actual: &Value, expect: &Value) -> Result<(), String> {
     let Value::Object(expected) = expect else {
         return if actual == expect { Ok(()) } else { Err(format!("expected {expect}, got {actual}")) };
@@ -315,6 +340,10 @@ fn json_matches(actual: &Value, expect: &Value) -> Result<(), String> {
                 (Some(x), Some(y)) => (x - y).abs() <= 1e-6 * y.abs().max(1.0),
                 _ => a == b,
             },
+            // A text expectation is a substring test: a file's content or a window's text is checked for the
+            // part that matters, not reproduced in full (line endings and surrounding text differ anyway).
+            (Value::String(a), Value::String(b)) => a == b || (!b.is_empty() && normalize_text(a).contains(&normalize_text(b))),
+            (Value::Array(items), Value::String(b)) => items.iter().any(|i| i.as_str().is_some_and(|a| normalize_text(a).contains(&normalize_text(b)))),
             (a, b) => a == b,
         };
         if !ok {
@@ -341,7 +370,8 @@ impl<'a> TaskRunner<'a> {
             pending_failures: Vec::new(),
             environment: String::new(),
             completion_rejections: 0,
-            loaded_groups: groups_for(&format!("{} {}", record.goal, record.conversation.join(" "))),
+            loaded_groups: groups_for(&format!("{} {} {}", record.goal, record.conversation.join(" "),
+                                               record.attachments.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(" "))),
             banner: None,
         })
     }
@@ -513,6 +543,7 @@ impl<'a> TaskRunner<'a> {
                     _ => {
                         let outcome = self.execute_step(record, &action).await?;
                         let succeeded = outcome.record.status == StepStatus::Succeeded;
+                        let surprise = outcome.surprise.clone();
                         if self.rt.catalog.get(&action.tool).is_some_and(|spec| !spec.changes_state()) {
                             read_in_batch = true;
                         }
@@ -521,6 +552,11 @@ impl<'a> TaskRunner<'a> {
                             return Ok(());
                         }
                         if !succeeded {
+                            break;
+                        }
+                        if let Some(why) = surprise {
+                            // The rest of the batch was planned for a screen that no longer exists.
+                            self.notices.push(format!("The remaining actions of your reply were not run because {why}. Look at the latest observation and deal with that first."));
                             break;
                         }
                     }
@@ -567,6 +603,16 @@ impl<'a> TaskRunner<'a> {
         let now = chrono::Local::now().format("%A %Y-%m-%d %H:%M (UTC%:z)").to_string();
         let recall = self.rt.memory.recall(&record.goal, max_recalled)?.render();
         let mut attachments = Vec::new();
+        for image in record.attachments.iter().filter(|a| a.is_image()).take(MAX_USER_IMAGES_PER_TURN) {
+            let path = PathBuf::from(&image.path);
+            if !path.extension().and_then(|e| e.to_str()).is_some_and(|e| PLANNER_IMAGE_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str())) {
+                continue; // BMP/TIFF/HEIC: the brains cannot take them; document.read describes them instead
+            }
+            match self.rt.llm.upload(&path).await {
+                Ok(id) => attachments.push(id),
+                Err(err) => self.notices.push(format!("The attached image {} could not be sent to you ({err}); read it with document.read instead.", image.name)),
+            }
+        }
         for path in self.latest_screenshots.iter().rev().take(agent_cfg.history_images) {
             match self.rt.llm.upload(path).await {
                 Ok(id) => attachments.push(id),
@@ -586,6 +632,7 @@ impl<'a> TaskRunner<'a> {
                 notices: &self.notices,
                 now: &now,
                 conversation: &record.conversation,
+                attachments: &record.attachments,
             });
             let mut user = ChatMessage::text("user", turn);
             user.content.extend(attachments.iter().map(|id| Part::Image { attachment_id: id.clone() }));
@@ -696,7 +743,7 @@ impl<'a> TaskRunner<'a> {
         step.status = status;
         step.error = Some(error);
         step.finished_at = Some(Utc::now());
-        StepOutcome { record: step, observation_for_planner: None, screenshot: None }
+        StepOutcome { record: step, observation_for_planner: None, screenshot: None, surprise: None }
     }
 
     async fn execute_step(&mut self, record: &mut TaskRecord, action: &PlannerAction) -> Result<StepOutcome> {
@@ -781,7 +828,7 @@ impl<'a> TaskRunner<'a> {
                     step.error = Some(ToolErrorInfo::new(ErrorCode::Cancelled, "cancelled by the user", false));
                     step.duration_ms = now_ms(started);
                     step.finished_at = Some(Utc::now());
-                    return Ok(StepOutcome { record: step, observation_for_planner: None, screenshot: None });
+                    return Ok(StepOutcome { record: step, observation_for_planner: None, screenshot: None, surprise: None });
                 }
             };
             let failure = match result {
@@ -869,34 +916,68 @@ impl<'a> TaskRunner<'a> {
             }
         }
 
+        // Look at the screen after every action that touches an application (also the self-verified ones:
+        // the planner should see the window it just opened or the state after a save), after anything
+        // unverified, and after a failed desktop/browser step.
+        let hands_on = spec.category == "desktop" && HANDS_ON_TOOLS.contains(&spec.name.as_str());
         let needs_observation = matches!(step.verification.as_deref(), Some("deferred"))
+            || hands_on
             || step.status == StepStatus::Failed && (spec.category == "desktop" || spec.category == "browser");
+        let mut surprise = None;
         let observation = if needs_observation && !self.cancel.is_cancelled() {
             self.set_status(record, if step.status == StepStatus::Failed { TaskStatus::Recovering } else { TaskStatus::Observing }, None)?;
-            self.observe(record, spec).await
+            match self.observe(record, spec).await {
+                Some(seen) => {
+                    if screenshot.is_none() {
+                        screenshot = seen.screenshot;
+                    }
+                    surprise = seen.surprise;
+                    Some(seen.text)
+                }
+                None => None,
+            }
         } else {
             None
         };
-        Ok(StepOutcome { record: step, observation_for_planner: observation, screenshot })
+        Ok(StepOutcome { record: step, observation_for_planner: observation, screenshot, surprise })
     }
 
-    /// OBSERVE: capture the current UI so the planner can judge an unverified or failed action.
-    async fn observe(&mut self, record: &TaskRecord, spec: &ToolSpec) -> Option<String> {
+    /// OBSERVE: capture the current UI so the planner can judge an unverified or failed action. Desktop work
+    /// uses desktop.observe (working window, focus, text, controls, screenshot, and whether a dialog opened or
+    /// the window closed); browser work reads the page state. The result is written to the audit log.
+    async fn observe(&mut self, record: &TaskRecord, spec: &ToolSpec) -> Option<Observation> {
+        let worker = self.rt.worker().await.ok()?;
+        let has = |name: &str| worker.tools().iter().any(|t| t == name);
         let (tool, args) = if spec.category == "browser" {
             ("browser.get_state", json!({}))
+        } else if has("desktop.observe") {
+            ("desktop.observe", json!({"max_elements": OBSERVE_MAX_ELEMENTS}))
         } else {
             ("desktop.inspect_ui", json!({"max_elements": OBSERVE_MAX_ELEMENTS}))
         };
-        let worker = self.rt.worker().await.ok()?;
-        if !worker.tools().iter().any(|t| t == tool) {
+        if !has(tool) {
             return None;
         }
         let call = ToolCall::new(&record.task_id, "observe", tool, args, OBSERVE_TIMEOUT);
-        match worker.call(&call).await {
-            Ok(response) if response.is_ok() => response.result.map(|r| format!("(automatic {tool}) {}", r.observation)),
-            Ok(response) => response.error.map(|e| format!("(automatic {tool} failed: {e})")),
-            Err(err) => Some(format!("(automatic {tool} failed: {err})")),
-        }
+        let seen = match worker.call(&call).await {
+            Ok(response) if response.is_ok() => {
+                let result = response.result?;
+                let screenshot = result.artifacts.iter()
+                    .filter(|a| a.get("kind").and_then(Value::as_str) == Some("screenshot"))
+                    .find_map(|a| a.get("path").and_then(Value::as_str).map(PathBuf::from));
+                let surprise = result.data.get("surprise").and_then(Value::as_str).filter(|s| !s.is_empty()).map(String::from);
+                Observation { text: format!("(automatic {tool}) {}", result.observation), screenshot, surprise }
+            }
+            Ok(response) => Observation { text: format!("(automatic {tool} failed: {})", response.error.map(|e| e.to_string()).unwrap_or_default()), screenshot: None, surprise: None },
+            Err(err) => Observation { text: format!("(automatic {tool} failed: {err})"), screenshot: None, surprise: None },
+        };
+        let _ = self.audit.record(AuditEvent {
+            kind: "observe",
+            tool: Some(tool.into()),
+            detail: json!({"text": clip_text(&seen.text, 6000), "screenshot": seen.screenshot, "surprise": seen.surprise}),
+            ..Default::default()
+        });
+        Some(seen)
     }
 
     fn after_step(&mut self, record: &mut TaskRecord, outcome: StepOutcome) -> Result<()> {
@@ -1104,7 +1185,8 @@ impl<'a> TaskRunner<'a> {
                 } else {
                     "Note: the result could not be fully verified"
                 };
-                format!("{summary}\n\n⚠ {note} ({}).", clip_text(&failures.join("; "), 400))
+                // The warning leads: the model's own claim ("I drew it") must not be what the person reads first.
+                format!("⚠ {note} ({}).\n\n{summary}", clip_text(&failures.join("; "), 400))
             } else {
                 summary
             };
@@ -1138,6 +1220,10 @@ mod tests {
         assert!(g.contains(&"autocad".to_string()) && !g.contains(&"browser".to_string()));
         let g = super::groups_for("Mở Notepad, gõ dòng chữ rồi lưu");
         assert!(g.contains(&"desktop".to_string()));
+        let g = super::groups_for("vẽ doraemon bằng paint");
+        assert!(g.contains(&"paint".to_string()) && !g.contains(&"autocad".to_string()), "{g:?}");
+        let g = super::groups_for("vẽ con mèo trong PowerPoint");
+        assert!(g.contains(&"art".to_string()) && g.contains(&"office".to_string()), "{g:?}");
         let g = super::groups_for("Ổ C còn trống bao nhiêu GB?");
         assert_eq!(g.len(), super::BASE_GROUPS.len(), "{g:?}");
     }

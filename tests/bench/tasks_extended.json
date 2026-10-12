@@ -1426,7 +1426,8 @@
     },
     {
      "kind": "no_window",
-     "title": "nhat_ky"
+     "title": "nhat_ky",
+     "process": "Notepad"
     }
    ]
   },
@@ -1446,6 +1447,11 @@
     {
      "kind": "tool_used",
      "prefix": "desktop."
+    },
+    {
+     "kind": "no_window",
+     "title": "Calculator",
+     "process": "CalculatorApp"
     }
    ]
   },
@@ -1518,6 +1524,342 @@
     {
      "kind": "tool_used",
      "name": "autocad.create_polyline"
+    }
+   ]
+  },
+  {
+   "id": "g-notepad-two-lines",
+   "category": "gui",
+   "prompt": "Mở Notepad, gõ hai dòng: 'Dòng 1: kế hoạch' và 'Dòng 2: ngân sách', lưu thành {dir}\\ke_hoach.txt rồi đóng Notepad.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "file_contains",
+     "path": "{dir}\\ke_hoach.txt",
+     "text": "Dòng 1: kế hoạch"
+    },
+    {
+     "kind": "file_contains",
+     "path": "{dir}\\ke_hoach.txt",
+     "text": "Dòng 2: ngân sách"
+    },
+    {
+     "kind": "no_window",
+     "title": "ke_hoach",
+     "process": "Notepad"
+    }
+   ]
+  },
+  {
+   "id": "g-notepad-read-line",
+   "category": "gui",
+   "setup": {
+    "files": {
+     "{dir}\\thong_bao.txt": "Thông báo nội bộ\nHọp lúc 14h30 ngày 12/10 tại phòng 302\nMang theo laptop\n"
+    }
+   },
+   "prompt": "Mở file {dir}\\thong_bao.txt bằng Notepad, đọc trên màn hình xem cuộc họp lúc mấy giờ và ở phòng nào, trả lời tôi rồi đóng Notepad.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_contains",
+     "any": [
+      "14h30",
+      "14:30",
+      "14 giờ 30"
+     ]
+    },
+    {
+     "kind": "summary_contains",
+     "any": [
+      "302"
+     ]
+    },
+    {
+     "kind": "tool_used",
+     "prefix": "desktop."
+    },
+    {
+     "kind": "no_window",
+     "title": "thong_bao",
+     "process": "Notepad"
+    }
+   ]
+  },
+  {
+   "id": "g-notepad-replace",
+   "category": "gui",
+   "setup": {
+    "files": {
+     "{dir}\\gia.txt": "San pham A\ngia: 100\nkho: HN\n"
+    }
+   },
+   "prompt": "Mở {dir}\\gia.txt bằng Notepad, sửa ngay trong Notepad số 100 thành 250, lưu lại và đóng Notepad.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "file_contains",
+     "path": "{dir}\\gia.txt",
+     "text": "gia: 250"
+    },
+    {
+     "kind": "file_not_contains",
+     "path": "{dir}\\gia.txt",
+     "text": "100"
+    },
+    {
+     "kind": "file_contains",
+     "path": "{dir}\\gia.txt",
+     "text": "kho: HN"
+    },
+    {
+     "kind": "tool_used",
+     "prefix": "desktop."
+    },
+    {
+     "kind": "no_window",
+     "title": "gia.txt",
+     "process": "Notepad"
+    }
+   ]
+  },
+  {
+   "id": "g-calc-sum",
+   "category": "gui",
+   "prompt": "Mở ứng dụng Calculator của Windows, tính 987 + 654 bằng chính Calculator, đọc kết quả trên màn hình rồi đóng Calculator.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_regex",
+     "pattern": "1[.,]?641"
+    },
+    {
+     "kind": "tool_used",
+     "prefix": "desktop."
+    },
+    {
+     "kind": "no_window",
+     "title": "Calculator",
+     "process": "CalculatorApp"
+    }
+   ]
+  },
+  {
+   "id": "g-calc-divide",
+   "category": "gui",
+   "prompt": "Dùng ứng dụng Calculator của Windows tính 144 chia 12, cho tôi biết kết quả hiển thị rồi đóng Calculator.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_regex",
+     "pattern": "\\b12\\b"
+    },
+    {
+     "kind": "tool_used",
+     "prefix": "desktop."
+    },
+    {
+     "kind": "no_window",
+     "title": "Calculator",
+     "process": "CalculatorApp"
+    }
+   ]
+  },
+  {
+   "id": "g-paint-house",
+   "category": "gui",
+   "prompt": "Vẽ một ngôi nhà có mái đỏ bằng Microsoft Paint.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "tool_used",
+     "name": "paint.draw"
+    }
+   ],
+   "cleanup": {
+    "kill": [
+     "mspaint"
+    ]
+   }
+  },
+  {
+   "id": "g-paint-save",
+   "category": "gui",
+   "prompt": "Vẽ Doraemon bằng Paint rồi lưu hình thành {dir}\\doraemon.png.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "tool_used",
+     "name": "paint.draw"
+    },
+    {
+     "kind": "file_exists",
+     "path": "{dir}\\doraemon.png"
+    }
+   ],
+   "cleanup": {
+    "kill": [
+     "mspaint"
+    ]
+   }
+  },
+  {
+   "id": "g-explorer-list",
+   "category": "gui",
+   "setup": {
+    "files": {
+     "{dir}\\a_bao_cao.txt": "x",
+     "{dir}\\b_hop_dong.docx": "x",
+     "{dir}\\c_anh.png": "x"
+    }
+   },
+   "prompt": "Mở thư mục {dir} trong File Explorer và cho tôi biết thư mục đó đang hiển thị những tệp nào.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_contains",
+     "any": [
+      "a_bao_cao"
+     ]
+    },
+    {
+     "kind": "summary_contains",
+     "any": [
+      "b_hop_dong"
+     ]
+    },
+    {
+     "kind": "summary_contains",
+     "any": [
+      "c_anh"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "g-word-gui",
+   "category": "gui",
+   "prompt": "Mở Microsoft Word, gõ dòng 'Báo cáo tuần 41' và lưu thành {dir}\\bao_cao.docx rồi đóng Word.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "docx_contains",
+     "path": "{dir}\\bao_cao.docx",
+     "texts": [
+      "Báo cáo tuần 41"
+     ]
+    },
+    {
+     "kind": "no_window",
+     "title": "bao_cao.docx",
+     "process": "WINWORD"
+    }
+   ]
+  },
+  {
+   "id": "g-paint-image",
+   "category": "gui",
+   "setup": {
+    "image": {
+     "path": "{dir}\\canh.png",
+     "size": [
+      480,
+      320
+     ],
+     "background": "#87CEEB",
+     "shapes": [
+      {
+       "kind": "rectangle",
+       "box": [
+        0,
+        220,
+        480,
+        320
+       ],
+       "fill": "#2E8B57"
+      },
+      {
+       "kind": "ellipse",
+       "box": [
+        360,
+        30,
+        440,
+        110
+       ],
+       "fill": "#FFD400"
+      },
+      {
+       "kind": "rectangle",
+       "box": [
+        120,
+        130,
+        260,
+        240
+       ],
+       "fill": "#C0392B"
+      },
+      {
+       "kind": "polygon",
+       "box": [
+        [
+         100,
+         130
+        ],
+        [
+         190,
+         60
+        ],
+        [
+         280,
+         130
+        ]
+       ],
+       "fill": "#6B2D1A"
+      }
+     ]
+    }
+   },
+   "prompt": "Vẽ lại bức ảnh {dir}\\canh.png bằng Microsoft Paint.",
+   "cleanup": {
+    "kill": [
+     "mspaint"
+    ]
+   },
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "tool_used",
+     "name": "paint.draw_image"
     }
    ]
   }

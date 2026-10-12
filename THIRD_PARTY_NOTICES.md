@@ -13,6 +13,7 @@ This project integrates or adapts code from the projects below. Full license tex
 | gemini-web2api-go (© 2026 gemini-web2api-go contributors) | MIT | Built from pinned source and run as a separate local process. Not modified. | none (binary built into the git-ignored runtime dir) |
 | WebAI-to-API (© 2026 Mohammad) | MIT | Run from the pinned source as a separate local process. Not modified. | none |
 | UI-TARS-desktop (Bytedance) | Apache-2.0 | Architecture reference only; no code copied. | none |
+| KaTeX 0.16 (© Khan Academy and other contributors) | MIT | Renders LaTeX formulas in the chat window; embedded unmodified (woff2 fonts only, CSS trimmed to match). | `apps/agent-desktop/ui/vendor/katex/`, `apps/agent-desktop/src/vendor.rs` (generated), license in `third_party/licenses/KaTeX-LICENSE.txt` |
 
 ## Other runtime dependencies (installed from PyPI / crates.io, not redistributed)
 

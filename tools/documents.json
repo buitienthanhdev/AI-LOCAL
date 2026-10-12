@@ -36,6 +36,9 @@
           },
           "truncated": {
             "type": "boolean"
+          },
+          "text": {
+            "type": "string"
           }
         }
       },
