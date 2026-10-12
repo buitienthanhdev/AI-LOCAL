@@ -50,6 +50,34 @@
       "verification": "none",
       "side_effects": "none",
       "policy_category": "filesystem.read"
+    },
+    {
+      "name": "file.info",
+      "description": "Facts about ONE file or folder by absolute path: where it is (folder), its type and size, AUTHORS (the file's own Authors property as Explorer shows it), who saved it last, the day it FIRST APPEARED (first_seen: earliest of the file-system creation time and the first time the company catalog saw it: this is the file's 'ngày tạo'), the creation date written inside the document, last modified, pages, owner. Use it for 'file này ở đâu / ai tạo / tạo khi nào / do ai sửa'. To FIND files by name first use knowledge.query or filesystem.list.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "filesystem.read"
     }
   ]
 }
