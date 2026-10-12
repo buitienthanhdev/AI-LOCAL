@@ -123,6 +123,12 @@ deny_always = [
     "{state}\\chrome-profile",
     "%WINDIR%\\System32\\config",
 ]
+# Private keys and key stores are secrets wherever they sit (a key in .ollama is as secret as one in .ssh).
+deny_file_patterns = [
+    '^id_(rsa|dsa|ecdsa|ed25519)$',
+    '\.(pem|pfx|p12|ppk|kdbx|gpg)$',
+    '^(\.npmrc|\.pypirc|\.netrc|credentials\.json)$',
+]
 # In normal mode, writes outside these roots need confirmation.
 write_roots_normal = [
     "%USERPROFILE%\\Documents",
@@ -151,6 +157,9 @@ deny = [
     '\bmimikatz\b|sekurlsa|lsadump',
     '(login data|cookies|local state)\W*$|\\user data\\.*\\(login data|cookies)',  # browser credential DBs
     'dpapi|protecteddata\]::unprotect',
+    '(^|[\\/\s"~])\.(ssh|aws|gnupg)\b',  # credential folders of the user profile
+    '\bid_(rsa|dsa|ecdsa|ed25519)\b($|[^.])',  # private key files: not read, not hunted for
+    '\.(pem|pfx|p12|ppk|kdbx)\b.*(get-content|\bcat\b|\btype\b|\bgc\b)|(get-content|\bcat\b|\btype\b|\bgc\b).*\.(pem|pfx|p12|ppk|kdbx)\b',
     '\breg(\.exe)?\s+(add|delete|import)\s+hklm',
     'new-itemproperty.*hklm:|set-itemproperty.*hklm:',
 ]

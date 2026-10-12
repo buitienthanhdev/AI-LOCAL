@@ -50,6 +50,9 @@ struct PathRules {
 #[derive(Debug, Deserialize)]
 struct FsRules {
     deny_always: Vec<String>,
+    /// File NAMES (regex, case-insensitive) that are secrets wherever they are: private keys, key stores.
+    #[serde(default)]
+    deny_file_patterns: Vec<String>,
     write_roots_normal: Vec<String>,
     protected: Vec<String>,
 }
@@ -89,6 +92,7 @@ pub struct Policy {
     risk: RiskRules,
     path_args: Vec<String>,
     deny_always: Vec<PathBuf>,
+    deny_files: Vec<Regex>,
     write_roots: Vec<PathBuf>,
     protected: Vec<PathBuf>,
     shell_deny: Vec<Regex>,
@@ -206,6 +210,7 @@ impl Policy {
         Ok(Self {
             mode,
             deny_always: paths(&file.filesystem.deny_always),
+            deny_files: regexes(&file.filesystem.deny_file_patterns)?,
             write_roots: paths(&file.filesystem.write_roots_normal),
             protected: paths(&file.filesystem.protected),
             shell_deny: regexes(&file.shell.deny)?,
@@ -283,6 +288,12 @@ impl Policy {
                         &mut verdict,
                         &mut reasons,
                     );
+                }
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if self.deny_files.iter().any(|re| re.is_match(name)) {
+                        raise(Verdict::Deny, format!("{name} is a private key or key store: it is never read or written"),
+                              &mut verdict, &mut reasons);
+                    }
                 }
                 if writes && self.mode != ExecutionMode::FullAccess {
                     if self.protected.iter().any(|r| is_within(&path, r)) {
@@ -373,6 +384,22 @@ mod tests {
         let path = format!("{local}\\Google\\Chrome\\User Data\\Default\\Cookies");
         let d = policy.evaluate(tools.get("filesystem.read").unwrap(), &json!({"path": path}));
         assert_eq!(d.verdict, Verdict::Deny, "{:?}", d.reasons);
+    }
+
+    #[test]
+    fn private_keys_are_denied_wherever_they_are() {
+        let (policy, tools) = setup(ExecutionMode::FullAccess);
+        for path in ["C:\\Users\\x\\.ollama\\id_ed25519", "C:\\work\\deploy\\server.pem", "D:\\keys\\wallet.kdbx"] {
+            let d = policy.evaluate(tools.get("filesystem.read").unwrap(), &json!({"path": path}));
+            assert_eq!(d.verdict, Verdict::Deny, "{path}: {:?}", d.reasons);
+        }
+        let public = policy.evaluate(tools.get("filesystem.read").unwrap(), &json!({"path": "C:\\Users\\x\\.ollama\\id_ed25519.pub"}));
+        assert_ne!(public.verdict, Verdict::Deny, "{:?}", public.reasons);
+        let hunt = policy.evaluate(tools.get("shell.exec").unwrap(),
+                                   &json!({"command": "Get-ChildItem -Recurse -Include id_rsa,id_ed25519 C:\\Users"}));
+        assert_eq!(hunt.verdict, Verdict::Deny, "{:?}", hunt.reasons);
+        let normal = policy.evaluate(tools.get("shell.exec").unwrap(), &json!({"command": "Get-ChildItem C:\\temp"}));
+        assert_ne!(normal.verdict, Verdict::Deny);
     }
 
     #[test]
