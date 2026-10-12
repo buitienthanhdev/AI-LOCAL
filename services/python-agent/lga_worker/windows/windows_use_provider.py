@@ -38,6 +38,7 @@ from lga_worker.shell.powershell import resolve_powershell, run_powershell
 from lga_worker.sta import StaExecutor
 from lga_worker.windows import _upstream, win32
 from lga_worker.windows.elements import CacheEntry, ElementCache, matches_query
+from lga_worker.windows.ops import DesktopOpsMixin
 from lga_worker.windows.provider import (
     CloseResult,
     ElementContent,
@@ -73,6 +74,18 @@ WINDOW_POLL_INTERVAL_S = 0.2
 # Single-instance apps hand the launch to their running instance; accept that instance's window only
 # after this delay so a genuinely new window gets the chance to appear first.
 EXISTING_WINDOW_GRACE_S = 1.5
+# A new window of the launched app whose title is not the expected one is accepted after this long
+# (Windows 11 Notepad reopens old tabs, so its title is a document name, not "Untitled").
+TITLE_GRACE_S = 4.0
+# A freshly created window gets this long to finish initialising (title stable, focus available).
+SETTLE_WINDOW_S = 5.0
+SETTLE_STABLE_S = 0.4
+# Packaged (Store) apps show their window through this host process, not their own.
+UWP_HOST_PROCESSES = frozenset({"applicationframehost.exe"})
+# Visible-text scan limits for inspect_ui (kept small: it runs after every action).
+TEXT_SCAN_ITEMS = 50
+TEXT_SCAN_NODES = 2500
+TEXT_SCAN_BUDGET_S = 2.0
 KEY_EVENT_GAP_S = 0.02
 WHEEL_INTERVAL_S = 0.05
 MAX_ELEMENT_TEXT_CHARS = 200_000
@@ -172,7 +185,7 @@ def _is_com_error(exc: BaseException) -> bool:
     return isinstance(exc, _ctypes.COMError | OSError)
 
 
-class WindowsUseProvider(WindowsControlProvider):
+class WindowsUseProvider(DesktopOpsMixin, WindowsControlProvider):
     def __init__(self, config: Config) -> None:
         self.executor = StaExecutor("desktop")
         self._settings = DesktopSettings.from_config(config)
@@ -272,12 +285,24 @@ class WindowsUseProvider(WindowsControlProvider):
             display_name, app_id = match
             resolved = f"shell:AppsFolder\\{app_id}"
             os.startfile(resolved)  # noqa: S606 - launching a registered Start-menu app is the purpose
-        window, kind = self._wait_for_launched_window(
+        window, kind, note = self._wait_for_launched_window(
             before, pid, expected_process, display_name, expect_title, time.monotonic() + timeout_s
         )
+        window = self._settle_new_window(window, expected_process)
         self.set_target(window.hwnd)
+        if expected_process == "notepad.exe":
+            if arguments:
+                window, tab_note = self._notepad_show_file(window, arguments[-1])
+            elif "untitled" not in window.title.lower():
+                window, tab_note = self._fresh_notepad_tab(window)
+            else:
+                tab_note = ""
+            note = f"{note}; {tab_note}" if note and tab_note else (note or tab_note)
+        shown = self._editor_preview()
+        if shown:
+            note = f"{note}; {shown}" if note else shown
         return LaunchResult(pid=pid if pid else window.pid, window=window, match_kind=kind,
-                            resolved_target=resolved)
+                            resolved_target=resolved, note=note)
 
     def _wait_for_launched_window(
         self,
@@ -287,33 +312,53 @@ class WindowsUseProvider(WindowsControlProvider):
         display_name: str,
         expect_title: str | None,
         deadline: float,
-    ) -> tuple[WindowInfo, str]:
+    ) -> tuple[WindowInfo, str, str]:
+        """The window the launch produced: (window, match_kind, note). Packaged apps (Calculator) show their
+        window through ApplicationFrameHost and stubs (calc.exe, notepad.exe) exit at once, so the match is on
+        the app, not only on the spawned pid: same executable name, its stem, the UWP host, or a fuzzy name."""
         started = time.monotonic()
+        stem = (expected_process or "").lower().removesuffix(".exe")
 
-        def belongs(w: WindowInfo) -> bool:
-            if expect_title and expect_title.lower() not in w.title.lower():
-                return False
+        def same_app(w: WindowInfo) -> bool:
             if pid is not None and w.pid == pid:
                 return True
-            if expected_process and w.process_name.lower() == expected_process:
-                return True
-            if pid is None and expected_process is None:
+            proc = w.process_name.lower()
+            if expected_process:
+                if proc == expected_process or proc.removesuffix(".exe") == stem:
+                    return True
+                if proc in UWP_HOST_PROCESSES:
+                    return True
+                return bool(stem) and (proc.startswith(stem) or fuzz.partial_ratio(stem, proc) >= 85)
+            if pid is None:
                 return (fuzz.partial_ratio(display_name.lower(), w.title.lower()) >= START_APP_MATCH_THRESHOLD
-                        or fuzz.partial_ratio(display_name.lower(), w.process_name.lower())
-                        >= START_APP_MATCH_THRESHOLD)
+                        or fuzz.partial_ratio(display_name.lower(), proc) >= START_APP_MATCH_THRESHOLD)
             return False
 
+        def title_ok(w: WindowInfo) -> bool:
+            if not expect_title:
+                return True
+            want, got = expect_title.lower(), w.title.lower()
+            return want in got or fuzz.partial_ratio(want, got) >= 80
+
+        seen_other_title: WindowInfo | None = None
         while time.monotonic() < deadline:
             windows = win32.list_user_windows()
-            fresh = [w for w in windows if w.hwnd not in before and belongs(w)]
+            fresh = [w for w in windows if w.hwnd not in before and same_app(w)]
+            matching = [w for w in fresh if title_ok(w)]
+            if matching:
+                return matching[0], "new_window", ""
             if fresh:
-                return fresh[0], "new_window"
+                seen_other_title = fresh[0]
+                if time.monotonic() - started >= TITLE_GRACE_S:
+                    return fresh[0], "new_window", f"its title is {fresh[0].title!r}, not {expect_title!r}"
             if time.monotonic() - started >= EXISTING_WINDOW_GRACE_S:
-                existing = [w for w in windows if w.is_foreground and belongs(w)]
+                existing = [w for w in windows if w.is_foreground and same_app(w) and title_ok(w)]
                 if existing:
-                    return existing[0], "existing_window"
+                    return existing[0], "existing_window", ""
             time.sleep(WINDOW_POLL_INTERVAL_S)
         details: dict[str, Any] = {"pid": pid, "expected_process": expected_process}
+        if seen_other_title is not None:
+            details["window_with_other_title"] = seen_other_title.to_dict()
         if pid is not None:
             try:
                 import psutil
@@ -323,6 +368,92 @@ class WindowsUseProvider(WindowsControlProvider):
                 details["process_check_error"] = str(exc)
         raise ToolError(ErrorCode.TIMEOUT, f"no window for {display_name!r} appeared before the deadline",
                         details=details)
+
+    def _settle_new_window(self, window: WindowInfo, expected_process: str | None) -> WindowInfo:
+        """A window is returned as soon as it exists, which can be while the app still initialises (Windows 11
+        Notepad shows the bare title 'Notepad' for ~0.3 s and dies if it receives keys then). Wait until the
+        title has been stable for a moment and something can take the focus, at most SETTLE_WINDOW_S."""
+        deadline = time.monotonic() + SETTLE_WINDOW_S
+        previous = None
+        stable_since = time.monotonic()
+        while time.monotonic() < deadline:
+            if not win32.is_window(window.hwnd):
+                break
+            title = win32gui.GetWindowText(window.hwnd)
+            if title != previous:
+                previous, stable_since = title, time.monotonic()
+            bare_notepad = expected_process == "notepad.exe" and title.strip().lower() == "notepad"
+            if not bare_notepad and time.monotonic() - stable_since >= SETTLE_STABLE_S:
+                focused = self.focused_control_info()
+                if focused is not None or time.monotonic() - stable_since >= SETTLE_STABLE_S * 3:
+                    break
+            time.sleep(0.1)
+        return win32.window_info(window.hwnd) if win32.is_window(window.hwnd) else window
+
+    def _editor_preview(self) -> str:
+        """What the focused editor shows right after a launch, so the planner can tell whether it is looking at
+        the document it meant to open (Notepad restores other tabs; Word reopens the last file)."""
+        focused = self.focused_control_info()
+        if not focused:
+            return ""
+        content = focused.get("text") if focused.get("text") is not None else focused.get("value")
+        if not content or not content.strip():
+            return f"the focused {focused.get('control_type')} '{focused.get('name')}' is empty"
+        first = " ".join(content.strip().splitlines()[0].split())[:100]
+        return f"the focused {focused.get('control_type')} '{focused.get('name')}' starts with: {first!r}"
+
+    def _notepad_show_file(self, window: WindowInfo, file_path: str) -> tuple[WindowInfo, str]:
+        """Notepad opened `file_path` as a tab, but a restored tab may be the active one and a 'Keep unsaved
+        changes?' question may be up. Keep the user's tabs (never discard their work) and activate the file's tab."""
+        name = Path(file_path).name
+        stem = Path(file_path).stem.lower()
+        notes: list[str] = []
+        self.set_target(window.hwnd)
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if stem in win32gui.GetWindowText(window.hwnd).lower():
+                break
+            buttons = self.find_element(ElementQuery(window_hwnd=window.hwnd, control_type="ButtonControl", max_results=30))
+            keep = next((b for b in buttons if b.name.strip().lower() in ("keep changes", "keep", "giữ thay đổi", "giữ lại")), None)
+            if keep is not None:
+                self.press_button(keep)
+                notes.append("kept another tab's unsaved changes")
+                time.sleep(0.4)
+                continue
+            tabs = self.find_element(ElementQuery(window_hwnd=window.hwnd, name_contains=name, control_type="TabItemControl",
+                                                  max_results=3))
+            if tabs:
+                entry = self._resolve(tabs[0].element_id)
+                pattern = entry.control.GetPattern(self.uia.PatternId.SelectionItemPattern)
+                if pattern is not None:
+                    pattern.Select()
+                else:
+                    x, y = tabs[0].rect.center
+                    self.click(x, y, "left")
+                notes.append(f"activated the {name} tab")
+                time.sleep(0.3)
+                continue
+            time.sleep(0.2)
+        info = win32.window_info(window.hwnd)
+        if stem not in info.title.lower():
+            notes.append(f"the active tab is '{info.title}', not {name}: select the {name} tab before editing")
+        else:
+            notes.append(f"{name} is the active tab")
+        return info, "; ".join(notes)
+
+    def _fresh_notepad_tab(self, window: WindowInfo) -> tuple[WindowInfo, str]:
+        """Windows 11 Notepad reopens the previous session's tabs, so a plain launch lands in someone else's
+        document. Open a new empty tab (Ctrl+N) and make sure it is the active one."""
+        self.set_target(window.hwnd)
+        if not self.bring_to_front(window.hwnd):
+            return window, "Notepad reopened old tabs and could not be brought to the front"
+        self.hotkey(["ctrl", "n"])
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if "untitled" in win32gui.GetWindowText(window.hwnd).lower():
+                return win32.window_info(window.hwnd), "Notepad reopened old tabs; a new empty tab (Untitled) is active now"
+            time.sleep(0.1)
+        return win32.window_info(window.hwnd), "Notepad reopened old tabs; Ctrl+N did not give an Untitled tab: check the title"
 
     def close_app(self, hwnd: int, force: bool, timeout_s: float) -> CloseResult:
         if not win32.is_window(hwnd):
@@ -344,10 +475,13 @@ class WindowsUseProvider(WindowsControlProvider):
                                 details={"pid": info.pid}) from exc
             except psutil.TimeoutExpired as exc:
                 raise ToolError(ErrorCode.TIMEOUT, f"{info.process_name} did not exit after terminate") from exc
+            if not win32.is_window(hwnd):
+                self._forget_target(hwnd)
             return CloseResult(closed=not win32.is_window(hwnd), blocking_dialog=None)
         win32.post_close(hwnd)
         while time.monotonic() < deadline:
             if not win32.is_window(hwnd):
+                self._forget_target(hwnd)
                 return CloseResult(closed=True, blocking_dialog=None)
             time.sleep(WINDOW_POLL_INTERVAL_S)
         dialog = self._find_blocking_dialog(hwnd, info.pid)
@@ -366,6 +500,8 @@ class WindowsUseProvider(WindowsControlProvider):
         if not win32.is_window(hwnd):
             raise ToolError(ErrorCode.WINDOW_NOT_FOUND, f"window {hwnd} does not exist")
         self.set_target(hwnd)
+        if win32.force_foreground(hwnd):
+            return win32.window_info(hwnd)
         win32.allow_set_foreground()
         self._desktop.bring_window_to_top(hwnd)
         deadline = time.monotonic() + timeout_s
@@ -385,6 +521,11 @@ class WindowsUseProvider(WindowsControlProvider):
     def set_target(self, hwnd: int | None) -> None:
         if hwnd and win32.is_window(hwnd):
             self._target_hwnd = win32gui.GetAncestor(hwnd, win32con.GA_ROOT) or hwnd
+
+    def _forget_target(self, hwnd: int) -> None:
+        """A window the agent closed on purpose is no longer the working window (its absence is no surprise)."""
+        if self._target_hwnd == hwnd:
+            self._target_hwnd = None
 
     def _in_front(self, hwnd: int) -> bool:
         foreground = win32.foreground_hwnd()
@@ -410,6 +551,21 @@ class WindowsUseProvider(WindowsControlProvider):
         except ToolError:
             return self._in_front(target)
         return True
+
+    def _require_working_front(self, what: str) -> int:
+        """Before keyboard input: the working window (or its dialog) must be in front, otherwise the keys would
+        go to whatever is. Returns the foreground window that will receive the input."""
+        target = self._target_hwnd
+        if target and win32.is_window(target):
+            if not self.bring_to_front():
+                fg = win32.foreground_hwnd()
+                fg_title = win32gui.GetWindowText(fg) if fg else "(none)"
+                raise ToolError(ErrorCode.CONFLICT,
+                                f"{what} not sent: the window you work in ({target} '{win32gui.GetWindowText(target)}') "
+                                f"could not be brought to the front; '{fg_title}' is in front. Use desktop.focus_window "
+                                "on the window you want, then retry.",
+                                retryable=True, details={"working_hwnd": target, "foreground_hwnd": fg})
+        return win32gui.GetForegroundWindow()
 
     def bring_point_window_to_front(self, x: int, y: int) -> None:
         """Before a click at a screen point: the window under it comes to the front first."""
@@ -486,6 +642,7 @@ class WindowsUseProvider(WindowsControlProvider):
     def drag(self, start: tuple[int, int], end: tuple[int, int], duration_s: float) -> None:
         self._check_point(*start)
         self._check_point(*end)
+        self.bring_point_window_to_front(*start)
         self.uia.DragTo(start[0], start[1], end[0], end[1], duration=duration_s)
         time.sleep(self._settings.settle_s)
 
@@ -536,8 +693,7 @@ class WindowsUseProvider(WindowsControlProvider):
         """
         if not text:
             return
-        self.bring_to_front()
-        target = win32gui.GetForegroundWindow()
+        target = self._require_working_front("typing")
         if len(text) > PASTE_THRESHOLD_CHARS:
             self._paste_text(text, target)
         else:
@@ -582,14 +738,14 @@ class WindowsUseProvider(WindowsControlProvider):
 
     def press_key(self, key: str, repeat: int) -> None:
         vk = self._virtual_key(key)
-        self.bring_to_front()
+        self._require_working_front(f"key {key!r}")
         for _ in range(repeat):
             self.uia.SendKey(vk, waitTime=KEY_EVENT_GAP_S)
         time.sleep(self._settings.settle_s)
 
     def hotkey(self, keys: list[str]) -> None:
         codes = [self._virtual_key(k) for k in keys]
-        self.bring_to_front()
+        self._require_working_front("+".join(keys))
         pressed: list[int] = []
         try:
             for vk in codes:
@@ -636,7 +792,7 @@ class WindowsUseProvider(WindowsControlProvider):
 
     def _to_element(
         self, control: Any, window_hwnd: int, window_title: str,
-        rect: Rect | None = None, value: str | None = None, with_patterns: bool = False,
+        rect: Rect | None = None, value: str | None = None, with_patterns: bool = False, state: str = "",
     ) -> UIElement:
         if rect is None:
             r = control.BoundingRectangle
@@ -661,7 +817,7 @@ class WindowsUseProvider(WindowsControlProvider):
             element_id=element_id, name=name, control_type=control_type, automation_id=automation_id,
             class_name=class_name, rect=rect, window_hwnd=window_hwnd, window_title=window_title,
             is_enabled=bool(control.IsEnabled), is_offscreen=bool(control.IsOffscreen),
-            has_focus=bool(control.HasKeyboardFocus), value=value, patterns=patterns,
+            has_focus=bool(control.HasKeyboardFocus), value=value, patterns=patterns, state=state,
         )
 
     def _target_window(self, window_hwnd: int | None) -> int:
@@ -689,16 +845,105 @@ class WindowsUseProvider(WindowsControlProvider):
             rect = Rect(box.left, box.top, box.right, box.bottom)
             if rect.is_empty() or node.control is None:
                 continue  # upstream clips off-screen / other-monitor elements to an empty box
-            value = node.metadata.get("value") if node.metadata else None
+            metadata = node.metadata or {}
+            value = metadata.get("value")
+            if value == "(empty)":
+                value = ""
+            flags = [w for w, on in (("focused", metadata.get("has_focused")), (metadata.get("toggle_state"), True),
+                                     (metadata.get("expand_collapse_state"), True), ("selected", metadata.get("is_selected")))
+                     if w and on]
             try:
                 elements.append(self._to_element(node.control, hwnd, info.title, rect=rect,
-                                                 value=str(value) if value not in (None, "") else None))
+                                                 value=str(value) if value not in (None, "") else None,
+                                                 state=" ".join(flags)))
             except Exception as exc:
                 if not _is_com_error(exc):
                     raise
                 continue  # element disappeared while reading; the snapshot is still consistent
+        # Reading order (upstream walks children last-to-first), rows of 24 px.
+        elements.sort(key=lambda e: (e.rect.top // 24, e.rect.left))
+        texts = self.window_texts(hwnd, TEXT_SCAN_ITEMS, TEXT_SCAN_NODES, TEXT_SCAN_BUDGET_S)
         return UISnapshot(snapshot_id=self._snapshot_seq, window=info, elements=elements,
-                          truncated=len(nodes) > len(elements) and len(elements) >= max_elements)
+                          truncated=len(nodes) > len(elements) and len(elements) >= max_elements, texts=texts)
+
+    def window_texts(self, hwnd: int, max_items: int = 60, max_nodes: int = 2500, budget_s: float = 2.5) -> list[str]:
+        """The text a window shows, top to bottom: labels and status bars by name, edits and documents by value.
+        Bounded by nodes and time: it runs after every action. 'name: value' when an edit has a label."""
+        if not win32.is_window(hwnd):
+            return []
+        root = self.uia.ControlFromHandle(hwnd)
+        if root is None:
+            return []
+        pid = self.uia.PatternId
+        deadline = time.monotonic() + budget_s
+        found: list[tuple[int, int, str]] = []
+        seen: set[tuple[str, int]] = set()
+        frontier: list[tuple[Any, int]] = [(root, 0)]
+        visited = 0
+        while frontier and visited < max_nodes and len(found) < max_items * 2 and time.monotonic() < deadline:
+            control, depth = frontier.pop(0)
+            visited += 1
+            try:
+                if depth and control.IsOffscreen:
+                    continue
+                kind = control.ControlTypeName or ""
+                text: str | None = None
+                if kind in ("TextControl", "StatusBarControl", "HyperlinkControl"):
+                    text = control.Name
+                elif kind in ("EditControl", "DocumentControl"):
+                    pattern = control.GetPattern(pid.ValuePattern)
+                    text = pattern.Value if pattern is not None else None
+                    if not text:
+                        text_pattern = control.GetPattern(pid.TextPattern)
+                        text = text_pattern.DocumentRange.GetText(2000) if text_pattern is not None else None
+                    label = control.Name or ""
+                    if text and label and label.strip() != text.strip():
+                        text = f"{label.strip()}: {text}"
+                    elif not text and kind == "EditControl" and label:
+                        text = f"{label.strip()}: (empty)"
+                if text and text.strip():
+                    r = control.BoundingRectangle
+                    clean = " ".join(text.split())[:300]
+                    key = (clean, r.top // 8)
+                    if key not in seen:
+                        seen.add(key)
+                        found.append((r.top, r.left, clean))
+                if depth < self._settings.find_max_depth:
+                    frontier.extend((child, depth + 1) for child in control.GetChildren())
+            except Exception as exc:
+                if not _is_com_error(exc):
+                    raise
+                continue
+        found.sort()
+        return [t for _, _, t in found[:max_items]]
+
+    def focused_control_info(self) -> dict[str, Any] | None:
+        """The control that has the keyboard focus, with its text when it exposes any."""
+        try:
+            control = self.uia.GetFocusedControl()
+        except Exception:  # noqa: BLE001 - no focus / COM hiccup: nothing to report
+            return None
+        if control is None:
+            return None
+        pid = self.uia.PatternId
+        try:
+            value: str | None = None
+            pattern = control.GetPattern(pid.ValuePattern)
+            if pattern is not None:
+                value = pattern.Value
+            text: str | None = None
+            text_pattern = control.GetPattern(pid.TextPattern)
+            if text_pattern is not None:
+                text = text_pattern.DocumentRange.GetText(4000)
+            r = control.BoundingRectangle
+            return {"name": control.Name or "", "control_type": (control.ControlTypeName or "").removesuffix("Control"),
+                    "automation_id": control.AutomationId or "", "value": value, "text": text,
+                    "window_hwnd": win32gui.GetAncestor(control.NativeWindowHandle, win32con.GA_ROOT) if control.NativeWindowHandle else None,
+                    "rect": Rect(r.left, r.top, r.right, r.bottom).to_dict()}
+        except Exception as exc:  # noqa: BLE001
+            if _is_com_error(exc):
+                return None
+            raise
 
     def find_element(self, query: ElementQuery) -> list[UIElement]:
         hwnd = self._target_window(query.window_hwnd)

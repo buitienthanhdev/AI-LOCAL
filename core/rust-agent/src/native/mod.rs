@@ -475,7 +475,8 @@ impl NativeTools {
                         content.chars().take(OBSERVATION_READ_CHARS).collect::<String>()
                     )
                 };
-                let data = json!({"path": path.display().to_string(), "content": content, "sections": segments.len(), "truncated": truncated});
+                // "text" duplicates "content": planners write checks against either name.
+                let data = json!({"path": path.display().to_string(), "content": content, "text": content, "sections": segments.len(), "truncated": truncated});
                 Ok(Outcome { data, checks: vec![], artifacts: vec![], observation, backend: "company-knowledge" })
             }
             "memory.remember" => {

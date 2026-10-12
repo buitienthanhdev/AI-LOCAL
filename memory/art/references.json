@@ -1,0 +1,15 @@
+[
+ {
+  "artwork_key": "starry_night",
+  "path": "C:\\Users\\TIEN THANH\\Desktop\\AI LOCAL\\local-gemini-agent\\memory\\art\\references\\the-starry-night-van-gogh-1889-dbca2f16.jpg",
+  "source_url": "https://thumb.wikimedia.org/wikipedia/commons/thumb/e/ea/Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg/1920px-Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=thumbnail",
+  "page_url": "https://commons.wikimedia.org/wiki/File:Van_Gogh_-_Starry_Night_-_Google_Art_Project.jpg",
+  "title": "File:Van Gogh - Starry Night - Google Art Project.jpg",
+  "license": "Public domain",
+  "sha256": "dbca2f16b195f6e83feb98d44c0d98eb0b39f560314efbedfedab9e45caa8a2f",
+  "retrieved_at": "2026-10-12T07:08:27+00:00",
+  "width": 1920,
+  "height": 1520,
+  "note": "title match only; identity not proven by pixels"
+ }
+]

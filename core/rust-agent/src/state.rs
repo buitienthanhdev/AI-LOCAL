@@ -118,6 +118,111 @@ pub struct StepRecord {
     pub artifacts: Vec<String>,
 }
 
+/// A file the user attached to the request (saved under `artifacts/<task_id>/attachments/`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UserAttachment {
+    pub name: String,
+    /// Absolute path of the saved copy.
+    pub path: String,
+    /// "image" (shown to the planner), "document" (read with document.read / office.*) or "media".
+    pub kind: String,
+    pub size: u64,
+}
+
+impl UserAttachment {
+    pub fn from_path(path: &Path) -> Self {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        Self { name, path: path.display().to_string(), kind: attachment_kind(path).to_string(), size }
+    }
+
+    pub fn is_image(&self) -> bool {
+        self.kind == "image"
+    }
+
+    /// "report.pdf (PDF, 1.2 MB)".
+    pub fn describe(&self) -> String {
+        let ext = Path::new(&self.path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_uppercase();
+        let size = if self.size >= 1_000_000 {
+            format!("{:.1} MB", self.size as f64 / 1_000_000.0)
+        } else {
+            format!("{} KB", (self.size + 999) / 1000)
+        };
+        format!("{} ({}{}{})", self.path, ext, if ext.is_empty() { "" } else { ", " }, size)
+    }
+}
+
+/// Where a task's attachments live: `<artifacts>/<task_id>/attachments`.
+pub fn attachments_dir(artifacts_dir: &Path, task_id: &str) -> PathBuf {
+    artifacts_dir.join(task_id).join("attachments")
+}
+
+/// A file name that is safe to create: base name only, Windows-reserved characters replaced, length capped.
+pub fn safe_file_name(name: &str) -> String {
+    let base = name.rsplit(['\\', '/']).next().unwrap_or(name).trim();
+    let mut out: String = base
+        .chars()
+        .map(|c| if c.is_control() || matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .collect();
+    out = out.trim_matches(|c| c == '.' || c == ' ').to_string();
+    if out.is_empty() {
+        out = "file".to_string();
+    }
+    let stem_upper = out.split('.').next().unwrap_or("").to_ascii_uppercase();
+    const RESERVED: [&str; 22] = ["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+                                  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"];
+    if RESERVED.contains(&stem_upper.as_str()) {
+        out = format!("_{out}");
+    }
+    if out.chars().count() > 120 {
+        let ext = Path::new(&out).extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+        let stem: String = out.chars().take(120 - ext.chars().count()).collect();
+        out = format!("{stem}{ext}");
+    }
+    out
+}
+
+/// Save `source` as an attachment of the task (copied unless it already lies in the attachment folder) and
+/// describe it. A name that is already taken gets a numeric suffix.
+pub fn attach_file(artifacts_dir: &Path, task_id: &str, source: &Path) -> Result<UserAttachment> {
+    if !source.is_file() {
+        bail!("attachment {} is not a file", source.display());
+    }
+    let dir = attachments_dir(artifacts_dir, task_id);
+    std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+    let inside = source.canonicalize().ok().zip(dir.canonicalize().ok()).is_some_and(|(s, d)| s.starts_with(&d));
+    let target = if inside {
+        source.to_path_buf()
+    } else {
+        let name = safe_file_name(source.file_name().and_then(|n| n.to_str()).unwrap_or("file"));
+        let mut target = dir.join(&name);
+        let mut n = 1;
+        while target.exists() {
+            n += 1;
+            let p = Path::new(&name);
+            let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+            let ext = p.extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+            target = dir.join(format!("{stem}-{n}{ext}"));
+        }
+        std::fs::copy(source, &target).with_context(|| format!("copying {} to {}", source.display(), target.display()))?;
+        target
+    };
+    Ok(UserAttachment::from_path(&target))
+}
+
+/// Only these image types can be sent to the brains (the gateway's attachment allow-list).
+pub const PLANNER_IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "gif"];
+
+pub fn attachment_kind(path: &Path) -> &'static str {
+    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    match ext.as_str() {
+        e if PLANNER_IMAGE_EXTENSIONS.contains(&e) => "image",
+        "bmp" | "tif" | "tiff" | "heic" => "image",
+        "mp3" | "wav" | "m4a" | "ogg" | "flac" | "aac" | "wma" | "opus" | "mp4" | "mov" | "mkv" | "avi" | "webm" | "wmv" | "m4v" => "media",
+        _ => "document",
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRecord {
     pub version: u32,
@@ -142,6 +247,9 @@ pub struct TaskRecord {
     /// questions the agent asked and the user's answers. Shown to the planner on every turn.
     #[serde(default)]
     pub conversation: Vec<String>,
+    /// Files the user attached to the request. Images are shown to the planner; documents are read with tools.
+    #[serde(default)]
+    pub attachments: Vec<UserAttachment>,
 }
 
 impl TaskRecord {
@@ -167,6 +275,7 @@ impl TaskRecord {
             pending_question: None,
             runner_pid: None,
             conversation: Vec::new(),
+            attachments: Vec::new(),
         }
     }
 

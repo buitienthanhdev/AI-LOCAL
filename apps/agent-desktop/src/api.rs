@@ -17,16 +17,21 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{anyhow, Result};
+use base64::Engine;
 use http::{Method, Request, Response, StatusCode};
 use lga_core::config::Config;
 use lga_core::interaction::{request_path, response_path};
-use lga_core::state::new_task_id;
+use lga_core::state::{attachments_dir, new_task_id, safe_file_name};
 use serde_json::{json, Value};
 
 use crate::services;
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
 const MAX_TASK_CHARS: usize = 4000;
+/// Files the user can attach to one message, and the size of each (the gateway forwards images up to 12 MB;
+/// documents are read by tools, so they may be larger).
+const MAX_ATTACHMENTS: usize = 8;
+const MAX_ATTACHMENT_BYTES: usize = 25 * 1024 * 1024;
 const MAX_TASKS_LISTED: usize = 100;
 const MAX_EVENTS_PER_POLL: usize = 500;
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -104,6 +109,16 @@ impl Api {
         self.config.tasks_dir()
     }
 
+    /// The conversation a task belongs to: `<task>.conv` holds its id; a task without one (older history) is its own
+    /// conversation. Requests typed one after another in the same chat box share one id.
+    fn conversation_of(&self, task_id: &str) -> String {
+        fs::read_to_string(self.tasks_dir().join(format!("{task_id}.conv")))
+            .ok()
+            .map(|c| c.trim().to_string())
+            .filter(|c| valid_task_id(c))
+            .unwrap_or_else(|| task_id.to_string())
+    }
+
     fn audit_path(&self, task_id: &str) -> PathBuf {
         self.config.logs_dir().join("tasks").join(format!("{task_id}.jsonl"))
     }
@@ -115,11 +130,24 @@ impl Api {
         let body: Value = serde_json::from_slice(request.body()).unwrap_or(Value::Null);
         let result = match (&method, segments.as_slice()) {
             (&Method::GET, []) => return reply(StatusCode::OK, "text/html; charset=utf-8", INDEX_HTML.as_bytes().to_vec()),
+            (&Method::GET, ["vendor", rest @ ..]) => {
+                return match crate::vendor::asset(&rest.join("/")) {
+                    Some((mime, bytes)) => Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", mime)
+                        .header("Cache-Control", "max-age=86400")
+                        .body(Cow::Borrowed(bytes))
+                        .expect("static response parts are valid"),
+                    None => error(StatusCode::NOT_FOUND, "unknown asset"),
+                };
+            }
             (&Method::GET, ["api", "status"]) => Ok(json_reply(StatusCode::OK, self.status())),
             (&Method::GET, ["api", "tasks"]) => Ok(json_reply(StatusCode::OK, self.list_tasks())),
             (&Method::POST, ["api", "tasks"]) => self.start_task(&body),
             (&Method::GET, ["api", "artifact"]) => Ok(self.artifact(request.uri())),
             (&Method::POST, ["api", "reveal"]) => self.reveal(&body),
+            (&Method::POST, ["api", "conversations", id, "delete"]) if valid_task_id(id) => Ok(self.delete_history(Some(id))),
+            (&Method::POST, ["api", "history", "clear"]) => Ok(self.delete_history(None)),
             (&Method::GET, ["api", "settings"]) => Ok(json_reply(StatusCode::OK, self.settings())),
             (&Method::POST, ["api", "settings"]) => self.save_settings(&body),
             (&Method::GET, ["api", "tasks", id]) if valid_task_id(id) => Ok(self.get_task(id)),
@@ -206,11 +234,58 @@ impl Api {
                     "task_id": r["task_id"], "goal": r["goal"], "status": r["status"], "mode": r["mode"],
                     "updated_at": r["updated_at"], "created_at": r["created_at"],
                     "steps": r["steps"].as_array().map_or(0, Vec::len),
+                    "attachments": r["attachments"].as_array().map_or(0, Vec::len),
                     "interrupted": interrupted(&r),
+                    "conversation_id": self.conversation_of(r["task_id"].as_str().unwrap_or("")),
                 })
             })
             .collect();
         json!({ "tasks": tasks })
+    }
+
+    /// Delete a chat (`Some(conversation id)`) or the whole history (`None`): task records, audit logs, the
+    /// artifacts folder (screenshots, attachments) and UI logs. A task whose runner is still alive is kept and
+    /// reported, so nothing is pulled from under a running job.
+    fn delete_history(&self, conversation: Option<&str>) -> Reply {
+        let mut ids: Vec<String> = fs::read_dir(self.tasks_dir())
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let id = name.split('.').next()?.to_string();
+                (valid_task_id(&id) && name != id).then_some(id)
+            })
+            .collect();
+        ids.sort();
+        ids.dedup();
+        let (mut deleted, mut running) = (0, 0);
+        for id in ids {
+            if conversation.is_some_and(|c| self.conversation_of(&id) != c) {
+                continue;
+            }
+            let record = read_json(&self.tasks_dir().join(format!("{id}.json")));
+            let busy = record.as_ref().is_some_and(|r| {
+                let status = r["status"].as_str().unwrap_or("");
+                !matches!(status, "completed" | "failed" | "cancelled")
+                    && r["runner_pid"].as_u64().is_some_and(|pid| process_alive(pid as u32))
+            });
+            if busy {
+                running += 1;
+                continue;
+            }
+            let prefix = format!("{id}.");
+            for dir in [self.tasks_dir(), self.config.logs_dir().join("tasks"), self.config.logs_dir().join("ui")] {
+                for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+                    if entry.file_name().to_string_lossy().starts_with(&prefix) {
+                        let _ = fs::remove_file(entry.path());
+                    }
+                }
+            }
+            let _ = fs::remove_dir_all(self.config.artifacts_dir().join(&id));
+            deleted += 1;
+        }
+        json_reply(StatusCode::OK, json!({"ok": true, "deleted": deleted, "running": running}))
     }
 
     fn get_task(&self, id: &str) -> Reply {
@@ -222,7 +297,8 @@ impl Api {
         // A task that is not finished but whose runner process is gone (crash, reboot, killed) will never
         // move again on its own: the UI offers to run it again instead of showing it as busy forever.
         let interrupted = interrupted(&task);
-        json_reply(StatusCode::OK, json!({"task": task, "pending_request": pending, "pause_requested": paused, "interrupted": interrupted}))
+        json_reply(StatusCode::OK, json!({"task": task, "pending_request": pending, "pause_requested": paused,
+                                          "interrupted": interrupted, "conversation_id": self.conversation_of(id)}))
     }
 
     /// Audit events after line `after`. A line still being written (invalid JSON) ends the read; it is
@@ -263,35 +339,95 @@ impl Api {
         Ok(())
     }
 
+    /// Save the files sent with a message (`attachments: [{name, data_base64}]`) under the task's attachment
+    /// folder and return their paths. Names are sanitised; a duplicate name gets a numeric suffix.
+    fn save_attachments(&self, task_id: &str, body: &Value) -> Result<Vec<PathBuf>> {
+        let Some(items) = body["attachments"].as_array() else { return Ok(Vec::new()) };
+        if items.is_empty() {
+            return Ok(Vec::new());
+        }
+        if items.len() > MAX_ATTACHMENTS {
+            return Err(anyhow!("Tối đa {MAX_ATTACHMENTS} tệp đính kèm mỗi lần"));
+        }
+        let dir = attachments_dir(&self.config.artifacts_dir(), task_id);
+        fs::create_dir_all(&dir)?;
+        let mut saved = Vec::new();
+        for item in items {
+            let name = safe_file_name(item["name"].as_str().unwrap_or("file"));
+            let data = item["data_base64"].as_str().unwrap_or("");
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(data.trim())
+                .map_err(|_| anyhow!("Tệp {name} không đọc được (dữ liệu hỏng)"))?;
+            if bytes.is_empty() {
+                return Err(anyhow!("Tệp {name} rỗng"));
+            }
+            if bytes.len() > MAX_ATTACHMENT_BYTES {
+                return Err(anyhow!("Tệp {name} lớn hơn {} MB", MAX_ATTACHMENT_BYTES / (1024 * 1024)));
+            }
+            let mut target = dir.join(&name);
+            let mut n = 1;
+            while target.exists() {
+                n += 1;
+                let path = Path::new(&name);
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
+                let ext = path.extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+                target = dir.join(format!("{stem}-{n}{ext}"));
+            }
+            fs::write(&target, bytes)?;
+            saved.push(target);
+        }
+        Ok(saved)
+    }
+
     fn start_task(&self, body: &Value) -> Result<Reply> {
         let task = body["task"].as_str().unwrap_or("").trim();
         let mode = body["mode"].as_str().unwrap_or("normal");
-        if task.is_empty() || task.chars().count() > MAX_TASK_CHARS {
-            return Err(anyhow!("Yêu cầu phải dài 1–{MAX_TASK_CHARS} ký tự"));
+        let has_files = body["attachments"].as_array().is_some_and(|a| !a.is_empty());
+        if (task.is_empty() && !has_files) || task.chars().count() > MAX_TASK_CHARS {
+            return Err(anyhow!("Yêu cầu phải dài 1–{MAX_TASK_CHARS} ký tự (hoặc có tệp đính kèm)"));
         }
         if !VALID_MODES.contains(&mode) {
             return Err(anyhow!("chế độ không hợp lệ"));
         }
         let task_id = new_task_id();
-        let mut args = vec!["run", "--ui-channel", "--task-id", &task_id, "--mode", mode];
+        // A follow-up names the conversation it continues; the first request of a chat starts one with its own id.
+        let conversation = body["conversation_id"].as_str().filter(|c| valid_task_id(c)).unwrap_or(&task_id).to_string();
+        fs::create_dir_all(self.tasks_dir())?;
+        fs::write(self.tasks_dir().join(format!("{task_id}.conv")), &conversation)?;
+        let files = self.save_attachments(&task_id, body)?;
+        let mut args: Vec<String> = ["run", "--ui-channel", "--task-id", &task_id, "--mode", mode].iter().map(|s| s.to_string()).collect();
         let context = body["context"].as_str().unwrap_or("").trim();
         if !context.is_empty() {
-            args.extend(["--context", context]);
+            args.push("--context".into());
+            args.push(context.into());
+        }
+        for file in &files {
+            args.push("--attach".into());
+            args.push(file.display().to_string());
         }
         // "--" so a request that starts with "-" is never read as an option.
-        args.extend(["--", task]);
+        args.push("--".into());
+        args.push(task.into());
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
         self.spawn_agent(&args, &format!("{task_id}.out.log"))?;
-        Ok(json_reply(StatusCode::OK, json!({"task_id": task_id})))
+        Ok(json_reply(StatusCode::OK, json!({"task_id": task_id, "conversation_id": conversation, "attachments": files.len()})))
     }
 
     fn control(&self, id: &str, action: &str, body: &Value) -> Result<Reply> {
         match action {
             "resume" => {
-                let mut args = vec!["resume", "--ui-channel", id];
+                let files = self.save_attachments(id, body)?;
+                let mut args: Vec<String> = ["resume", "--ui-channel", id].iter().map(|s| s.to_string()).collect();
                 let answer = body["answer"].as_str().unwrap_or("").trim();
                 if !answer.is_empty() {
-                    args.extend(["--answer", answer]);
+                    args.push("--answer".into());
+                    args.push(answer.into());
                 }
+                for file in &files {
+                    args.push("--attach".into());
+                    args.push(file.display().to_string());
+                }
+                let args: Vec<&str> = args.iter().map(String::as_str).collect();
                 self.spawn_agent(&args, &format!("{id}.resume.log"))?;
                 Ok(json_reply(StatusCode::OK, json!({"ok": true, "output": "resuming"})))
             }
@@ -334,6 +470,9 @@ impl Api {
         let content_type = match file.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
             Some("png") => "image/png",
             Some("jpg" | "jpeg") => "image/jpeg",
+            Some("webp") => "image/webp",
+            Some("gif") => "image/gif",
+            Some("bmp") => "image/bmp",
             Some("pdf") => "application/pdf",
             Some("txt" | "log") => "text/plain; charset=utf-8",
             _ => "application/octet-stream",
@@ -412,6 +551,20 @@ mod tests {
         assert!(!valid_task_id("../etc"));
         assert!(!valid_task_id(""));
         assert!(!valid_task_id(&"a".repeat(81)));
+    }
+
+    #[test]
+    fn embedded_formula_assets_are_served_and_nothing_else() {
+        let (mime, js) = crate::vendor::asset("katex/katex.min.js").expect("katex.js is embedded");
+        assert!(mime.starts_with("application/javascript") && js.len() > 100_000);
+        let (_, css) = crate::vendor::asset("katex/katex.min.css").unwrap();
+        let css = String::from_utf8_lossy(css);
+        // every font the stylesheet names is embedded
+        for name in css.split("url(fonts/").skip(1).filter_map(|r| r.split(')').next()) {
+            assert!(crate::vendor::asset(&format!("katex/fonts/{name}")).is_some(), "{name}");
+        }
+        assert!(crate::vendor::asset("katex/../../Cargo.toml").is_none());
+        assert!(crate::vendor::asset("katex/fonts/").is_none());
     }
 
     #[test]

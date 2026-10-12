@@ -141,6 +141,71 @@ def allow_set_foreground() -> None:
     _user32.AllowSetForegroundWindow(wintypes.DWORD(0xFFFFFFFF))
 
 
+def front_is(hwnd: int) -> bool:
+    """True when `hwnd` or a window it owns (its modal dialog) is the foreground window."""
+    fg = win32gui.GetForegroundWindow()
+    return bool(fg) and (fg == hwnd or win32gui.GetWindow(fg, win32con.GW_OWNER) == hwnd)
+
+
+def force_foreground(hwnd: int, attempts: int = 3) -> bool:
+    """Bring `hwnd` to the foreground despite focus-stealing prevention.
+
+    SetForegroundWindow only works for the thread that owns the foreground window (or recently got input),
+    so this thread attaches its input queue to the foreground thread's and the target thread's for the
+    call; if Windows still refuses, SwitchToThisWindow (the Alt+Tab path) is used. True when it worked.
+    """
+    import time
+
+    import win32api
+
+    if not win32gui.IsWindow(hwnd):
+        return False
+    if front_is(hwnd):
+        return True
+    if win32gui.IsIconic(hwnd):
+        win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+    allow_set_foreground()
+    me = win32api.GetCurrentThreadId()
+    for attempt in range(attempts):
+        fg = win32gui.GetForegroundWindow()
+        fg_thread = win32process.GetWindowThreadProcessId(fg)[0] if fg else 0
+        target_thread = win32process.GetWindowThreadProcessId(hwnd)[0]
+        attached: list[int] = []
+        try:
+            for thread in {fg_thread, target_thread} - {0, me}:
+                try:
+                    if win32process.AttachThreadInput(me, thread, True):
+                        attached.append(thread)
+                except Exception:  # noqa: BLE001 - a thread that is gone; try without it
+                    pass
+            try:
+                win32gui.SetForegroundWindow(hwnd)
+            except Exception:  # noqa: BLE001 - refused: the checks below decide
+                pass
+            try:
+                win32gui.BringWindowToTop(hwnd)
+                win32gui.SetWindowPos(hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
+                                      win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
+            except Exception:  # noqa: BLE001
+                pass
+        finally:
+            for thread in attached:
+                try:
+                    win32process.AttachThreadInput(me, thread, False)
+                except Exception:  # noqa: BLE001
+                    pass
+        for _ in range(8):
+            if front_is(hwnd):
+                return True
+            time.sleep(0.05)
+        if attempt >= 1:
+            _user32.SwitchToThisWindow(wintypes.HWND(hwnd), True)
+            time.sleep(0.25)
+            if front_is(hwnd):
+                return True
+    return front_is(hwnd)
+
+
 # --- application resolution -------------------------------------------------------------------
 
 

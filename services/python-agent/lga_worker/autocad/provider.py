@@ -200,6 +200,18 @@ class PlanResult:
 
 
 @dataclass
+class StrokesResult:
+    document: str
+    drawn: int
+    layers: int
+    true_color: bool
+    entities_before: int
+    entities_after: int
+    background: str  # "white" | "kept" | "unchanged (could not set)"
+    previous_background: int | None
+
+
+@dataclass
 class SaveResult:
     path: Path
     full_name: str
@@ -851,6 +863,87 @@ class AutoCadProvider:
             return PlanResult(document=name, counts=counts)
 
         return self._guard("draw floor plan", run)
+
+    def draw_strokes(self, strokes: Sequence[tuple[Sequence[tuple[float, float]], tuple[int, int, int], bool]],
+                     new_document: bool, paper: str, aci_for: Callable[[tuple[int, int, int]], int], *,
+                     deadline: float) -> StrokesResult:
+        """Draw many coloured strokes (open or closed polylines) as one undo step, each on a layer named after
+        its colour (the layer carries the colour, entities stay ByLayer), then zoom to the drawing. Used for
+        sketches: AutoCAD is driven as a line-only application, every stroke in the colour of what it describes.
+        `paper="white"` sets the model-space background to white (dark pencil lines vanish on black)."""
+
+        def run() -> StrokesResult:
+            if new_document:
+                self._new_document(None, deadline)
+            app, doc = self._writable_document(deadline)
+            name = str(self._idempotent("read drawing name", lambda: doc.Name, deadline))
+            ms = self._idempotent("open model space", lambda: doc.ModelSpace, deadline)
+            before = int(self._idempotent("count entities", lambda: ms.Count, deadline))
+
+            background, previous = "kept", None
+            try:
+                display = app.Preferences.Display
+                previous = int(display.GraphicsWinModelBackgrndColor)
+                if paper == "white":
+                    display.GraphicsWinModelBackgrndColor = 0xFFFFFF
+                    background = "white"
+            except Exception as exc:  # a build without the preference: the drawing is still made
+                logger.warning("draw_strokes: model-space background not set: %s", exc)
+                background = "unchanged (could not set)"
+
+            color_factory: Callable[[], Any] | None = None
+            for progid in ("AutoCAD.AcCmColor.24", "AutoCAD.AcCmColor.23", "AutoCAD.AcCmColor.22", "AutoCAD.AcCmColor.21",
+                           "AutoCAD.AcCmColor.20", "AutoCAD.AcCmColor"):
+                try:
+                    app.call("GetInterfaceObject", progid)
+                except Exception:  # noqa: BLE001 - try the next version
+                    continue
+                color_factory = lambda pid=progid: app.call("GetInterfaceObject", pid)  # noqa: E731
+                break
+
+            layer_of: dict[tuple[int, int, int], str] = {}
+            true_color = color_factory is not None
+            for _pts, rgb, _closed in strokes:
+                if rgb in layer_of:
+                    continue
+                layer_name = "SKETCH-%02X%02X%02X" % rgb
+                layer = self._idempotent(f"add layer {layer_name}", lambda n=layer_name: doc.Layers.call("Add", n), deadline)
+                applied = False
+                if color_factory is not None:
+                    try:
+                        c = color_factory()
+                        c.call("SetRGB", int(rgb[0]), int(rgb[1]), int(rgb[2]))
+                        layer.TrueColor = c
+                        applied = True
+                    except Exception as exc:  # noqa: BLE001 - fall back to the nearest index colour
+                        logger.warning("draw_strokes: true colour failed (%s); using ACI", exc)
+                        true_color = False
+                if not applied:
+                    layer.color = int(aci_for(rgb))
+                layer_of[rgb] = layer_name
+
+            drawn = 0
+            doc.call("StartUndoMark")
+            try:
+                for pts, rgb, closed in strokes:
+                    if len(pts) == 2 and not closed:
+                        (x0, y0), (x1, y1) = pts
+                        entity = ms.call("AddLine", com.double_array((x0, y0, 0.0)), com.double_array((x1, y1, 0.0)))
+                    else:
+                        flat = [v for point in pts for v in point]
+                        entity = ms.call("AddLightWeightPolyline", com.double_array(flat))
+                        entity.Closed = bool(closed)
+                    entity.Layer = layer_of[rgb]
+                    drawn += 1
+            finally:
+                doc.call("EndUndoMark")
+            self._idempotent("zoom extents", lambda: app.call("ZoomExtents"), deadline)
+            after = int(self._idempotent("count entities", lambda: ms.Count, deadline))
+            return StrokesResult(document=name, drawn=drawn, layers=len(layer_of), true_color=true_color,
+                                 entities_before=before, entities_after=after, background=background,
+                                 previous_background=previous)
+
+        return self._guard("draw strokes", run)
 
     # ------------------------------------------------------------------ files
 

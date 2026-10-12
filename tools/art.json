@@ -1,0 +1,471 @@
+{
+  "category": "art",
+  "description": "Draw a picture in any application that can draw (Paint, AutoCAD, PowerPoint, Word, Excel, SVG/PNG files) from one source: a photo, an SVG, a template or objects.",
+  "tools": [
+    {
+      "name": "art.draw",
+      "description": "Draw ANY picture in ANY application that can draw, in ONE call, at maximum detail by default. app: 'paint' (Microsoft Paint, mouse-drawn filled polygons), 'autocad' (line-only: a coloured pencil sketch, every stroke in the colour of what it depicts, hidden lines removed), 'powerpoint' | 'word' | 'excel' (editable freeform shapes in any colour: the most detailed result), 'file' (writes SVG + PNG for any other program: Inkscape, Illustrator, Photoshop, GIMP, Krita, Figma, Canva, a browser). Give exactly ONE picture source: image_path (a photo or picture file: traced to colour regions), svg (a picture YOU write as SVG), svg_path (an .svg file), template ('doraemon' | 'house') or objects (same format as paint.draw). WRITING THE SVG (when there is no source picture): viewBox \"0 0 1000 562.5\"; first a background <rect>, then shapes from big to small: body, head, then ears, limbs, clothes, then eyes, nose, mouth, details, last highlights and shadows; build figures from overlapping <ellipse>, <circle> and closed <path> curves (C/Q/A commands), not from rectangles; give every part its own shape, a darker outline (stroke-width 2-4) and, on big parts, an extra lighter highlight shape and a darker shade shape; parts must touch or overlap their neighbours (ears overlap the head, legs the body: no gaps or floating pieces); mirror symmetric subjects around x=500; the subject fills about 80% of the height; 40-150 shapes for a detailed picture; real colours (fur, skin, sky) not primary colours. Only plain shapes are drawn (no text, filters, masks, images). style 'auto' (default): filled where the application can fill, coloured pencil sketch where it can only draw lines; 'sketch' only when the user asks for a sketch. Never lower detail on your own. The drawing is verified (canvas / slide compared with the picture, shapes read back) and reports the likeness (fidelity.ssim); a mismatch fails with VERIFICATION_FAILED. The result includes a screenshot: LOOK at it; if a part is detached, misplaced, out of proportion or too plain, fix the SVG and call art.draw again (reuse_window true in Paint).",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "app": {
+            "type": "string",
+            "default": "paint",
+            "description": "paint | autocad | powerpoint | word | excel | file (also accepted: mspaint, ppt, dwg, svg, png, inkscape, illustrator, photoshop, gimp, krita, figma)."
+          },
+          "image_path": {
+            "type": "string",
+            "minLength": 3,
+            "description": "Absolute path of the picture (png, jpg, webp, bmp, gif)."
+          },
+          "svg": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 400000,
+            "description": "A complete <svg ...>...</svg> document you wrote for this picture."
+          },
+          "svg_path": {
+            "type": "string",
+            "minLength": 3,
+            "description": "Absolute path of an .svg file."
+          },
+          "template": {
+            "type": "string",
+            "enum": [
+              "doraemon",
+              "house"
+            ]
+          },
+          "options": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "template colours"
+          },
+          "objects": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 400,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "kind",
+                "points"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "rect",
+                    "ellipse",
+                    "triangle",
+                    "polygon",
+                    "line",
+                    "polyline",
+                    "curve",
+                    "path"
+                  ]
+                },
+                "points": {
+                  "type": "array",
+                  "minItems": 2,
+                  "items": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "fill": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "stroke": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "weight": {
+                  "type": "string",
+                  "enum": [
+                    "detail",
+                    "structure",
+                    "accent"
+                  ]
+                },
+                "layer": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100
+                }
+              }
+            }
+          },
+          "style": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "fill",
+              "sketch"
+            ],
+            "default": "auto"
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "max",
+              "ultra"
+            ],
+            "description": "Leave unset: the most detailed level the application can take (ultra for Office/file, max for Paint). Lower ONLY when the user explicitly asks for a quick or rough version."
+          },
+          "colors": {
+            "type": "integer",
+            "minimum": 4,
+            "maximum": 96,
+            "description": "Colours of a traced photo for true-colour applications (default 64)."
+          },
+          "outline": {
+            "type": "boolean",
+            "description": "Dark outline around every traced region (default: yes in Paint, no elsewhere)."
+          },
+          "reuse_window": {
+            "type": "boolean",
+            "default": false,
+            "description": "paint: draw on the window opened by the previous call."
+          },
+          "new_document": {
+            "type": "boolean",
+            "default": true,
+            "description": "autocad: open a new drawing (false: draw into the active one)."
+          },
+          "paper": {
+            "type": "string",
+            "enum": [
+              "white",
+              "keep"
+            ],
+            "default": "white",
+            "description": "autocad: white model-space background so every colour shows (restored value is reported)."
+          },
+          "width": {
+            "type": "number",
+            "minimum": 10,
+            "description": "autocad: sheet width in drawing units (default 1000)."
+          },
+          "shading": {
+            "type": "boolean",
+            "default": true,
+            "description": "autocad: hatch the coloured regions (default yes)."
+          },
+          "output_path": {
+            "type": "string",
+            "description": "app 'file' only: base path of the .svg/.png pair (default: the task's artifact folder). Documents in PowerPoint/Word/Excel are left open and unsaved; save them with desktop.save_as only when the user asks."
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "image_path"
+            ]
+          },
+          {
+            "required": [
+              "svg"
+            ]
+          },
+          {
+            "required": [
+              "svg_path"
+            ]
+          },
+          {
+            "required": [
+              "template"
+            ]
+          },
+          {
+            "required": [
+              "objects"
+            ]
+          }
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "app"
+        ],
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "backend": {
+            "type": "string"
+          },
+          "style": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "fidelity": {
+            "type": "object"
+          },
+          "screenshot": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "matches_plan": {
+            "type": "boolean"
+          },
+          "svg": {
+            "type": "string"
+          },
+          "png": {
+            "type": "string"
+          }
+        }
+      },
+      "timeout_ms": 1500000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "policy_category": "paint.draw"
+    },
+    {
+      "name": "art.brief",
+      "description": "ALWAYS call this first when the user asks to draw / paint / sketch anything in Paint with an artistic intent (a named painting, a style, a medium). It classifies the request (existing artwork / real subject / invention / school / medium), identifies a named work (title, artist, year, movement, medium, what makes it recognisable, palette), decides the goal (REPRODUCTION | STUDY | INTERPRETATION | ADAPTATION | INSPIRED_BY), the medium and the RENDERING MODE (pencil, ink, oil, watercolour, lacquer, flat colour...), honours explicit wishes (\"bút chì\", \"trắng đen\", \"không tô màu\") over its own choice, and downloads a reference picture of a real work from Wikimedia Commons when one is needed (data.image_path). If data.questions is not empty, ask the user (task.ask_user) before drawing: the title names several works. Pass what you already know (artwork_title, artist, medium, style, intent). Verification states are honest: BUILTIN_KNOWLEDGE and UNVERIFIED are not proof.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "request"
+        ],
+        "properties": {
+          "request": {
+            "type": "string",
+            "minLength": 2,
+            "description": "The user's request, verbatim."
+          },
+          "subject": {
+            "type": "string"
+          },
+          "artwork_title": {
+            "type": "string"
+          },
+          "artist": {
+            "type": "string"
+          },
+          "intent": {
+            "type": "string",
+            "enum": [
+              "REPRODUCTION",
+              "STUDY",
+              "INTERPRETATION",
+              "ADAPTATION",
+              "INSPIRED_BY"
+            ]
+          },
+          "medium": {
+            "type": "string"
+          },
+          "style": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "PENCIL_SKETCH",
+              "CHARCOAL_SKETCH",
+              "INK_LINE_ART",
+              "BLACK_WHITE",
+              "GRAYSCALE",
+              "FLAT_COLOR",
+              "PAINTERLY",
+              "WATERCOLOR_SIMULATION",
+              "OIL_PAINT_SIMULATION",
+              "ACRYLIC_SIMULATION",
+              "LACQUER_ART_SIMULATION",
+              "TECHNICAL_ILLUSTRATION",
+              "PIXEL_ART",
+              "HYBRID_RENDERING"
+            ]
+          },
+          "image_path": {
+            "type": "string",
+            "description": "A reference picture the user supplied."
+          },
+          "fetch": {
+            "type": "boolean",
+            "default": true,
+            "description": "Download a reference picture of an identified real work."
+          },
+          "offline": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": "string"
+          },
+          "verification": {
+            "type": "string"
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "image_path": {
+            "type": "string"
+          }
+        }
+      },
+      "timeout_ms": 120000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "policy_category": "paint.observe"
+    },
+    {
+      "name": "art.paint",
+      "description": "Draw a picture in Microsoft Paint in a chosen RENDERING MODE, with Paint's real brushes (Oil brush, Crayon, Marker, Natural pencil, Watercolour brush, Calligraphy...; only those this Paint offers), from a reference picture (image_path, e.g. from art.brief) or an SVG. Modes: PENCIL_SKETCH / CHARCOAL_SKETCH (grey hatching, no colour), INK_LINE_ART (black only), BLACK_WHITE, GRAYSCALE, FLAT_COLOR, PAINTERLY, OIL_PAINT_SIMULATION (directional overlapping strokes), ACRYLIC_SIMULATION, WATERCOLOR_SIMULATION (pale washes, paper left white), LACQUER_ART_SIMULATION (black/red/gold with eggshell), TECHNICAL_ILLUSTRATION, PIXEL_ART, HYBRID_RENDERING. Use the mode art.brief chose. The call opens a fresh Paint window, plans, draws in batches, checks the canvas against the plan, recovers from lost focus / open menus / zoom changes, refuses a bucket fill whose region is not closed, and reports what it did. It is a visual simulation: say so in the answer (Paint has no real oil, watercolour or lacquer). Takes several minutes for brush modes. After it succeeds finish with task.complete using the call as evidence.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "PENCIL_SKETCH",
+              "CHARCOAL_SKETCH",
+              "INK_LINE_ART",
+              "BLACK_WHITE",
+              "GRAYSCALE",
+              "FLAT_COLOR",
+              "PAINTERLY",
+              "WATERCOLOR_SIMULATION",
+              "OIL_PAINT_SIMULATION",
+              "ACRYLIC_SIMULATION",
+              "LACQUER_ART_SIMULATION",
+              "TECHNICAL_ILLUSTRATION",
+              "PIXEL_ART",
+              "HYBRID_RENDERING"
+            ]
+          },
+          "request": {
+            "type": "string"
+          },
+          "image_path": {
+            "type": "string",
+            "minLength": 3
+          },
+          "svg": {
+            "type": "string",
+            "minLength": 20,
+            "maxLength": 400000
+          },
+          "svg_path": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "max"
+            ],
+            "default": "max"
+          },
+          "max_strokes": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 2500,
+            "description": "Brush stroke budget (default 1100: about 5 minutes)."
+          },
+          "reuse_window": {
+            "type": "boolean",
+            "default": false
+          },
+          "resume": {
+            "type": "boolean",
+            "default": false,
+            "description": "With reuse_window: look at the canvas first and draw only what is not there."
+          },
+          "brief": {
+            "type": "object",
+            "description": "The data object returned by art.brief (kept in the specification as the source of identity, intent and verification state)."
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "mode",
+          "matches_plan"
+        ],
+        "properties": {
+          "mode": {
+            "type": "string"
+          },
+          "matches_plan": {
+            "type": "boolean"
+          },
+          "screenshot": {
+            "type": "string"
+          },
+          "fidelity": {
+            "type": "object"
+          },
+          "events": {
+            "type": "array"
+          }
+        }
+      },
+      "timeout_ms": 1800000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "policy_category": "paint.draw"
+    }
+  ]
+}

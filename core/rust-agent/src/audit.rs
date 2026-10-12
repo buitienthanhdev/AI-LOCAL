@@ -93,7 +93,8 @@ impl AuditLog {
     pub fn task_started(&self, record: &TaskRecord) -> Result<()> {
         self.record(AuditEvent {
             kind: "task_started",
-            detail: json!({"goal": record.goal, "mode": record.mode, "created_at": record.created_at}),
+            detail: json!({"goal": record.goal, "mode": record.mode, "created_at": record.created_at,
+                           "attachments": record.attachments}),
             ..Default::default()
         })
     }
@@ -134,6 +135,9 @@ pub fn reconstruct_task(dir: &Path, task_id: &str) -> Result<TaskRecord> {
                 let mut r = TaskRecord::new(task_id.into(), detail["goal"].as_str().unwrap_or_default().into(), mode);
                 if let Ok(created) = serde_json::from_value(detail["created_at"].clone()) {
                     r.created_at = created;
+                }
+                if let Ok(attachments) = serde_json::from_value(detail["attachments"].clone()) {
+                    r.attachments = attachments;
                 }
                 record = Some(r);
             }

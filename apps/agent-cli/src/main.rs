@@ -14,7 +14,7 @@ use lga_core::interaction::FileInteraction;
 use lga_core::config::{Config, ExecutionMode};
 use lga_core::doctor;
 use lga_core::llm::{ChatProvider, GatewayProvider};
-use lga_core::state::{new_task_id, LoadSource, StepStatus, TaskRecord, TaskStatus, TaskStore};
+use lga_core::state::{attach_file, new_task_id, LoadSource, StepStatus, TaskRecord, TaskStatus, TaskStore};
 
 const OBSERVATION_PREVIEW_CHARS: usize = 220;
 
@@ -45,6 +45,9 @@ enum Command {
         /// What came before in the conversation (the request this one follows up on and its result).
         #[arg(long)]
         context: Option<String>,
+        /// Files the user attached (absolute paths; copied under artifacts/<task_id>/attachments). Repeatable.
+        #[arg(long = "attach")]
+        attach: Vec<std::path::PathBuf>,
     },
     /// Continue a stopped, failed or interrupted task from its saved state.
     Resume {
@@ -56,6 +59,9 @@ enum Command {
         /// The user's answer to the question the task stopped on.
         #[arg(long)]
         answer: Option<String>,
+        /// Files the user attached with the answer. Repeatable.
+        #[arg(long = "attach")]
+        attach: Vec<std::path::PathBuf>,
     },
     /// Pause a running task before its next step.
     Pause { task_id: String },
@@ -260,7 +266,7 @@ async fn main_inner() -> Result<ExitCode> {
     let cli = Cli::parse();
     let config = Config::load()?;
     match cli.command {
-        Command::Run { task, mode, yes, ui_channel, task_id, context } => {
+        Command::Run { task, mode, yes, ui_channel, task_id, context, attach } => {
             let mode = match mode {
                 Some(m) => ExecutionMode::parse(&m)?,
                 None => config.agent.mode,
@@ -276,6 +282,15 @@ async fn main_inner() -> Result<ExitCode> {
             let mut record = TaskRecord::new(task_id, task, mode);
             if let Some(context) = context.filter(|c| !c.trim().is_empty()) {
                 record.conversation.push(format!("This request follows up on an earlier one. {context}"));
+            }
+            for path in attach {
+                record.attachments.push(attach_file(&config.artifacts_dir(), &record.task_id, &path)?);
+            }
+            if record.goal.trim().is_empty() {
+                if record.attachments.is_empty() {
+                    bail!("the request is empty");
+                }
+                record.goal = "Xem các tệp đính kèm và cho tôi biết nội dung chính của chúng.".to_string();
             }
             run_task(config, record, yes, ui_channel).await
         }
@@ -293,7 +308,7 @@ async fn main_inner() -> Result<ExitCode> {
             println!("{task_id} may continue.");
             Ok(ExitCode::SUCCESS)
         }
-        Command::Resume { task_id, yes, ui_channel, answer } => {
+        Command::Resume { task_id, yes, ui_channel, answer, attach } => {
             let (mut record, source) = store(&config).load(&task_id)?;
             match source {
                 LoadSource::Primary => {}
@@ -308,6 +323,11 @@ async fn main_inner() -> Result<ExitCode> {
                     }
                     None => record.conversation.push(format!("The user added: {answer}")),
                 }
+            }
+            for path in attach {
+                let attachment = attach_file(&config.artifacts_dir(), &record.task_id, &path)?;
+                record.conversation.push(format!("The user attached a file: {}", attachment.describe()));
+                record.attachments.push(attachment);
             }
             record.resume()?;
             println!("Resuming {} at step {} ({})", record.task_id, record.steps.len() + 1, record.goal);

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 from typing import Any
 
 from lga_worker.errors import ErrorCode, ToolError
 from lga_worker.registry import Check, ToolContext, ToolOutcome, ToolRegistry
+from lga_worker.windows import win32
 from lga_worker.windows.provider import ElementQuery, Rect, UIElement, WindowInfo
 from lga_worker.windows.windows_use_provider import WindowsUseProvider
 
@@ -30,7 +32,25 @@ def _element_line(e: UIElement) -> str:
     cx, cy = e.rect.center
     value = f" value='{e.value[:OBSERVATION_VALUE_CHARS]}'" if e.value else ""
     flags = "" if e.is_enabled else " disabled"
-    return f"{e.element_id} {e.control_type.removesuffix('Control')} '{e.name}'{value} @({cx},{cy}){flags}"
+    state = f" [{e.state}]" if e.state else ""
+    aid = f" #{e.automation_id}" if e.automation_id and len(e.automation_id) <= 24 and not e.automation_id.isdigit() else ""
+    return f"{e.element_id} {e.control_type.removesuffix('Control')} '{e.name}'{value}{aid} @({cx},{cy}){state}{flags}"
+
+
+def _texts_block(texts: list[str], limit: int = 30) -> str:
+    if not texts:
+        return ""
+    shown = texts[:limit]
+    more = f" (+{len(texts) - limit} more)" if len(texts) > limit else ""
+    return "Text shown: " + " | ".join(shown) + more
+
+
+def _focused_line(focused: dict[str, Any] | None) -> str:
+    if not focused:
+        return "Focused control: none"
+    content = focused.get("text") if focused.get("text") is not None else focused.get("value")
+    shown = f" text={content[:OBSERVATION_VALUE_CHARS * 2]!r}" if content else ""
+    return f"Focused control: {focused.get('control_type')} '{focused.get('name')}'{shown}"
 
 
 def _normalize_newlines(text: str) -> str:
@@ -57,11 +77,12 @@ def register(registry: ToolRegistry) -> None:
         result = await _sta(ctx, provider, provider.launch_app, args["target"], args["arguments"], timeout,
                             args.get("expect_title"))
         window = result.window
+        note = f" Note: {result.note}." if result.note else ""
         return ToolOutcome(
             data={"pid": result.pid, "window": window.to_dict(), "match_kind": result.match_kind,
-                  "resolved_target": result.resolved_target},
+                  "resolved_target": result.resolved_target, "note": result.note},
             checks=[Check("window_appeared", True, _window_line(window))],
-            observation=f"Launched {args['target']} -> {_window_line(window)} ({result.match_kind})",
+            observation=f"Launched {args['target']} -> {_window_line(window)} ({result.match_kind}).{note}",
             backend=BACKEND,
         )
 
@@ -69,15 +90,21 @@ def register(registry: ToolRegistry) -> None:
     async def close_app(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
         provider = await ctx.services.desktop()
         timeout = min(ctx.config.seconds("desktop.close_timeout_ms"), ctx.remaining_s())
-        result = await _sta(ctx, provider, provider.close_app, args["hwnd"], args["force"], timeout)
+        result = await _sta(ctx, provider, provider.close_dialog_aware, args["hwnd"], args["force"], bool(args.get("discard")), timeout)
         if not result.closed:
             dialog = result.blocking_dialog
+            question = f" It asks: {result.dialog_text}" if result.dialog_text else ""
+            buttons = f" Buttons: {', '.join(result.dialog_buttons)}." if result.dialog_buttons else ""
+            advice = (" Save the work first (desktop.save_as) or call desktop.close_app with discard=true to throw it away."
+                      if result.dialog_buttons else "")
             raise ToolError(
                 ErrorCode.EXECUTION_FAILED,
                 f"window {args['hwnd']} did not close"
-                + (f"; dialog '{dialog.title}' (hwnd={dialog.hwnd}) is waiting for an answer" if dialog else ""),
+                + (f"; dialog '{dialog.title}' (hwnd={dialog.hwnd}) is waiting for an answer." if dialog else ".")
+                + question + buttons + advice,
                 retryable=False,
-                details={"blocking_dialog": dialog.to_dict() if dialog else None},
+                details={"blocking_dialog": dialog.to_dict() if dialog else None, "buttons": result.dialog_buttons,
+                         "text": result.dialog_text},
             )
         windows = await _sta(ctx, provider, provider.list_windows)
         gone = args["hwnd"] not in {w.hwnd for w in windows}
@@ -123,8 +150,10 @@ def register(registry: ToolRegistry) -> None:
         more = len(snapshot.elements) - len(lines)
         if more > 0 or snapshot.truncated:
             lines.append(f"... more elements not shown ({more} in data; truncated={snapshot.truncated})")
+        texts = _texts_block(snapshot.texts)
         return ToolOutcome(data=snapshot.to_dict(), backend=BACKEND,
-                           observation=f"UI of {header}:\n" + ("\n".join(lines) or "(no interactive elements)"))
+                           observation=f"UI of {header}:\n" + (texts + "\n" if texts else "")
+                           + ("\n".join(lines) or "(no interactive elements)"))
 
     @registry.handler("desktop.find_element")
     async def find_element(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
@@ -226,16 +255,26 @@ def register(registry: ToolRegistry) -> None:
             await _sta(ctx, provider, provider.press_key, "enter", 1)
         checks: list[Check] = []
         value_after: str | None = None
+        focused: dict[str, Any] | None = None
         if element_id:
             content = await _sta(ctx, provider, provider.read_element, element_id)
             value_after = content.text if content.text is not None else content.value
-            if value_after is not None:
-                expected = args["text"].replace("\n", "\r").strip() if not args["press_enter"] else args["text"].strip()
-                normalized = value_after.replace("\r\n", "\r").replace("\n", "\r")
-                checks.append(Check("text_present", expected.replace("\n", "\r") in normalized,
-                                    f"element text now {len(value_after)} chars"))
-        return ToolOutcome(data={"typed_chars": len(args["text"]), "value_after": value_after}, checks=checks,
-                           backend=BACKEND, observation=f"Typed {len(args['text'])} characters. "
+        else:
+            # No element named: verify against whatever control has the focus, when it exposes its text.
+            focused = await _sta(ctx, provider, provider.focused_control_info)
+            if focused:
+                value_after = focused.get("text") if focused.get("text") is not None else focused.get("value")
+        if value_after is not None:
+            expected = args["text"].replace("\n", "\r").strip() if not args["press_enter"] else args["text"].strip()
+            normalized = value_after.replace("\r\n", "\r").replace("\n", "\r")
+            present = expected.replace("\n", "\r") in normalized
+            where = element_id or f"focused {focused.get('control_type')} '{focused.get('name')}'"
+            checks.append(Check("text_present", present, f"{where} now holds {len(value_after)} chars"
+                                + ("" if present else f"; it reads {value_after[:160]!r}")))
+        return ToolOutcome(data={"typed_chars": len(args["text"]), "value_after": value_after, "focused": focused},
+                           checks=checks, backend=BACKEND,
+                           observation=f"Typed {len(args['text'])} characters into "
+                           + (f"{element_id}. " if element_id else f"{_focused_line(focused)}. ")
                            + await _foreground_note(ctx, provider))
 
     @registry.handler("desktop.press_key")
@@ -251,6 +290,67 @@ def register(registry: ToolRegistry) -> None:
         await _sta(ctx, provider, provider.hotkey, args["keys"])
         return ToolOutcome(data={}, backend=BACKEND, observation=f"Pressed {'+'.join(args['keys'])}. "
                            + await _foreground_note(ctx, provider))
+
+    @registry.handler("desktop.read_window_text")
+    async def read_window_text(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        provider = await ctx.services.desktop()
+        hwnd = args.get("hwnd")
+        if hwnd is None:
+            window = await _sta(ctx, provider, provider.foreground_window)
+            hwnd = window.hwnd if window else None
+        if hwnd is None:
+            raise ToolError(ErrorCode.WINDOW_NOT_FOUND, "no window to read")
+        info = await _sta(ctx, provider, win32.window_info, hwnd)
+        max_items = int(args.get("max_items") or 80)
+        texts = await _sta(ctx, provider, provider.window_texts, hwnd, max_items, 6000, max(2.0, min(10.0, ctx.remaining_s() - 1)))
+        focused = await _sta(ctx, provider, provider.focused_control_info)
+        body = "\n".join(f"- {t}" for t in texts) or "(no text exposed by UI Automation; try vision.ocr on this window)"
+        return ToolOutcome(data={"window": info.to_dict(), "texts": texts, "focused": focused}, backend=BACKEND,
+                           observation=f"Text in {_window_line(info)}:\n{body}\n{_focused_line(focused)}")
+
+    @registry.handler("desktop.save_as")
+    async def save_as(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        provider = await ctx.services.desktop()
+        path = Path(args["path"])
+        timeout = max(5.0, min(30.0, ctx.remaining_s() - 2))
+        result = await _sta(ctx, provider, provider.save_as, args["hwnd"], path, bool(args.get("overwrite")), timeout)
+        return ToolOutcome(data=result, backend=BACKEND,
+                           checks=[Check("file_written", True, f"{result['path']} ({result['size']} bytes)")],
+                           observation=f"Saved through the '{result['dialog_title']}' dialog ({result['hotkey']}) to "
+                                       f"{result['path']} ({result['size']} bytes); window title now '{result['window_title']}'.")
+
+    @registry.handler("desktop.observe")
+    async def observe(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        provider = await ctx.services.desktop()
+        max_elements = int(args.get("max_elements") or 80)
+        path = ctx.artifact_dir("screenshots") / f"{ctx.step_id or ctx.request_id}-observe-{int(time.time() * 1000)}.png"
+        data = await _sta(ctx, provider, provider.observe, path, max_elements)
+        shot = data.pop("screenshot", None)
+        lines = []
+        if data["working"]:
+            w = data["working"]
+            lines.append(f"Working window: hwnd={w['hwnd']} '{w['title']}' [{w['process_name']}] {w['state']}"
+                         + (" (foreground)" if w["is_foreground"] else ""))
+        if data["foreground"] and (not data["working"] or data["foreground"]["hwnd"] != data["working"]["hwnd"]):
+            f = data["foreground"]
+            lines.append(f"In front: hwnd={f['hwnd']} '{f['title']}' [{f['process_name']}]")
+        if data["surprise"]:
+            lines.append(f"ATTENTION: {data['surprise']}")
+        lines.append(_focused_line(data["focused"]))
+        texts = _texts_block(data["texts"], 25)
+        if texts:
+            lines.append(texts)
+        elements = data["elements"]
+        shown = []
+        for e in elements[:60]:
+            value = f" value='{str(e.get('value'))[:OBSERVATION_VALUE_CHARS]}'" if e.get("value") else ""
+            state = f" [{e['state']}]" if e.get("state") else ""
+            shown.append(f"{e['element_id']} {e['control_type'].removesuffix('Control')} '{e['name']}'{value} @({e['center']['x']},{e['center']['y']}){state}")
+        if shown:
+            lines.append(f"Controls ({len(elements)}):\n" + "\n".join(shown) + ("\n..." if len(elements) > 60 else ""))
+        artifacts = [{"kind": "screenshot", "path": str(shot.path)}] if shot else []
+        data["screenshot"] = str(shot.path) if shot else None
+        return ToolOutcome(data=data, backend=BACKEND, artifacts=artifacts, observation="\n".join(lines))
 
     @registry.handler("desktop.screenshot")
     async def screenshot(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:

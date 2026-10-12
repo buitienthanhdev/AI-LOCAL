@@ -111,6 +111,13 @@ def prepare(task: dict, folder: Path) -> None:
     if note := setup.get("memory_note"):
         with sqlite3.connect(ROOT / "memory" / "persistent.db") as conn:
             conn.execute("INSERT OR IGNORE INTO user_notes (note, created_at) VALUES (?, ?)", (note, dt.datetime.now(dt.timezone.utc).isoformat()))
+    if img := setup.get("image"):  # a simple flat picture: {"path", "size": [w, h], "background", "shapes": [...]}
+        from PIL import Image, ImageDraw
+        pic = Image.new("RGB", tuple(img.get("size", [480, 360])), img.get("background", "white"))
+        draw = ImageDraw.Draw(pic)
+        for shape in img.get("shapes", []):
+            getattr(draw, shape["kind"])(shape["box"], fill=shape["fill"])
+        pic.save(img["path"])
     if rows := setup.get("csv_rows"):
         with open(rows["path"], "w", newline="", encoding="utf-8") as fh:
             w = csv.writer(fh)
@@ -120,6 +127,8 @@ def prepare(task: dict, folder: Path) -> None:
 
 
 def cleanup(task: dict) -> None:
+    for name in task.get("cleanup", {}).get("kill", []):  # windows the task leaves open on purpose (Paint)
+        subprocess.run(["taskkill", "/F", "/IM", f"{name}.exe"], capture_output=True)
     if forget := task.get("cleanup", {}).get("forget"):
         db = ROOT / "memory" / "persistent.db"
         with sqlite3.connect(db) as conn:
@@ -167,9 +176,19 @@ def check(c: dict, run: dict) -> tuple[bool, str]:
             n = conn.execute("SELECT COUNT(*) FROM user_notes WHERE note LIKE ?", (f"%{c['text']}%",)).fetchone()[0]
         return n == 0, f"no remembered note contains {c['text']}"
     if kind == "no_window":
-        out = subprocess.run(["powershell", "-NoProfile", "-Command",
-                              f"(Get-Process | Where-Object {{ $_.MainWindowTitle -like '*{c['title']}*' }}).Count"],
-                             capture_output=True, text=True).stdout.strip()
+        # Applications close asynchronously (Word keeps its window title for a moment after WM_CLOSE): give
+        # them a few seconds before calling a window "left open".
+        deadline = time.monotonic() + 6.0
+        while True:
+            # Optional "process" narrows the check to that executable: a user's editor showing BAO_CAO_DOMAIN.md
+            # must not count as a Word window titled bao_cao.docx.
+            proc = f" -and $_.ProcessName -like '{c['process']}*'" if c.get("process") else ""
+            out = subprocess.run(["powershell", "-NoProfile", "-Command",
+                                  f"(Get-Process | Where-Object {{ $_.MainWindowTitle -like '*{c['title']}*'{proc} }}).Count"],
+                                 capture_output=True, text=True).stdout.strip()
+            if out in ("", "0") or time.monotonic() >= deadline:
+                break
+            time.sleep(1.0)
         return out in ("", "0"), f"no window titled *{c['title']}* left open"
     if kind == "max_steps":
         return len(run.get("steps", [])) <= c["n"], f"{len(run.get('steps', []))} steps <= {c['n']}"

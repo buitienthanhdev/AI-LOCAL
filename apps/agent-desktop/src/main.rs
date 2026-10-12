@@ -9,6 +9,7 @@
 
 mod api;
 mod services;
+mod vendor;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,7 +27,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 };
 use wry::{NewWindowResponse, WebContext, WebViewBuilder};
 
-const WINDOW_TITLE: &str = "Local Gemini Agent";
+const WINDOW_TITLE: &str = "Illuminati";
 const APP_ORIGIN: &str = "http://lga.localhost";
 
 fn wide(s: &str) -> Vec<u16> {
@@ -67,22 +68,12 @@ fn find_agent_exe(config: &Config) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("Không tìm thấy agent.exe. Hãy chạy `cargo build --release` trong thư mục dự án."))
 }
 
-/// A round blue-violet badge with a white dot, drawn in code (no image file to ship).
+/// The app logo: a 256 x 256 RGBA picture (assets/icon-256.rgba, made from the logo by logs/dev/make_logo.py).
 fn app_icon() -> Option<Icon> {
-    const N: u32 = 64;
-    let mut rgba = Vec::with_capacity((N * N * 4) as usize);
-    let c = (N as f32 - 1.0) / 2.0;
-    for y in 0..N {
-        for x in 0..N {
-            let (dx, dy) = (x as f32 - c, y as f32 - c);
-            let d = (dx * dx + dy * dy).sqrt();
-            let t = y as f32 / N as f32;
-            let alpha = ((c + 0.5 - d).clamp(0.0, 1.0) * 255.0) as u8;
-            let (r, g, b) = if d < N as f32 * 0.16 { (255, 255, 255) } else { ((70.0 + 90.0 * t) as u8, (110.0 - 40.0 * t) as u8, 240) };
-            rgba.extend_from_slice(&[r, g, b, alpha]);
-        }
-    }
-    Icon::from_rgba(rgba, N, N).ok()
+    const N: u32 = 256;
+    let rgba = include_bytes!("../assets/icon-256.rgba");
+    debug_assert_eq!(rgba.len(), (N * N * 4) as usize);
+    Icon::from_rgba(rgba.to_vec(), N, N).ok()
 }
 
 fn open_in_browser(url: &str) {

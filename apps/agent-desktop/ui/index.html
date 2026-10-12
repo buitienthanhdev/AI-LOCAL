@@ -3,18 +3,23 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Local Gemini Agent</title>
+<title>Illuminati</title>
+<link rel="icon" type="image/png" href="/vendor/logo.png">
+<link rel="stylesheet" href="/vendor/katex/katex.min.css">
+<script src="/vendor/katex/katex.min.js"></script>
+<script src="/vendor/katex/mhchem.min.js"></script>
 <style>
   :root {
-    --bg: #f4f5f8; --panel: #ffffff; --side: #eef0f5; --text: #1b2130; --muted: #6a7385; --border: #e1e4ec;
-    --accent: #4f5fe8; --accent-soft: #eceefe; --ok: #18864b; --ok-soft: #e7f6ee; --warn: #a86a00; --warn-soft: #fff5e0;
-    --bad: #c8312f; --bad-soft: #fdecec; --code: #f2f4f8; --shadow: 0 1px 2px rgba(20,25,40,.06), 0 4px 16px rgba(20,25,40,.05);
+    --bg: #fffaf1; --panel: #ffffff; --side: #fdf1dc; --text: #2a1f14; --muted: #86705a; --border: #f0dcc0;
+    --accent: #e8731a; --accent-soft: #fff0dc; --accent-2: #f5b82e; --ok: #1d7f45; --ok-soft: #e8f5ea; --warn: #a86400; --warn-soft: #fff3d6;
+    --bad: #c4352c; --bad-soft: #fdeceb; --code: #f8efe0; --shadow: 0 1px 2px rgba(120,70,10,.07), 0 6px 22px rgba(232,115,26,.08);
+    --user: #fde9cc;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #12151b; --panel: #1a1e26; --side: #161a21; --text: #e7e9ee; --muted: #9aa2b1; --border: #2a303b;
-      --accent: #8d98ff; --accent-soft: #232846; --ok: #4cc386; --ok-soft: #173126; --warn: #e2b04a; --warn-soft: #33290f;
-      --bad: #f07272; --bad-soft: #3a1c1e; --code: #20252f; --shadow: none;
+      --bg: #14100d; --panel: #1d1712; --side: #18130f; --text: #f4eadb; --muted: #b09a82; --border: #33281e;
+      --accent: #ff9a3c; --accent-soft: #3a2614; --accent-2: #ffd166; --ok: #5bd08a; --ok-soft: #16301f; --warn: #f0b84c; --warn-soft: #382a10;
+      --bad: #f27b73; --bad-soft: #3b1d1b; --code: #251c14; --shadow: none; --user: #3a2a1a;
     }
   }
   * { box-sizing: border-box; }
@@ -26,7 +31,7 @@
   /* Sidebar */
   aside { width: 272px; flex: none; background: var(--side); border-right: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
   .brand { display: flex; align-items: center; gap: 10px; padding: 16px 16px 10px; font-weight: 650; font-size: 15px; }
-  .logo { width: 26px; height: 26px; border-radius: 50%; background: radial-gradient(circle at 50% 50%, #fff 0 22%, transparent 23%), linear-gradient(160deg, #4f6ef0, #9b46f0); flex: none; }
+  .logo { width: 26px; height: 26px; border-radius: 50%; background: #05101f url(/vendor/logo.png) center / cover no-repeat; flex: none; }
   .new { margin: 4px 12px 10px; padding: 10px 12px; border-radius: 10px; background: var(--accent); color: #fff; font-weight: 600; display: flex; gap: 8px; align-items: center; justify-content: center; }
   .new:hover { filter: brightness(1.07); }
   .search { margin: 0 12px 8px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--text); font: inherit; }
@@ -37,6 +42,14 @@
   .item.sel { background: var(--accent-soft); }
   .item .g { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 13.5px; }
   .item .t { font-size: 11.5px; color: var(--muted); }
+  .item { position: relative; cursor: pointer; }
+  .del { flex: none; align-self: center; font-size: 12px; padding: 3px 7px; border-radius: 6px; color: var(--muted); opacity: 0; }
+  .item:hover .del, .item:focus-within .del, .del.armed { opacity: 1; }
+  .del:hover { background: var(--border); color: var(--bad); }
+  .del.armed { background: var(--bad); color: #fff; }
+  .clearall { margin: 0 12px 8px; padding: 6px 10px; border-radius: 8px; font-size: 12.5px; color: var(--muted); border: 1px dashed var(--border); }
+  .clearall:hover { color: var(--bad); border-color: var(--bad); }
+  .clearall.armed { background: var(--bad); border-color: var(--bad); color: #fff; }
   .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; margin-top: 6px; background: var(--muted); }
   .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); }
   .dot.run { background: var(--accent); animation: pulse 1.2s infinite; }
@@ -123,6 +136,16 @@
   .hint { color: var(--muted); font-size: 12px; flex: 1; min-width: 120px; }
   .send { width: 36px; height: 36px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 18px; display: grid; place-items: center; flex: none; }
   .send:disabled { background: var(--muted); }
+  .attach { width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center; font-size: 17px; color: var(--muted); flex: none; }
+  .attach:hover { background: var(--code); color: var(--text); }
+  .pending { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 4px 8px; }
+  .pending .chip img { width: 24px; height: 24px; object-fit: cover; border-radius: 5px; }
+  .pending .chip button { color: var(--muted); font-size: 15px; line-height: 1; padding: 0 2px; }
+  .pending .chip button:hover { color: var(--bad); }
+  body.dragging .box { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .bubble .atts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .bubble .atts img { max-width: 180px; max-height: 140px; border-radius: 8px; display: block; cursor: zoom-in; border: 1px solid rgba(255,255,255,.35); }
+  .bubble .atts .chip { background: rgba(255,255,255,.18); border-color: transparent; color: #fff; cursor: pointer; }
 
   #toast { position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 16px; border-radius: 10px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 80vw; }
   #toast.show { opacity: .95; }
@@ -141,14 +164,108 @@
     .bubble { max-width: 92%; }
     .hint { display: none; }
   }
+
+  /* Answers written like a chat reply: Markdown + LaTeX */
+  .answer { padding: 2px 0; }
+  .answer .status { font-size: 12.5px; font-weight: 600; margin-bottom: 4px; display: flex; gap: 4px; flex-wrap: wrap; }
+  .answer.ok .status { color: var(--ok); } .answer.bad .status { color: var(--bad); } .answer.warn .status { color: var(--warn); }
+  .answer.bad, .answer.warn { border-radius: 14px; padding: 12px 16px; }
+  .answer.bad { background: var(--bad-soft); } .answer.warn { background: var(--warn-soft); }
+  .answer-actions { display: flex; gap: 6px; margin-top: 8px; }
+  .ghost { font-size: 12.5px; color: var(--muted); padding: 3px 8px; border-radius: 7px; }
+  .ghost:hover { background: var(--code); color: var(--text); }
+  .md { word-break: break-word; font-size: 15px; line-height: 1.65; }
+  .md > :first-child { margin-top: 0; } .md > :last-child { margin-bottom: 0; }
+  .md p { margin: .55em 0; }
+  .md h1, .md h2, .md h3, .md h4, .md h5, .md h6 { margin: 1.1em 0 .4em; line-height: 1.3; font-weight: 650; }
+  .md h1 { font-size: 1.45em; } .md h2 { font-size: 1.25em; } .md h3 { font-size: 1.1em; } .md h4, .md h5, .md h6 { font-size: 1em; }
+  .md ul, .md ol { margin: .45em 0; padding-left: 1.5em; }
+  .md li { margin: .2em 0; } .md li > ul, .md li > ol { margin: .2em 0; }
+  .md li.task { list-style: none; margin-left: -1.2em; } .md li.task input { margin-right: 8px; }
+  .md strong { font-weight: 650; }
+  .md a { color: var(--accent); text-decoration: none; } .md a:hover { text-decoration: underline; }
+  .md :not(pre) > code { background: var(--code); padding: .1em .4em; border-radius: 6px; font-size: .88em; }
+  .md blockquote { margin: .6em 0; padding: .1em 14px; border-left: 3px solid var(--accent); color: var(--muted); }
+  .md hr { border: none; border-top: 1px solid var(--border); margin: 1em 0; }
+  .md .mdimg { max-width: 100%; border-radius: 10px; cursor: zoom-in; display: block; margin: .5em 0; }
+  .md .tablewrap { overflow-x: auto; margin: .6em 0; border: 1px solid var(--border); border-radius: 10px; }
+  .md table { border-collapse: collapse; width: 100%; font-size: .95em; }
+  .md th, .md td { padding: 5px 12px; line-height: 1.5; border-bottom: 1px solid var(--border); text-align: left; }
+  .md li > p { margin: .15em 0; }
+  .md th { background: var(--code); font-weight: 600; white-space: nowrap; }
+  .md tr:last-child td { border-bottom: none; }
+  .md .code { margin: .7em 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--code); }
+  .md .codehead { display: flex; justify-content: space-between; align-items: center; padding: 4px 6px 4px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--border); }
+  .md .codehead .copy { font-size: 12px; color: var(--muted); padding: 2px 8px; border-radius: 6px; }
+  .md .codehead .copy:hover { background: var(--panel); color: var(--text); }
+  .md pre.codeblock { margin: 0; border-radius: 0; background: transparent; padding: 10px 14px; max-height: 520px; font-size: 13px; line-height: 1.5; }
+  .tok-c { color: #6a8759; font-style: italic; } .tok-s { color: #b5651d; } .tok-n { color: #1f7a8c; } .tok-k { color: #7c3aed; font-weight: 600; }
+  .md .math.block { margin: .7em 0; overflow-x: auto; overflow-y: hidden; text-align: center; }
+  .md .katex-display { margin: 0; }
+  .md .katex { font-size: 1.08em; }
+
+  /* ===== Illuminati: ChatGPT-style layout in sunrise light ===== */
+  body { background: var(--bg); }
+  aside { background: var(--side); border-right: 1px solid var(--border); }
+  .brand { font-size: 17px; font-weight: 700; letter-spacing: .02em; }
+  .brand .logo, .avatar { box-shadow: 0 0 0 2px var(--accent-2), 0 0 16px rgba(245,184,46,.55); }
+  .new { background: transparent; color: var(--text); border: 1px solid var(--border); justify-content: flex-start; font-weight: 600; }
+  .new:hover { background: var(--accent-soft); border-color: var(--accent); filter: none; }
+  .search { background: var(--panel); }
+  .item.sel, .item:hover { background: var(--accent-soft); }
+  #scroll { background:
+      radial-gradient(1200px 520px at 50% -140px, rgba(255,196,84,.28), transparent 70%), var(--bg); }
+  .wrap { max-width: 780px; }
+  /* messages: the person in a soft bubble on the right, the assistant as plain text with its small sun */
+  .user .bubble { background: var(--user); color: var(--text); border-radius: 22px; border-bottom-right-radius: 22px; padding: 10px 18px; }
+  .agent-body { gap: 6px; }
+  .msg { gap: 14px; }
+  .avatar { margin-top: 2px; }
+  .answer { padding: 0; }
+  .answer.ok .status { color: var(--muted); font-weight: 500; }
+  .answer.ok .status { font-size: 12px; }
+  .md { font-size: 16px; line-height: 1.7; }
+  .card { border-radius: 16px; }
+  .ctl { opacity: .75; }
+  /* composer: one large rounded field, the way chat apps do it */
+  .composer { padding: 6px 24px 16px; background: linear-gradient(to top, var(--bg) 70%, transparent); }
+  .box { max-width: 780px; border-radius: 28px; padding: 12px 16px 10px; border: 1px solid var(--border);
+         box-shadow: 0 2px 6px rgba(120,70,10,.08), 0 10px 30px rgba(232,115,26,.10); }
+  .box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft), 0 10px 30px rgba(232,115,26,.16); }
+  .send { background: linear-gradient(135deg, var(--accent-2), var(--accent)); color: #fff; box-shadow: 0 2px 10px rgba(232,115,26,.45); }
+  .send:disabled { background: var(--border); box-shadow: none; }
+  .seg { background: var(--accent-soft); }
+  .seg button.on { color: var(--accent); }
+  .btn.primary { background: linear-gradient(135deg, var(--accent-2), var(--accent)); border-color: transparent; }
+  /* welcome: a rising sun whose rays slowly turn */
+  .hello { position: relative; padding: 125px 0 24px; overflow: visible; }
+  .hello .sun { position: relative; width: 120px; height: 120px; margin: 0 auto 6px; }
+  .hello .sun::before { content: ""; position: absolute; inset: -170px; border-radius: 50%; z-index: 0;
+    background: repeating-conic-gradient(from 0deg, rgba(255,190,70,.34) 0 4deg, transparent 4deg 15deg);
+    -webkit-mask-image: radial-gradient(circle, #000 0 28%, transparent 68%); mask-image: radial-gradient(circle, #000 0 28%, transparent 68%);
+    animation: rays 90s linear infinite; }
+  .hello .sun::after { content: ""; position: absolute; inset: -42px; border-radius: 50%; z-index: 0;
+    background: radial-gradient(circle, rgba(255,214,102,.75) 0 38%, rgba(255,170,60,.28) 58%, transparent 72%); animation: glow 5s ease-in-out infinite; }
+  .hello .sun .logo { position: relative; z-index: 1; width: 120px; height: 120px; margin: 0; box-shadow: 0 0 0 3px #ffd166, 0 8px 36px rgba(232,115,26,.55); }
+  @keyframes rays { to { transform: rotate(360deg); } }
+  @keyframes glow { 50% { transform: scale(1.07); opacity: .85; } }
+  .hello h1 { position: relative; z-index: 1; font-size: 40px; letter-spacing: .04em; margin: 30px 0 4px; font-weight: 750;
+    background: linear-gradient(90deg, #e8731a, #f5b82e, #e8731a); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hello .tagline { position: relative; z-index: 1; font-size: 17px; margin: 0 0 8px; color: var(--text); }
+  .hello p { position: relative; z-index: 1; max-width: 560px; margin: 0 auto; font-size: 14px; }
+  .ideas { position: relative; z-index: 1; }
+  .idea { border-radius: 16px; }
+  .idea:hover { background: var(--accent-soft); }
+  @media (prefers-reduced-motion: reduce) { .hello .sun::before, .hello .sun::after { animation: none; } }
 </style>
 </head>
 <body>
 <aside>
-  <div class="brand"><div class="logo"></div>Trợ lý máy tính</div>
+  <div class="brand"><div class="logo"></div>Illuminati</div>
   <button class="new" id="newBtn">＋ Việc mới</button>
   <input class="search" id="search" placeholder="Tìm trong lịch sử…">
   <div id="history"></div>
+  <button class="clearall" id="clearAll" title="Xóa toàn bộ lịch sử chat">🗑 Xóa tất cả lịch sử</button>
   <div class="health" id="health" title="Bấm để kiểm tra lại">
     <div id="h-brains"><span class="dot" id="h-gateway"></span>Bộ não AI</div>
     <div><span class="dot" id="h-knowledge"></span>Tri thức công ty</div>
@@ -157,18 +274,21 @@
   </div>
 </aside>
 <main>
-  <div class="topbar"><button class="btn" id="menuBtn">☰</button><b>Trợ lý máy tính</b></div>
+  <div class="topbar"><button class="btn" id="menuBtn">☰</button><b>Illuminati</b></div>
   <div id="scroll"><div class="wrap" id="view"></div></div>
   <div class="composer">
     <div class="box">
-      <textarea id="input" rows="1" placeholder="Bạn cần tôi làm gì? Ví dụ: Mở Excel và tạo bảng chi phí tháng 10"></textarea>
+      <textarea id="input" rows="1" placeholder="Nhắn cho Illuminati… ví dụ: Mở Excel và tạo bảng chi phí tháng 10"></textarea>
+      <div class="pending" id="pending" style="display:none"></div>
       <div class="bar">
+        <button class="attach" id="attachBtn" title="Đính kèm tệp: ảnh, Word, Excel, PDF… (hoặc kéo thả / dán ảnh)">📎</button>
+        <input type="file" id="fileInput" multiple hidden>
         <div class="seg" id="modes" title="Mức quyền của trợ lý cho việc này">
           <button data-mode="normal" title="Hỏi bạn trước mọi việc quan trọng (xóa, ghi, chạy lệnh…)">An toàn</button>
           <button data-mode="trusted" title="Tự làm các việc thường gặp, chỉ hỏi khi có rủi ro cao">Tin cậy</button>
           <button data-mode="full_access" class="full" title="Tự làm mọi việc không cần hỏi (vẫn không vượt UAC/Administrator)">Toàn quyền</button>
         </div>
-        <span class="hint">Enter để gửi · Shift+Enter xuống dòng</span>
+        <span class="hint">Enter để gửi · Shift+Enter xuống dòng · kéo thả tệp để đính kèm</span>
         <button class="send" id="sendBtn" title="Gửi">➤</button>
       </div>
     </div>
@@ -210,6 +330,7 @@ const TOOLS = {
   "desktop.find_element": "Tìm nút/ô trên màn hình", "desktop.read_element": "Đọc nội dung", "desktop.set_value": "Điền nội dung",
   "desktop.click": "Bấm chuột", "desktop.move_mouse": "Di chuột", "desktop.drag": "Kéo thả", "desktop.scroll": "Cuộn",
   "desktop.type": "Gõ chữ", "desktop.press_key": "Bấm phím", "desktop.hotkey": "Bấm tổ hợp phím", "desktop.screenshot": "Chụp màn hình",
+  "desktop.observe": "Quan sát màn hình", "desktop.read_window_text": "Đọc chữ trên cửa sổ", "desktop.save_as": "Lưu tệp qua hộp thoại Save As",
   "browser.open": "Mở trình duyệt", "browser.navigate": "Mở trang web", "browser.get_state": "Đọc trang web", "browser.click": "Bấm trên trang web",
   "browser.type": "Gõ vào trang web", "browser.screenshot": "Chụp trang web", "browser.page_matches": "Kiểm tra trang web", "browser.wait_for": "Chờ trang tải",
   "shell.exec": "Chạy lệnh PowerShell", "python.exec": "Chạy chương trình Python", "filesystem.read": "Đọc tệp", "filesystem.write": "Ghi tệp", "filesystem.list": "Xem thư mục",
@@ -224,10 +345,11 @@ const TOOLS = {
   "office.excel_read": "Đọc Excel", "office.excel_write": "Ghi Excel", "office.word_read": "Đọc Word", "office.word_write": "Sửa Word",
   "office.export_pdf": "Xuất PDF", "office.outlook_list": "Xem hộp thư", "office.outlook_read": "Đọc email", "office.outlook_draft": "Soạn email",
   "office.outlook_send": "Gửi email", "schedule.create": "Hẹn giờ làm việc", "schedule.list": "Xem lịch hẹn", "schedule.delete": "Xóa lịch hẹn",
+  "paint.draw": "Vẽ trong Paint", "paint.draw_image": "Vẽ lại ảnh trong Paint", "paint.inspect": "Kiểm tra hình vẽ trong Paint",
   "notify.show": "Hiện thông báo", "clipboard.read": "Đọc clipboard", "clipboard.write": "Chép vào clipboard", "tools.enable": "Nạp thêm công cụ", "autocad.verify_geometry": "Kiểm tra hình vẽ",
 };
 const AREA = { desktop: "Điều khiển Windows", browser: "Trình duyệt", shell: "PowerShell", filesystem: "Tệp tin", system: "Hệ thống",
-  vision: "Nhìn màn hình", knowledge: "Tri thức công ty", autocad: "AutoCAD", web: "Internet", document: "Tài liệu", memory: "Ghi nhớ", office: "Office", schedule: "Hẹn giờ", notify: "Thông báo", clipboard: "Clipboard" };
+  vision: "Nhìn màn hình", knowledge: "Tri thức công ty", autocad: "AutoCAD", web: "Internet", document: "Tài liệu", memory: "Ghi nhớ", office: "Office", schedule: "Hẹn giờ", notify: "Thông báo", clipboard: "Clipboard", paint: "Paint" };
 const friendly = tool => TOOLS[tool] || AREA[String(tool).split(".")[0]] || tool;
 const IDEAS = [
   ["📝", "Ghi chú nhanh", "Mở Notepad, viết \"Xin chào\" và lưu vào C:\\temp\\xinchao.txt"],
@@ -236,10 +358,15 @@ const IDEAS = [
   ["📐", "Vẽ AutoCAD", "Mở AutoCAD, tạo bản vẽ mới và vẽ hình tròn bán kính 100, lưu vào C:\\temp\\tron.dwg"],
   ["🗂️", "Dọn dẹp tệp", "Liệt kê 10 tệp lớn nhất trong thư mục Downloads của tôi"],
   ["👁️", "Xem màn hình", "Chụp màn hình và mô tả những gì đang hiển thị"],
+  ["📎", "Hỏi về tệp đính kèm", "Tóm tắt tài liệu đính kèm và nêu 3 ý chính"],
 ];
 
 let currentData = null;
-let selected = null, events = [], cursor = 0, sig = {}, tasks = [], mode = "normal", openDetails = new Set();
+let selected = null, tasks = [], mode = "normal"; // selected: the task id of the last request in the chat on screen
+/** The chat on screen: one box holds every request typed in it ({id, turns: [{id, goal, shown, events, cursor, data, sig, ...}]}). */
+let conv = null;
+const lastTurn = () => (conv && conv.turns.length ? conv.turns[conv.turns.length - 1] : null);
+const newTurn = (id, goal, shown) => ({ id, goal: goal || "…", shown, events: [], cursor: 0, data: null, sig: {}, open: new Set(), seen: 0, settled: false });
 
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -274,30 +401,429 @@ function linkify(text) {
 }
 const fileName = p => String(p).split(/[\\/]/).pop();
 
+/* ---------- Markdown (chat answers: bold, italic, headings, lists, tables, code, links, LaTeX) ---------- */
+function copyText(text, button) {
+  const done = () => { if (!button) return; const old = button.textContent; button.textContent = "Đã chép ✓"; setTimeout(() => { button.textContent = old; }, 1500); };
+  const fallback = () => {
+    const t = el("textarea", { style: "position:fixed;opacity:0" }); t.value = text; document.body.append(t); t.select();
+    try { document.execCommand("copy"); done(); } catch { toast("Không chép được"); }
+    t.remove();
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+}
+
+const MD = (() => {
+  const SAFE_URL = /^(https?:\/\/|mailto:|\/api\/artifact\?)/i;
+  const LOCAL_PATH = /^[A-Za-z]:[\\/]/;
+  const text = s => document.createTextNode(s);
+
+  function math(tex, display) {
+    const node = el(display ? "div" : "span", { class: display ? "math block" : "math" });
+    if (window.katex) {
+      try {
+        window.katex.render(tex, node, { displayMode: display, throwOnError: false, strict: "ignore", trust: false, output: "htmlAndMathml" });
+        return node;
+      } catch { /* shown as source below */ }
+    }
+    node.append(el("code", {}, display ? `$$${tex}$$` : `$${tex}$`));
+    return node;
+  }
+
+  /* --- code highlighting: comments, strings, numbers, keywords (enough to read code at a glance) --- */
+  const KEYWORDS = new Set(("abstract as async await break case catch class const continue def default del do elif else enum except export extends " +
+    "finally fn for from function global if impl import in instanceof interface is lambda let loop match mod mut new nonlocal not of or package " +
+    "pass private protected public pub raise return self static struct super switch this throw trait try type typeof use var void while with yield " +
+    "and null true false none True False None NULL nil select from where insert update delete create table values set into join group order by " +
+    "SELECT FROM WHERE INSERT UPDATE DELETE CREATE TABLE VALUES SET INTO JOIN GROUP ORDER BY AND OR NOT Function End Sub Dim Param foreach begin end").split(" "));
+  const HASH = new Set(["python", "py", "bash", "sh", "shell", "zsh", "powershell", "ps1", "pwsh", "yaml", "yml", "toml", "ruby", "rb", "r", "perl", "dockerfile", "makefile", "ini", "conf", "env", "gitignore"]);
+  const DASH = new Set(["sql", "lua", "haskell", "hs"]);
+  function highlight(code, lang) {
+    const l = String(lang || "").toLowerCase();
+    const comment = HASH.has(l) ? "#[^\\n]*" : DASH.has(l) ? "--[^\\n]*" : l === "" ? "\\/\\/[^\\n]*|(?:^|\\s)#[^\\n]*" : "\\/\\/[^\\n]*";
+    const re = new RegExp(`(\\/\\*[\\s\\S]*?\\*\\/|${comment})|("(?:\\\\.|[^"\\\\\\n])*"|'(?:\\\\.|[^'\\\\\\n])*'|\`(?:\\\\.|[^\`\\\\])*\`)|(\\b0x[\\da-fA-F]+\\b|\\b\\d[\\d_]*(?:\\.\\d+)?(?:[eE][+-]?\\d+)?\\b)|([A-Za-z_$][\\w$]*)`, "g");
+    const out = [];
+    let last = 0, m;
+    while ((m = re.exec(code)) !== null) {
+      if (m.index > last) out.push(text(code.slice(last, m.index)));
+      const cls = m[1] ? "tok-c" : m[2] ? "tok-s" : m[3] ? "tok-n" : KEYWORDS.has(m[4]) ? "tok-k" : null;
+      out.push(cls ? el("span", { class: cls }, m[0]) : text(m[0]));
+      last = m.index + m[0].length;
+      if (m[0].length === 0) re.lastIndex++;
+    }
+    if (last < code.length) out.push(text(code.slice(last)));
+    return out;
+  }
+
+  function codeBlock(code, lang) {
+    return el("div", { class: "code" },
+      el("div", { class: "codehead" }, el("span", {}, lang || "mã"),
+        el("button", { class: "copy", onclick: e => copyText(code, e.currentTarget) }, "Sao chép")),
+      el("pre", { class: "codeblock" }, el("code", {}, highlight(code, lang))));
+  }
+
+  function link(href, children) {
+    if (SAFE_URL.test(href)) return el("a", { href, target: "_blank", rel: "noopener" }, children);
+    if (LOCAL_PATH.test(href)) return el("a", { href: "#", title: "Mở thư mục chứa tệp", onclick: e => { e.preventDefault(); reveal(href); } }, children);
+    return el("span", {}, children);
+  }
+
+  /** The index of the bracket that closes the one at `open` (same nesting), or -1. */
+  function matching(src, open, a, b) {
+    let depth = 0;
+    for (let i = open; i < src.length; i++) {
+      if (src[i] === "\\") { i++; continue; }
+      if (src[i] === a) depth++;
+      else if (src[i] === b && --depth === 0) return i;
+    }
+    return -1;
+  }
+
+  /* --- inline --- */
+  function inline(src) {
+    const out = [];
+    let buf = "";
+    const flush = () => { if (buf) { out.push(text(buf)); buf = ""; } };
+    const n = src.length;
+    let i = 0;
+    while (i < n) {
+      const c = src[i];
+      if (c === "\\") {
+        const nx = src[i + 1];
+        if (nx === "(") { const j = src.indexOf("\\)", i + 2); if (j > 0) { flush(); out.push(math(src.slice(i + 2, j).trim(), false)); i = j + 2; continue; } }
+        if (nx === "[") { const j = src.indexOf("\\]", i + 2); if (j > 0) { flush(); out.push(math(src.slice(i + 2, j).trim(), true)); i = j + 2; continue; } }
+        if (nx && /[\\`*_{}\[\]()#+\-.!|~$<>]/.test(nx)) { buf += nx; i += 2; continue; }
+        buf += c; i++; continue;
+      }
+      if (c === "\n") { flush(); out.push(el("br")); i++; continue; }
+      if (c === "`") {
+        let k = 1; while (src[i + k] === "`") k++;
+        const mark = "`".repeat(k);
+        const j = src.indexOf(mark, i + k);
+        if (j > 0) { flush(); out.push(el("code", {}, src.slice(i + k, j).replace(/^ (.+) $/, "$1"))); i = j + k; continue; }
+        buf += mark; i += k; continue;
+      }
+      if (c === "$") {
+        if (src[i + 1] === "$") { const j = src.indexOf("$$", i + 2); if (j > 0) { flush(); out.push(math(src.slice(i + 2, j).trim(), true)); i = j + 2; continue; } }
+        if (i + 1 < n && !/\s/.test(src[i + 1])) {
+          let j = i + 1;
+          while (j < n) { j = src.indexOf("$", j); if (j < 0) break; if (src[j - 1] === "\\") { j++; continue; } break; }
+          if (j > i + 1 && !/\s/.test(src[j - 1]) && !/\d/.test(src[j + 1] || "") && !src.slice(i + 1, j).includes("\n\n")) {
+            flush(); out.push(math(src.slice(i + 1, j), false)); i = j + 1; continue;
+          }
+        }
+        buf += c; i++; continue;
+      }
+      if ((c === "!" && src[i + 1] === "[") || c === "[") {
+        const image = c === "!";
+        const open = image ? i + 1 : i;
+        const close = matching(src, open, "[", "]");
+        if (close > 0 && src[close + 1] === "(") {
+          const end = matching(src, close + 1, "(", ")");
+          if (end > 0) {
+            const label = src.slice(open + 1, close);
+            const href = src.slice(close + 2, end).trim().split(/\s+/)[0].replace(/^<|>$/g, "");
+            flush();
+            if (image) {
+              if (SAFE_URL.test(href) || /^data:image\//i.test(href)) out.push(el("img", { class: "mdimg", src: href, alt: label, onclick: e => zoom(e.target.src) }));
+              else out.push(text(label));
+            } else out.push(link(href, inline(label)));
+            i = end + 1; continue;
+          }
+        }
+        buf += c; i++; continue;
+      }
+      if (c === "h" && /^https?:\/\//.test(src.slice(i, i + 8)) && (i === 0 || /[\s(>\[*_]/.test(src[i - 1]))) {
+        const m = /^https?:\/\/[^\s<>\]]+/.exec(src.slice(i));
+        if (m) {
+          let url = m[0].replace(/[.,;:!?'"*_]+$/, "");
+          if (url.endsWith(")") && !url.includes("(")) url = url.slice(0, -1);
+          flush(); out.push(link(url, url)); i += url.length; continue;
+        }
+      }
+      if (c === "<" && /^<br\s*\/?>/i.test(src.slice(i, i + 6))) { flush(); out.push(el("br")); i += src.slice(i).match(/^<br\s*\/?>/i)[0].length; continue; }
+      if (c === "*" || c === "_" || c === "~") {
+        let k = 1; while (src[i + k] === c) k++;
+        if (c === "~" && k !== 2) { buf += c.repeat(k); i += k; continue; }
+        const prev = src[i - 1];
+        const opens = !/\s/.test(src[i + k] || " ");
+        if (opens && !(c === "_" && prev && /\w/.test(prev))) {
+          const use = Math.min(k, 3);
+          const delim = c.repeat(use);
+          let j = i + k, found = -1;
+          while ((j = src.indexOf(c, j)) >= 0) {
+            let r = 1; while (src[j + r] === c) r++;
+            const before = src[j - 1], after = src[j + r];
+            if (r === use && !/\s/.test(before) && !(c === "_" && after && /\w/.test(after))) { found = j; break; }
+            j += r;
+          }
+          if (found > 0) {
+            flush();
+            const inner = inline(src.slice(i + use, found));
+            out.push(c === "~" ? el("del", {}, inner) : use === 1 ? el("em", {}, inner) : use === 2 ? el("strong", {}, inner) : el("strong", {}, el("em", {}, inner)));
+            i = found + use; continue;
+          }
+        }
+        buf += c.repeat(k); i += k; continue;
+      }
+      buf += c; i++;
+    }
+    flush();
+    return out;
+  }
+
+  /* --- blocks --- */
+  const LIST_ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/;
+  const FENCE = /^\s{0,3}(`{3,}|~{3,})\s*([^\s`]*)[^`]*$/;
+  const HR = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
+  const HEADING = /^\s{0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/;
+  const SEP = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+  const isBlank = l => /^\s*$/.test(l);
+
+  const splitRow = row => {
+    const cells = []; let cur = "";
+    const s = row.trim().replace(/^\|/, "").replace(/\|$/, "");
+    for (let i = 0; i < s.length; i++) {
+      if (s[i] === "\\" && s[i + 1] === "|") { cur += "|"; i++; } else if (s[i] === "|") { cells.push(cur.trim()); cur = ""; } else cur += s[i];
+    }
+    cells.push(cur.trim());
+    return cells;
+  };
+
+  function table(head, sep, rows) {
+    const aligns = splitRow(sep).map(c => (/^:-+:$/.test(c) ? "center" : /-+:$/.test(c) ? "right" : /^:-+/.test(c) ? "left" : ""));
+    const cell = (tag, text_, k) => el(tag, { style: aligns[k] ? `text-align:${aligns[k]}` : null }, inline(text_));
+    return el("div", { class: "tablewrap" }, el("table", {},
+      el("thead", {}, el("tr", {}, splitRow(head).map((c, k) => cell("th", c, k)))),
+      el("tbody", {}, rows.map(r => el("tr", {}, splitRow(r).map((c, k) => cell("td", c, k)))))));
+  }
+
+  function parseList(lines) {
+    const first = lines[0].match(/^(\s*)([-*+]|\d{1,9}[.)])\s+/);
+    const base = first[1].length;
+    const ordered = /\d/.test(first[2]);
+    const list = el(ordered ? "ol" : "ul", {});
+    if (ordered) { const start = parseInt(first[2], 10); if (start !== 1) list.setAttribute("start", String(start)); }
+    let item = null, indent = 0;
+    const flush = () => {
+      if (!item) return;
+      let content = item.join("\n").replace(/\s+$/, "");
+      const li = el("li", {});
+      const task = content.match(/^\[( |x|X)\]\s+/);
+      if (task) { li.classList.add("task"); li.append(el("input", { type: "checkbox", disabled: true, checked: task[1] !== " " ? true : null })); content = content.slice(task[0].length); }
+      const blocks = parseBlocks(content);
+      for (const b of blocks) { if (b.tagName === "P" && blocks.length === 1) li.append(...b.childNodes); else li.append(b); }
+      list.append(li);
+      item = null;
+    };
+    for (const l of lines) {
+      const m = l.match(LIST_ITEM);
+      if (m && m[1].length <= base + 1) {
+        flush();
+        item = [m[3]];
+        indent = m[1].length + m[2].length + 1;
+      } else if (item) {
+        item.push(l.replace(new RegExp(`^\\s{0,${indent}}`), ""));
+      }
+    }
+    flush();
+    return list;
+  }
+
+  function parseBlocks(src) {
+    const lines = String(src).replace(/\r\n?/g, "\n").split("\n");
+    const out = [];
+    const startsBlock = (l, next) => FENCE.test(l) || HEADING.test(l) || HR.test(l) || /^\s{0,3}>/.test(l) || LIST_ITEM.test(l)
+      || /^\s*\$\$/.test(l) || /^\s*\\\[/.test(l) || (l.includes("|") && next !== undefined && SEP.test(next) && next.includes("|"));
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      if (isBlank(line)) { i++; continue; }
+      let m;
+      if ((m = line.match(FENCE))) {
+        const mark = m[1], lang = m[2];
+        const closer = new RegExp(`^\\s{0,3}${mark[0] === "`" ? "`" : "~"}{${mark.length},}\\s*$`);
+        const buf = []; i++;
+        while (i < lines.length && !closer.test(lines[i])) buf.push(lines[i++]);
+        i++;
+        out.push(codeBlock(buf.join("\n"), lang));
+        continue;
+      }
+      if ((m = line.match(/^\s*\$\$(.*)$/))) {
+        const rest = m[1];
+        const end = rest.indexOf("$$");
+        if (end >= 0) { out.push(math(rest.slice(0, end).trim(), true)); i++; continue; }
+        const buf = [rest]; i++;
+        while (i < lines.length && !lines[i].includes("$$")) buf.push(lines[i++]);
+        if (i < lines.length) { buf.push(lines[i].slice(0, lines[i].indexOf("$$"))); i++; }
+        out.push(math(buf.join("\n").trim(), true));
+        continue;
+      }
+      if ((m = line.match(/^\s*\\\[(.*)$/))) {
+        const rest = m[1];
+        const end = rest.indexOf("\\]");
+        if (end >= 0) { out.push(math(rest.slice(0, end).trim(), true)); i++; continue; }
+        const buf = [rest]; i++;
+        while (i < lines.length && !lines[i].includes("\\]")) buf.push(lines[i++]);
+        if (i < lines.length) { buf.push(lines[i].slice(0, lines[i].indexOf("\\]"))); i++; }
+        out.push(math(buf.join("\n").trim(), true));
+        continue;
+      }
+      if ((m = line.match(HEADING))) { out.push(el(`h${m[1].length}`, {}, inline(m[2]))); i++; continue; }
+      if (HR.test(line)) { out.push(el("hr")); i++; continue; }
+      if (/^\s{0,3}>/.test(line)) {
+        const buf = [];
+        while (i < lines.length && /^\s{0,3}>/.test(lines[i])) buf.push(lines[i++].replace(/^\s{0,3}>\s?/, ""));
+        out.push(el("blockquote", {}, parseBlocks(buf.join("\n"))));
+        continue;
+      }
+      if (line.includes("|") && i + 1 < lines.length && lines[i + 1].includes("|") && SEP.test(lines[i + 1])) {
+        const rows = []; const head = line, sep = lines[i + 1];
+        i += 2;
+        while (i < lines.length && !isBlank(lines[i]) && lines[i].includes("|")) rows.push(lines[i++]);
+        out.push(table(head, sep, rows));
+        continue;
+      }
+      if (LIST_ITEM.test(line)) {
+        const buf = [];
+        while (i < lines.length) {
+          const l = lines[i];
+          if (isBlank(l)) {
+            let j = i + 1; while (j < lines.length && isBlank(lines[j])) j++;
+            if (j < lines.length && (LIST_ITEM.test(lines[j]) || /^\s{2,}\S/.test(lines[j]))) { buf.push(l); i++; continue; }
+            break;
+          }
+          if (LIST_ITEM.test(l) || /^\s+\S/.test(l)) { buf.push(l); i++; continue; }
+          if (buf.length && !startsBlock(l, lines[i + 1])) { buf.push(l); i++; continue; }  // lazy continuation
+          break;
+        }
+        out.push(parseList(buf));
+        continue;
+      }
+      const para = [line]; i++;
+      while (i < lines.length && !isBlank(lines[i]) && !startsBlock(lines[i], lines[i + 1])) para.push(lines[i++]);
+      out.push(el("p", {}, inline(para.join("\n"))));
+    }
+    return out;
+  }
+
+  return { render(src) { return parseBlocks(src); }, inline };
+})();
+
+/* ---------- Attachments ---------- */
+const MAX_FILES = 8, MAX_FILE_MB = 25;
+const IMAGE_RE = /\.(png|jpe?g|webp|gif|bmp)$/i;
+let pending = []; // files chosen for the next message: {file, name, url}
+function addFiles(list) {
+  for (const f of list) {
+    if (pending.length >= MAX_FILES) { toast(`Tối đa ${MAX_FILES} tệp mỗi lần`); break; }
+    if (f.size > MAX_FILE_MB * 1024 * 1024) { toast(`${f.name} lớn hơn ${MAX_FILE_MB} MB`); continue; }
+    if (f.size === 0) { toast(`${f.name} rỗng`); continue; }
+    if (pending.some(p => p.name === f.name && p.file.size === f.size)) continue;
+    // a pasted screenshot is always called image.png: give it a name that says when it was pasted
+    const name = /^image\.(png|jpe?g)$/i.test(f.name) ? `anh-dan-${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}.${f.name.split(".").pop()}` : f.name;
+    pending.push({ file: f, name, url: f.type.startsWith("image/") ? URL.createObjectURL(f) : null });
+  }
+  drawPending();
+}
+function drawPending() {
+  $("pending").replaceChildren(...pending.map((p, i) => el("span", { class: "chip", title: p.name },
+    p.url ? el("img", { src: p.url, alt: "" }) : "📄", el("span", {}, p.name),
+    el("button", { title: "Bỏ tệp này", onclick: () => { pending.splice(i, 1); drawPending(); } }, "×"))));
+  $("pending").style.display = pending.length ? "" : "none";
+  $("attachBtn").textContent = pending.length ? `📎${pending.length}` : "📎";
+}
+function readBase64(file) {
+  return new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1] || ""); r.onerror = () => no(r.error || new Error("không đọc được tệp")); r.readAsDataURL(file); });
+}
+/** Encode the chosen files for the API and clear the composer's list (the previews stay in the bubble). */
+async function takePending() {
+  const out = [];
+  for (const p of pending) out.push({ name: p.name, data_base64: await readBase64(p.file) });
+  const shown = pending.map(p => ({ name: p.name, url: p.url, kind: p.url ? "image" : "document" }));
+  pending = []; drawPending();
+  return { out, shown };
+}
+/** Chips/thumbnails for attachments: `{name, path?, url?, kind}` (saved ones have a path; just-sent ones a blob URL). */
+function attachmentNodes(list) {
+  if (!list || !list.length) return null;
+  return el("div", { class: "atts" }, list.map(a => {
+    const src = a.url || (a.path ? `/api/artifact?path=${encodeURIComponent(a.path)}` : null);
+    if (a.kind === "image" && src && (a.url || IMAGE_RE.test(a.path || ""))) return el("img", { src, alt: a.name, title: a.name, onclick: e => zoom(e.target.src) });
+    return el("span", { class: "chip", title: a.path ? `Mở thư mục chứa ${a.name}` : a.name, onclick: () => a.path && reveal(a.path) }, "📄", el("span", {}, a.name));
+  }));
+}
+
 /* ---------- History ---------- */
 async function refreshHistory() {
   try { tasks = (await api("/api/tasks")).tasks; } catch { return; }
   drawHistory();
 }
+/** Tasks grouped into chats: every request typed in the same box shares a conversation id. */
+function conversations() {
+  const map = new Map();
+  for (const t of tasks) {
+    const id = t.conversation_id || t.task_id;
+    if (!map.has(id)) map.set(id, []);
+    map.get(id).push(t);
+  }
+  const list = [];
+  for (const [id, items] of map) {
+    items.sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+    list.push({ id, items, first: items[0], last: items[items.length - 1],
+      updated: items.reduce((m, t) => (String(t.updated_at) > m ? String(t.updated_at) : m), "") });
+  }
+  list.sort((a, b) => b.updated.localeCompare(a.updated));
+  return list;
+}
 function drawHistory() {
   const q = $("search").value.trim().toLowerCase();
   const today = new Date().toDateString();
   const groups = { "Hôm nay": [], "Trước đó": [] };
-  for (const t of tasks) {
-    if (q && !String(t.goal).toLowerCase().includes(q)) continue;
-    groups[new Date(t.created_at || t.updated_at).toDateString() === today ? "Hôm nay" : "Trước đó"].push(t);
+  for (const c of conversations()) {
+    if (q && !c.items.some(t => String(t.goal).toLowerCase().includes(q))) continue;
+    groups[new Date(c.first.created_at || c.first.updated_at).toDateString() === today ? "Hôm nay" : "Trước đó"].push(c);
   }
   const out = [];
   for (const [name, list] of Object.entries(groups)) {
     if (!list.length) continue;
     out.push(el("div", { class: "group" }, name));
-    for (const t of list) out.push(el("button", { class: `item ${t.task_id === selected ? "sel" : ""}`, title: t.goal, onclick: () => select(t.task_id) },
-      el("span", { class: `dot ${t.interrupted ? "warn" : dotClass(t.status)}` }),
-      el("div", { style: "flex:1;min-width:0" }, el("div", { class: "g" }, t.goal), el("div", { class: "t" }, `${when(t.updated_at)} · ${t.interrupted ? "Bị gián đoạn" : STATUS[t.status] || t.status}`))));
+    for (const c of list) {
+      const t = c.last;
+      const more = c.items.length > 1 ? ` · ${c.items.length} yêu cầu` : "";
+      out.push(el("div", { class: `item ${conv && c.id === conv.id ? "sel" : ""}`, title: c.first.goal, role: "button", tabindex: "0",
+        onclick: () => openConversation(c.id), onkeydown: e => { if (e.key === "Enter" && e.target === e.currentTarget) openConversation(c.id); } },
+        el("span", { class: `dot ${t.interrupted ? "warn" : dotClass(t.status)}` }),
+        el("div", { style: "flex:1;min-width:0" }, el("div", { class: "g" }, c.first.goal),
+          el("div", { class: "t" }, `${when(c.updated)} · ${t.interrupted ? "Bị gián đoạn" : STATUS[t.status] || t.status}${more}`)),
+        el("button", { class: "del", title: "Xóa cuộc trò chuyện này", onclick: e => { e.stopPropagation(); confirmTwice(e.currentTarget, "Xóa?", "🗑", () => deleteConversation(c.id)); } }, "🗑")));
+    }
   }
   if (!out.length) out.push(el("div", { class: "group" }, q ? "Không tìm thấy" : "Chưa có việc nào"));
   $("history").replaceChildren(...out);
 }
+
+/** Two-step confirm without a dialog: the first click arms the button for 3 s, the second one runs `action`. */
+function confirmTwice(button, armedText, idleText, action) {
+  if (button.classList.contains("armed")) { clearTimeout(button._h); action(); return; }
+  button.classList.add("armed"); button.textContent = armedText;
+  button._h = setTimeout(() => { button.classList.remove("armed"); button.textContent = idleText; }, 3000);
+}
+async function deleteHistory(path) {
+  try {
+    const r = await api(path, {});
+    toast(r.running ? `Đã xóa ${r.deleted}; ${r.running} việc đang chạy được giữ lại` : r.deleted ? `Đã xóa ${r.deleted} yêu cầu` : "Không có gì để xóa");
+  } catch (e) { toast(e.message); }
+  await refreshHistory();
+}
+async function deleteConversation(id) {
+  const open = conv && conv.id === id;
+  await deleteHistory(`/api/conversations/${id}/delete`);
+  if (open && !tasks.some(t => (t.conversation_id || t.task_id) === id)) showWelcome();
+}
+$("clearAll").onclick = e => confirmTwice(e.currentTarget, "Bấm lần nữa để xóa hết", "🗑 Xóa tất cả lịch sử", async () => {
+  await deleteHistory("/api/history/clear");
+  if (conv && !tasks.some(t => (t.conversation_id || t.task_id) === conv.id)) showWelcome();
+});
 
 /* ---------- Health ---------- */
 async function refreshHealth() {
@@ -365,32 +891,50 @@ function setMode(m, remember = true) {
 }
 function grow() { const t = $("input"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 220) + "px"; }
 /**
- * The composer continues the conversation that is on screen:
+ * The composer continues the chat that is on screen (one box, as many requests as the person types):
  * - the assistant asked something -> the text is the answer;
- * - a finished task is open -> a follow-up request that knows what happened before;
- * - nothing open ("Việc mới") -> a fresh request.
+ * - the last request is finished -> the next request, in the same box, that knows everything said before;
+ * - nothing open (only "＋ Việc mới" starts a new chat) -> a fresh request.
  */
+function conversationContext() {
+  if (!conv || !conv.turns.length) return "";
+  const parts = [], files = [];
+  for (const t of conv.turns.slice(-6)) {
+    const d = t.data;
+    if (!d) { parts.push(`Yêu cầu: ${t.goal}`); continue; }
+    const result = d.task.final_summary || reasonText(d.task.failure_reason) || STATUS[d.task.status];
+    parts.push(`Yêu cầu: ${d.task.goal}\nKết quả: ${String(result).slice(0, 700)}`);
+    for (const a of d.task.attachments || []) if (a.path) files.push(a.path);
+  }
+  const earlier = files.length ? `\nTệp người dùng đã đính kèm trong cuộc trò chuyện này (vẫn đọc được): ${[...new Set(files)].join("; ")}` : "";
+  return `Cuộc trò chuyện từ đầu:\n${parts.join("\n---\n")}${earlier}`;
+}
 async function send(text) {
   text = (text ?? $("input").value).trim();
-  if (!text) return;
-  const data = selected && currentData && currentData.task.task_id === selected ? currentData : null;
+  if (!text && !pending.length) return;
+  const last = lastTurn();
+  const data = last && last.data ? last.data : null;
   const st = data ? data.task.status : null;
   const clear = () => { $("input").value = ""; grow(); };
   $("sendBtn").disabled = true;
   try {
     if (data && data.pending_request && data.pending_request.kind === "ask") {
-      await respond({ answer: text }); clear();
+      if (pending.length) { toast("Trả lời câu hỏi trước; tệp đính kèm gửi được khi trợ lý đã dừng hoặc trong yêu cầu mới."); }
+      else { await respond({ answer: text }); clear(); }
     } else if (data && st === "needs_user") {
-      await api(`/api/tasks/${selected}/resume`, { answer: text }); clear(); sig = {}; toast("Đã gửi câu trả lời"); poll();
+      const { out } = await takePending();
+      await api(`/api/tasks/${last.id}/resume`, { answer: text, attachments: out }); clear(); last.settled = false; last.seen = 0;
+      toast(out.length ? `Đã gửi câu trả lời và ${out.length} tệp` : "Đã gửi câu trả lời"); poll();
     } else if (data && !TERMINAL.includes(st) && !data.interrupted) {
-      toast("Trợ lý đang làm việc này. Đợi xong hoặc bấm ■ Dừng rồi gửi yêu cầu mới.");
+      toast("Trợ lý đang làm việc này. Đợi xong hoặc bấm ■ Dừng rồi gửi yêu cầu tiếp theo.");
     } else {
-      const result = data ? (data.task.final_summary || reasonText(data.task.failure_reason) || STATUS[st]) : "";
-      const context = data ? `Yêu cầu trước: ${data.task.goal}
-Kết quả: ${String(result).slice(0, 1500)}` : "";
-      const { task_id } = await api("/api/tasks", { task: text, mode, context });
+      const context = conversationContext();
+      const { out, shown } = await takePending();
+      const body = { task: text, mode, context, attachments: out };
+      if (conv) body.conversation_id = conv.id;
+      const { task_id, conversation_id } = await api("/api/tasks", body);
       clear();
-      select(task_id, text);
+      startTurn(task_id, conversation_id, text || "(tệp đính kèm)", shown);
       refreshHistory();
     }
   } catch (e) { toast(e.message); }
@@ -412,7 +956,7 @@ function reasonText(reason) {
 }
 
 /** Which model answered last ("Gemini" or the local fallback). */
-function brainName() {
+function brainName(events) {
   for (let i = events.length - 1; i >= 0; i--) {
     const p = events[i].kind === "llm" && events[i].provider;
     if (p) { const name = p.split(":").pop(); return BRAIN_NAMES[name] || name; }
@@ -423,54 +967,85 @@ function brainName() {
 function updateComposer(data) {
   const input = $("input");
   const st = data ? data.task.status : null;
-  input.placeholder = !data ? "Bạn cần tôi làm gì? Ví dụ: Mở Excel và tạo bảng chi phí tháng 10"
+  input.placeholder = !data ? "Nhắn cho Illuminati… ví dụ: Mở Excel và tạo bảng chi phí tháng 10"
     : (data.pending_request && data.pending_request.kind === "ask") || st === "needs_user" ? "Trả lời câu hỏi của trợ lý…"
-    : TERMINAL.includes(st) || data.interrupted ? "Yêu cầu tiếp theo (trợ lý nhớ việc vừa rồi)…  · ＋ Việc mới để bắt đầu lại"
+    : TERMINAL.includes(st) || data.interrupted ? "Nhắn tiếp trong cuộc trò chuyện này (trợ lý nhớ tất cả)…  · ＋ Việc mới để bắt đầu lại"
     : "Trợ lý đang làm việc…";
 }
 
 /* ---------- Views ---------- */
 function showWelcome() {
-  selected = null; currentData = null; updateComposer(null); drawHistory();
+  conv = null; selected = null; currentData = null; updateComposer(null); drawHistory();
   $("view").replaceChildren(el("div", { class: "hello" },
-    el("div", { class: "logo" }), el("h1", {}, "Bạn cần tôi làm gì?"),
-    el("p", {}, "Tôi điều khiển máy tính này giúp bạn: Windows, Chrome, AutoCAD, tệp tin, PowerShell — và tra cứu tài liệu công ty. Mỗi bước đều được kiểm tra lại."),
+    el("div", { class: "sun" }, el("div", { class: "logo" })), el("h1", {}, "Illuminati"),
+    el("div", { class: "tagline" }, "Soi sáng mọi việc trên máy tính của bạn"),
+    el("p", {}, "Tôi điều khiển Windows, Chrome, AutoCAD, Paint, tệp tin, PowerShell và tra cứu tài liệu công ty. Mỗi bước đều được kiểm tra lại. Đính kèm ảnh hay tài liệu bằng 📎, kéo thả hoặc dán ảnh."),
     el("div", { class: "ideas" }, IDEAS.map(([ic, title, text]) => el("button", { class: "idea", onclick: () => { $("input").value = text; grow(); $("input").focus(); } },
       el("div", { class: "ic" }, ic), el("div", {}, el("b", {}, title), el("span", {}, text)))))));
-  $("input").focus();
+  $("scroll").scrollTop = 0;
+  $("input").focus({ preventScroll: true });
 }
 
-function select(id, goal) {
-  selected = id; events = []; cursor = 0; sig = {}; openDetails = new Set();
-  document.body.classList.remove("menu");
-  drawHistory();
-  $("view").replaceChildren(
-    el("div", { class: "msg user" }, el("div", { class: "bubble", id: "v-goal" }, goal || "…")),
+/** One request and the assistant's work on it, as two messages in the chat. Element ids carry the task id. */
+function turnNode(turn) {
+  const p = turn.id;
+  return el("div", { class: "turn", id: `turn-${p}` },
+    el("div", { class: "msg user" }, el("div", { class: "bubble", id: `${p}-goal` }, turn.goal, attachmentNodes(turn.shown))),
     el("div", { class: "msg" }, el("div", { class: "logo avatar" }),
       el("div", { class: "agent-body" },
-        el("div", { id: "v-ctl", class: "ctl" }), el("div", { id: "v-ask" }), el("div", { id: "v-live" }),
-        el("div", { id: "v-result" }), el("div", { id: "v-shot" }), el("div", { id: "v-steps" }))));
-  $("v-live").replaceChildren(el("div", { class: "card live" }, el("div", { class: "spin" }), el("span", { class: "what" }, "Đang khởi động…")));
-  poll();
+        el("div", { id: `${p}-ctl`, class: "ctl" }), el("div", { id: `${p}-ask` }), el("div", { id: `${p}-live` }),
+        el("div", { id: `${p}-result` }), el("div", { id: `${p}-shot` }), el("div", { id: `${p}-steps` }))));
+}
+
+/** Open a chat from the history: every request that was typed in it, in order, in one box. */
+function openConversation(id) {
+  const items = tasks.filter(t => (t.conversation_id || t.task_id) === id)
+    .sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+  if (!items.length) return;
+  conv = { id, turns: items.map(t => newTurn(t.task_id, t.goal)) };
+  selected = lastTurn().id; currentData = null;
+  document.body.classList.remove("menu");
+  drawHistory();
+  $("view").replaceChildren(...conv.turns.map(turnNode));
+  for (const t of conv.turns) $(`${t.id}-live`).replaceChildren(el("div", { class: "card live" }, el("div", { class: "spin" }), el("span", { class: "what" }, "Đang tải…")));
+  poll(true);
+}
+
+/** A request was just sent: it becomes the next turn of the chat on screen (or the first one of a new chat). */
+function startTurn(taskId, conversationId, goal, shown) {
+  const fresh = !conv || conv.id !== conversationId;
+  if (fresh) { conv = { id: conversationId, turns: [] }; $("view").replaceChildren(); }
+  const turn = newTurn(taskId, goal, shown);
+  conv.turns.push(turn);
+  selected = taskId; currentData = null;
+  document.body.classList.remove("menu");
+  $("view").append(turnNode(turn));
+  $(`${taskId}-live`).replaceChildren(el("div", { class: "card live" }, el("div", { class: "spin" }), el("span", { class: "what" }, "Đang khởi động…")));
+  drawHistory();
+  poll(true);
 }
 
 /** Re-render one region only when its data changed (keeps typed answers and opened sections intact). */
-function region(id, key, build) {
+function region(turn, name, key, build) {
+  const id = `${turn.id}-${name}`;
   const s = JSON.stringify(key);
-  if (sig[id] === s) return;
-  sig[id] = s;
+  if (turn.sig[id] === s) return;
+  turn.sig[id] = s;
   const node = $(id);
   if (node) node.replaceChildren(...[build()].flat().filter(Boolean));
 }
-function keepOpen(key, details) {
-  if (openDetails.has(key)) details.open = true;
-  details.addEventListener("toggle", () => details.open ? openDetails.add(key) : openDetails.delete(key));
+function keepOpen(turn, key, details) {
+  if (turn.open.has(key)) details.open = true;
+  details.addEventListener("toggle", () => details.open ? turn.open.add(key) : turn.open.delete(key));
   return details;
 }
 
-async function control(action) {
-  try { await api(`/api/tasks/${selected}/${action}`, {}); toast({ pause: "Đã yêu cầu tạm dừng", unpause: "Tiếp tục chạy", cancel: "Đã dừng", resume: "Đang chạy lại" }[action]); }
-  catch (e) { toast(e.message); }
+async function control(action, turn) {
+  try {
+    await api(`/api/tasks/${turn.id}/${action}`, {});
+    turn.settled = false; turn.seen = 0;
+    toast({ pause: "Đã yêu cầu tạm dừng", unpause: "Tiếp tục chạy", cancel: "Đã dừng", resume: "Đang chạy lại" }[action]);
+  } catch (e) { toast(e.message); }
   poll();
 }
 async function respond(body) {
@@ -487,76 +1062,78 @@ function latestShot(task) {
   return null;
 }
 
-function render(data) {
+function render(turn) {
+  const data = turn.data, events = turn.events;
   const task = data.task, pending = data.pending_request, st = task.status;
   const done = TERMINAL.includes(st) || data.interrupted;
-  $("v-goal").textContent = task.goal;
+  region(turn, "goal", [task.goal, task.attachments], () => [task.goal, attachmentNodes(task.attachments)]);
 
-  region("v-ctl", [st, data.pause_requested, data.interrupted], () => [
+  region(turn, "ctl", [st, data.pause_requested, data.interrupted], () => [
     el("span", { class: "muted small", style: "margin-right:auto" }, `${when(task.created_at)} · ${modeName(task.mode)}`),
-    !done && !data.pause_requested && el("button", { class: "btn", onclick: () => control("pause") }, "⏸ Tạm dừng"),
-    !done && data.pause_requested && el("button", { class: "btn", onclick: () => control("unpause") }, "▶ Tiếp tục"),
-    !done && el("button", { class: "btn danger", onclick: () => control("cancel") }, "■ Dừng"),
-    st !== "completed" && (done || st === "needs_user") && el("button", { class: "btn", onclick: () => control("resume") }, data.interrupted ? "↻ Chạy tiếp" : "↻ Chạy lại"),
+    !done && !data.pause_requested && el("button", { class: "btn", onclick: () => control("pause", turn) }, "⏸ Tạm dừng"),
+    !done && data.pause_requested && el("button", { class: "btn", onclick: () => control("unpause", turn) }, "▶ Tiếp tục"),
+    !done && el("button", { class: "btn danger", onclick: () => control("cancel", turn) }, "■ Dừng"),
+    st !== "completed" && (done || st === "needs_user") && el("button", { class: "btn", onclick: () => control("resume", turn) }, data.interrupted ? "↻ Chạy tiếp" : "↻ Chạy lại"),
     done && el("button", { class: "btn", onclick: () => { $("input").value = task.goal; grow(); $("input").focus(); } }, "✎ Sửa & gửi lại"),
   ]);
 
-  region("v-ask", pending, () => {
+  region(turn, "ask", pending, () => {
     if (!pending) return null;
     if (pending.kind === "confirm") {
       return el("div", { class: "card ask" },
         el("h3", {}, "🔐 Trợ lý xin phép: ", friendly(pending.tool)),
         (pending.reasons || []).length ? el("div", { class: "small" }, "Lý do cần hỏi: ", pending.reasons.join("; ")) : null,
-        keepOpen("ask", el("details", {}, el("summary", {}, "Xem chi tiết"), el("pre", {}, `${pending.tool}\n${short(pending.args, 2000)}`))),
+        keepOpen(turn, "ask", el("details", {}, el("summary", {}, "Xem chi tiết"), el("pre", {}, `${pending.tool}\n${short(pending.args, 2000)}`))),
         el("div", { class: "actions" },
           el("button", { class: "btn primary", onclick: () => respond({ approve: true }) }, "✓ Cho phép"),
           el("button", { class: "btn", onclick: () => respond({ approve: false }) }, "✗ Không cho phép")));
     }
     const input = el("input", { type: "text", placeholder: "Nhập câu trả lời…", onkeydown: e => { if (e.key === "Enter") respond({ answer: input.value }); } });
     setTimeout(() => input.focus(), 0);
-    return el("div", { class: "card ask" }, el("h3", {}, "💬 Trợ lý hỏi bạn"), el("div", { style: "margin-bottom:8px" }, pending.question), input,
+    return el("div", { class: "card ask" }, el("h3", {}, "💬 Trợ lý hỏi bạn"), el("div", { class: "md", style: "margin-bottom:8px" }, MD.render(pending.question)), input,
       el("div", { class: "actions" }, el("button", { class: "btn primary", onclick: () => respond({ answer: input.value }) }, "Trả lời")));
   });
 
   const started = events.filter(e => e.kind === "step_started");
   const finished = new Set(task.steps.map(s => s.step_id));
   const current = started.length && !finished.has(started[started.length - 1].step_id) ? started[started.length - 1] : null;
-  region("v-live", [st, current && current.step_id, task.plan, task.steps.length, done, brainName(), !!pending, task.pending_question], () => {
+  region(turn, "live", [st, current && current.step_id, task.plan, task.steps.length, done, brainName(events), !!pending, task.pending_question], () => {
     if (done) return null;
     const what = current ? friendly(current.tool) : (STATUS[st] || st);
     const thought = current && current.detail && current.detail.thought;
-    const brain = brainName();
+    const brain = brainName(events);
     return el("div", { class: "card" },
       el("div", { class: "live" }, ["paused", "needs_user"].includes(st) ? el("span", {}, "⏸") : el("div", { class: "spin" }),
         el("span", { class: "what" }, st === "needs_user" && !pending ? "Đang chờ bạn trả lời (gõ vào ô bên dưới)" : what),
         el("span", { class: "muted small" }, `· bước ${task.steps.length + (current ? 1 : 0)}${brain ? ` · ${brain}` : ""}`)),
-      st === "needs_user" && task.pending_question && !pending ? el("div", { style: "margin-top:6px" }, "💬 ", task.pending_question) : null,
+      st === "needs_user" && task.pending_question && !pending ? el("div", { class: "md", style: "margin-top:6px" }, MD.render(task.pending_question)) : null,
       thought ? el("div", { class: "muted small", style: "margin-top:4px" }, thought) : null,
       task.plan && task.plan.length ? el("ul", { class: "plan" }, task.plan.map(p => el("li", {}, p))) : null);
   });
 
-  region("v-result", [st, task.final_summary, task.failure_reason, task.artifacts, task.escalation, task.updated_at && done, data.interrupted], () => {
+  region(turn, "result", [st, task.final_summary, task.failure_reason, task.artifacts, task.escalation, task.updated_at && done, data.interrupted], () => {
     if (!done && !task.escalation) return null;
     const files = [...new Set(task.artifacts || [])].filter(a => !/\.png$/i.test(a));
     const kind = st === "completed" ? "ok" : st === "failed" ? "bad" : "warn";
     const head = data.interrupted ? "⚠ Bị gián đoạn (trợ lý đã tắt giữa chừng) — bấm ↻ Chạy tiếp"
       : { ok: "✓ Hoàn thành", bad: "✗ Chưa làm được", warn: "■ Đã dừng" }[kind];
-    return el("div", { class: `card result ${kind}` },
-      el("h3", {}, head, el("span", { class: "muted small", style: "font-weight:400" }, `${duration(task.created_at, task.updated_at)} · ${task.steps.length} bước`)),
-      task.final_summary ? el("div", { class: "txt" }, linkify(task.final_summary)) : null,
-      task.failure_reason && !task.final_summary ? el("div", { class: "txt" }, reasonText(task.failure_reason)) : null,
+    const answer = task.final_summary || (task.failure_reason ? reasonText(task.failure_reason) : "");
+    return el("div", { class: `answer ${kind}` },
+      el("div", { class: "status" }, head, el("span", { class: "muted", style: "font-weight:400" }, ` · ${duration(task.created_at, task.updated_at)} · ${task.steps.length} bước`)),
+      answer ? el("div", { class: "md" }, MD.render(answer)) : null,
       task.escalation ? el("div", { class: "txt", style: "margin-top:6px" }, "⚠ Việc này cần quyền Administrator. Trợ lý không tự vượt UAC — hãy tự chạy với quyền quản trị nếu bạn đồng ý.") : null,
-      files.length ? el("div", { class: "files" }, files.map(f => el("button", { class: "chip", title: `Mở thư mục chứa ${f}`, onclick: () => reveal(f) }, "📄", el("span", {}, fileName(f))))) : null);
+      files.length ? el("div", { class: "files" }, files.map(f => el("button", { class: "chip", title: `Mở thư mục chứa ${f}`, onclick: () => reveal(f) }, "📄", el("span", {}, fileName(f))))) : null,
+      answer ? el("div", { class: "answer-actions" }, el("button", { class: "ghost", title: "Chép câu trả lời", onclick: e => copyText(answer, e.currentTarget) }, "📋 Sao chép")) : null);
   });
 
   const shot = latestShot(task);
-  region("v-shot", shot, () => shot ? el("div", { class: "card shot" },
-    keepOpen("shot", el("details", { open: !done }, el("summary", {}, "Ảnh màn hình gần nhất"),
+  region(turn, "shot", shot, () => shot ? el("div", { class: "card shot" },
+    keepOpen(turn, "shot", el("details", { open: !done }, el("summary", {}, "Ảnh màn hình gần nhất"),
       el("img", { src: `/api/artifact?path=${encodeURIComponent(shot)}`, alt: "Ảnh màn hình", onclick: e => zoom(e.target.src) })))) : null);
 
   const checks = events.filter(e => e.kind === "completion_check" || e.kind === "completion_verifier");
-  region("v-steps", [task.steps.length, task.updated_at, checks.length], () => task.steps.length ? el("div", { class: "card" },
-    keepOpen("steps", el("details", {}, el("summary", {}, `Chi tiết kỹ thuật · ${task.steps.length} bước`),
+  region(turn, "steps", [task.steps.length, task.updated_at, checks.length], () => task.steps.length ? el("div", { class: "card" },
+    keepOpen(turn, "steps", el("details", {}, el("summary", {}, `Chi tiết kỹ thuật · ${task.steps.length} bước`),
       [...task.steps].reverse().map(s => el("div", { class: "step" },
         el("div", { class: "h" }, el("b", {}, friendly(s.tool)), el("code", { class: "muted" }, s.tool),
           el("span", { class: `tag ${s.status === "succeeded" ? "ok" : "bad"}` }, s.status === "succeeded" ? "thành công" : s.status),
@@ -573,21 +1150,36 @@ const modeName = m => ({ normal: "An toàn", trusted: "Tin cậy", full_access: 
 function zoom(src) { const lb = $("lightbox"); lb.querySelector("img").src = src; lb.style.display = "grid"; }
 $("lightbox").onclick = () => { $("lightbox").style.display = "none"; };
 
-async function poll() {
-  if (!selected) return;
-  const id = selected;
+let polling = false, repoll = false;
+async function poll(now = false) {
+  if (!conv) return;
+  if (polling) { repoll = repoll || now; return; }
+  polling = true;
+  const c = conv;
   try {
-    const data = await api(`/api/tasks/${id}`);
-    const fresh = await api(`/api/tasks/${id}/events?after=${cursor}`);
-    if (id !== selected) return;
-    events.push(...fresh.events); cursor = fresh.next;
-    currentData = data; updateComposer(data);
     const sc = $("scroll"), atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 60;
-    render(data);
-    if (atBottom) sc.scrollTop = sc.scrollHeight;
-    const listed = tasks.find(t => t.task_id === id);
-    if (listed && listed.status !== data.task.status) { listed.status = data.task.status; drawHistory(); }
-  } catch (e) { /* 404 while the runner creates the record */ }
+    let drew = false;
+    for (const turn of c.turns) {
+      if (turn.settled) continue;
+      try {
+        const data = await api(`/api/tasks/${turn.id}`);
+        const fresh = await api(`/api/tasks/${turn.id}/events?after=${turn.cursor}`);
+        if (conv !== c) return;
+        turn.events.push(...fresh.events); turn.cursor = fresh.next; turn.data = data;
+        render(turn); drew = true;
+        // a finished request is read twice more (late audit lines), then left alone until it is resumed
+        if (TERMINAL.includes(data.task.status) || data.interrupted) { if (++turn.seen >= 3) turn.settled = true; } else turn.seen = 0;
+        const listed = tasks.find(t => t.task_id === turn.id);
+        if (listed && listed.status !== data.task.status) { listed.status = data.task.status; drawHistory(); }
+      } catch (e) { /* 404 while the runner creates the record */ }
+    }
+    const last = lastTurn();
+    if (last && last.data) { currentData = last.data; selected = last.id; updateComposer(last.data); }
+    if (drew && atBottom) sc.scrollTop = sc.scrollHeight;
+  } finally {
+    polling = false;
+    if (repoll) { repoll = false; poll(); }
+  }
 }
 
 /* ---------- Wiring ---------- */
@@ -596,6 +1188,14 @@ $("menuBtn").onclick = () => document.body.classList.toggle("menu");
 $("search").oninput = drawHistory;
 $("health").onclick = refreshHealth;
 $("sendBtn").onclick = () => send();
+$("attachBtn").onclick = () => $("fileInput").click();
+$("fileInput").onchange = () => { addFiles($("fileInput").files); $("fileInput").value = ""; };
+$("input").addEventListener("paste", e => { const files = [...((e.clipboardData && e.clipboardData.files) || [])]; if (files.length) { e.preventDefault(); addFiles(files); } });
+let dragDepth = 0;
+document.addEventListener("dragenter", e => { e.preventDefault(); dragDepth++; document.body.classList.add("dragging"); });
+document.addEventListener("dragover", e => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"; });
+document.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove("dragging"); } });
+document.addEventListener("drop", e => { e.preventDefault(); dragDepth = 0; document.body.classList.remove("dragging"); if (e.dataTransfer && e.dataTransfer.files.length) { addFiles(e.dataTransfer.files); $("input").focus(); } });
 $("input").addEventListener("input", grow);
 $("input").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
 for (const b of $("modes").children) b.onclick = () => setMode(b.dataset.mode);
@@ -603,8 +1203,13 @@ document.addEventListener("keydown", e => { if (e.key === "Escape") { $("lightbo
 
 setMode("normal", false);
 const linked = location.hash.match(/^#task=([A-Za-z0-9-]+)$/);
-if (linked) select(linked[1]); else showWelcome();
-refreshHistory(); refreshHealth();
+showWelcome();
+refreshHistory().then(() => {
+  if (!linked) return;
+  const t = tasks.find(x => x.task_id === linked[1]);
+  if (t) openConversation(t.conversation_id || t.task_id);
+});
+refreshHealth();
 setInterval(poll, POLL_MS);
 setInterval(refreshHistory, POLL_MS * 4);
 setInterval(refreshHealth, 15000);

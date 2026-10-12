@@ -1,0 +1,375 @@
+{
+  "category": "paint",
+  "description": "Draw pictures in Microsoft Paint. The scene is planned in canvas coordinates, drawn with Paint's own shape tools, and compared with the plan pixel by pixel; the call fails if the canvas does not match.",
+  "tools": [
+    {
+      "name": "paint.draw",
+      "description": "Draw a whole picture in Microsoft Paint in ONE call (never drag the mouse yourself for a drawing). Opens a fresh Paint window, draws, checks the canvas against the plan and fails with VERIFICATION_FAILED if it does not match. Use `template` for known pictures: 'doraemon', 'house'. Otherwise give `objects`: coordinates are composition units, x 0..1000 across the canvas and y 0..562 down on the default 1152x648 canvas (a point outside is rejected with the allowed range). kinds: rect/ellipse/triangle = 2 points (opposite corners of the box; triangle apex at top centre), line = 2 points, polygon = 3+ points (closed, can be filled), polyline = 2+ points (open), curve = 3+ points (smooth through them). fill/stroke: '#RRGGBB' or a colour name (red, blue, yellow, green, black, white, orange, pink, brown, purple, grey, skin, gold, sky). weight: detail (thin) | structure | accent (bold outline). layer: lower layers are drawn first, so put backgrounds low and details high; objects on the same layer must not overlap. Lines and open shapes cannot have a fill. When it succeeds the canvas has been verified; finish with task.complete using the check {\"tool\": \"paint.inspect\", \"args\": {}, \"expect\": {\"matches_plan\": true}}.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "template": {
+            "type": "string",
+            "enum": [
+              "doraemon",
+              "house"
+            ]
+          },
+          "options": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "template colours: doraemon {body, belly, collar, bell}; house {wall, roof, door, window}"
+          },
+          "objects": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 200,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "kind",
+                "points"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "rect",
+                    "ellipse",
+                    "triangle",
+                    "polygon",
+                    "line",
+                    "polyline",
+                    "curve"
+                  ]
+                },
+                "points": {
+                  "type": "array",
+                  "minItems": 2,
+                  "items": {
+                    "type": "array",
+                    "minItems": 2,
+                    "maxItems": 2,
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "fill": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "stroke": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "weight": {
+                  "type": "string",
+                  "enum": [
+                    "detail",
+                    "structure",
+                    "accent"
+                  ]
+                },
+                "layer": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100
+                }
+              }
+            }
+          },
+          "reuse_window": {
+            "type": "boolean",
+            "default": false,
+            "description": "Draw on the Paint window opened by the previous paint.draw (adds to it) instead of a new one."
+          },
+          "request": {
+            "type": "string",
+            "description": "The user's request in their words; recorded in the artwork specification."
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "template"
+            ]
+          },
+          {
+            "required": [
+              "objects"
+            ]
+          }
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "hwnd",
+          "canvas",
+          "matches_plan",
+          "screenshot"
+        ],
+        "properties": {
+          "hwnd": {
+            "type": "integer"
+          },
+          "canvas": {
+            "type": "object",
+            "properties": {
+              "width": {
+                "type": "integer"
+              },
+              "height": {
+                "type": "integer"
+              }
+            }
+          },
+          "units": {
+            "type": "object"
+          },
+          "scale": {
+            "type": "number"
+          },
+          "objects": {
+            "type": "integer"
+          },
+          "drawn": {
+            "type": "integer"
+          },
+          "matches_plan": {
+            "type": "boolean"
+          },
+          "redrawn": {
+            "type": "object"
+          },
+          "spill_ratio": {
+            "type": "number"
+          },
+          "failed_objects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "screenshot": {
+            "type": "string"
+          }
+        }
+      },
+      "timeout_ms": 600000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "policy_category": "paint.draw"
+    },
+    {
+      "name": "paint.draw_image",
+      "description": "Redraw a PICTURE or PHOTO in Microsoft Paint as faithfully and in as much detail as Paint's shapes allow, in ONE call, at maximum detail by default (about 130-250 filled polygons in Paint's palette plus up to 10 custom colours, drawn back to front, with a thin outline; lettering, shading and small parts included). Give the picture's file path (an attached image's path is listed under 'Files the user attached'). The canvas is compared with the plan and the result reports how close the likeness is (fidelity.ssim). Use this for 'vẽ lại ảnh này', 'copy this picture into Paint', 'trace this photo'. Never rebuild a photo from a handful of rectangles with paint.draw, and never pick a lower detail level on your own: it takes about 7 minutes, that is expected.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "image_path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "image_path": {
+            "type": "string",
+            "minLength": 3,
+            "description": "Absolute path of the picture (png, jpg, webp, bmp, gif)."
+          },
+          "detail": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "max"
+            ],
+            "default": "max",
+            "description": "Level of detail. Leave it at the default 'max' (every region, lettering, shading: about 7 minutes). Use a lower level ONLY when the user explicitly asks for a quick, rough or simple version."
+          },
+          "reuse_window": {
+            "type": "boolean",
+            "default": false
+          },
+          "outline": {
+            "type": "boolean",
+            "default": true,
+            "description": "Thin dark outline around every region (looks like an illustration and keeps shapes readable); false for flat colour regions."
+          },
+          "style": {
+            "type": "string",
+            "enum": [
+              "fill",
+              "sketch"
+            ],
+            "default": "fill",
+            "description": "'fill' (default): Paint can fill, so the picture is drawn as filled colour regions. 'sketch': only when the user asks for a sketch / pencil drawing / line drawing in Paint - coloured strokes only, each in the colour of the thing it describes."
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "hwnd",
+          "canvas",
+          "matches_plan",
+          "screenshot"
+        ],
+        "properties": {
+          "hwnd": {
+            "type": "integer"
+          },
+          "canvas": {
+            "type": "object"
+          },
+          "units": {
+            "type": "object"
+          },
+          "scale": {
+            "type": "number"
+          },
+          "objects": {
+            "type": "integer"
+          },
+          "drawn": {
+            "type": "integer"
+          },
+          "matches_plan": {
+            "type": "boolean"
+          },
+          "redrawn": {
+            "type": "object"
+          },
+          "spill_ratio": {
+            "type": "number"
+          },
+          "failed_objects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "screenshot": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          },
+          "colors": {
+            "type": "integer"
+          },
+          "fidelity": {
+            "type": "object"
+          },
+          "fidelity_planned": {
+            "type": "object"
+          },
+          "style": {
+            "type": "string"
+          },
+          "ink": {
+            "type": "object"
+          }
+        }
+      },
+      "timeout_ms": 1500000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "policy_category": "paint.draw"
+    },
+    {
+      "name": "paint.inspect",
+      "description": "Look at the Paint window opened by paint.draw and compare its canvas with the last drawing plan again: returns matches_plan (true/false), the objects that do not match, the canvas size and units, and a screenshot. Read-only: use it as the check for task.complete after paint.draw, e.g. {\"tool\": \"paint.inspect\", \"args\": {}, \"expect\": {\"matches_plan\": true}}.",
+      "input_schema": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "hwnd",
+          "canvas",
+          "screenshot"
+        ],
+        "properties": {
+          "hwnd": {
+            "type": "integer"
+          },
+          "canvas": {
+            "type": "object"
+          },
+          "units": {
+            "type": "object"
+          },
+          "scale": {
+            "type": "number"
+          },
+          "tool": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "screenshot": {
+            "type": "string"
+          },
+          "matches_plan": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "failed_objects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "policy_category": "paint.observe"
+    }
+  ]
+}

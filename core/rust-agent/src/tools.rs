@@ -139,7 +139,7 @@ fn core_tools() -> Vec<ToolSpec> {
         ),
         base(
             "tools.enable",
-            "Load a group listed under 'More tools' (desktop: operate Windows applications; browser: drive web pages; vision: look at the screen; autocad: AutoCAD drawings). Its tools are listed from your next turn on.",
+            "Load a group listed under 'More tools' (desktop: operate Windows applications; browser: drive web pages; vision: look at the screen; autocad: AutoCAD drawings; paint: draw pictures in Microsoft Paint). Its tools are listed from your next turn on.",
             json!({"type": "object", "required": ["category"], "additionalProperties": false,
                    "properties": {"category": {"type": "string", "minLength": 1}}}),
         ),
