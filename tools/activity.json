@@ -1,0 +1,150 @@
+{
+  "category": "activity",
+  "description": "Tracking of the person's own work on this PC: which program and window is in front, for how long, and what they did today. Opt-in and local.",
+  "tools": [
+    {
+      "name": "activity.now",
+      "description": "What the person is doing RIGHT NOW: the program and window in front, whether they are idle, and the last 10 minutes by program. screenshot true also saves the screen. For the CONTENT of the window use desktop.observe / vision.ocr afterwards.",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "screenshot": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "activity.read"
+    },
+    {
+      "name": "activity.summary",
+      "description": "Time per program and per window over a period (what the person worked on today / this week), share of work time per program. Needs tracking to have been on; says so when there is no data.",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "since": {
+            "type": "string",
+            "description": "today | yesterday | 30m | 2h | 7d | an ISO date/time. Default today."
+          },
+          "until": {
+            "type": "string",
+            "description": "today | yesterday | 30m | 2h | 7d | an ISO date/time. Default today."
+          },
+          "top": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 40
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "activity.read"
+    },
+    {
+      "name": "activity.timeline",
+      "description": "The person's day as an ordered list of sessions (from–to, program, window title).",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "since": {
+            "type": "string",
+            "description": "today | yesterday | 30m | 2h | 7d | an ISO date/time. Default today."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "activity.read"
+    },
+    {
+      "name": "activity.status",
+      "description": "Whether work tracking is on, running, and how much it has recorded.",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "activity.read"
+    },
+    {
+      "name": "activity.control",
+      "description": "Turn work tracking on (start) or off (stop). Only when the person asks for it: it records which program and window title is in front, never keystrokes, screens or files; local, kept 30 days.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "action"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "start",
+              "stop"
+            ]
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "process",
+      "policy_category": "activity.control"
+    }
+  ]
+}
