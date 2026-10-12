@@ -28,6 +28,8 @@ from lga_worker.art.gate import run_gated, specification_summary
 from lga_worker.paint.engine import run_plan  # noqa: F401
 from lga_worker.registry import Check, ToolContext, ToolOutcome, ToolRegistry
 from lga_worker.tools import paint as paint_tools
+from lga_worker.tools.paint import spec_observation
+from lga_worker.tools.paint import open_driver
 
 BACKEND = "art-brain"
 MAX_IMAGE_BYTES = 40_000_000
@@ -84,6 +86,7 @@ def _quality(score: float) -> str:
 
 def register(registry: ToolRegistry) -> None:
     @registry.handler("art.draw")
+    @spec_observation
     async def draw(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
         kind = _sources(args)
         profile = capabilities.resolve(args.get("app"))
@@ -122,6 +125,11 @@ def register(registry: ToolRegistry) -> None:
                     "on every big part, a shadow under the subject, and background elements (ground, sky, plants, clouds, "
                     "furniture). If the user explicitly asked for a plain geometric figure (a circle, a square), call again "
                     "with detail 'low'.")
+            if kind == "svg":
+                from lga_worker.art import critique as critique_mod
+
+                review = critique_mod.critique(scene)
+                notes.extend(critique_mod.summary(review))
             groups = convert.detached_groups(scene) if kind == "svg" else []
             if groups:
                 state = await ctx.services.get_or_create("art", _state)
@@ -185,10 +193,7 @@ def register(registry: ToolRegistry) -> None:
 
         def work() -> dict[str, Any]:
             nonlocal tolerance
-            driver = PaintDriver(provider, should_stop=ctx.cancel_event.is_set)
-            transform = driver.attach(session.hwnd, session.offset) if reuse else driver.open_new()
-            session.hwnd, session.offset = driver.hwnd, driver.offset
-            driver.initial_state()
+            driver, transform = open_driver(provider, session, reuse, ctx.cancel_event.is_set)
             canvas = transform.canvas
             report: dict[str, Any] = {}
             reference: Image.Image | None = image

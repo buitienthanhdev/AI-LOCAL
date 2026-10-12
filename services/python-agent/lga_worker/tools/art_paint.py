@@ -30,6 +30,7 @@ from lga_worker.art.gate import run_gated, specification_summary
 from lga_worker.paint.engine import run_plan  # noqa: F401
 from lga_worker.registry import Check, ToolContext, ToolOutcome, ToolRegistry
 from lga_worker.tools import paint as paint_tools
+from lga_worker.tools.paint import open_driver, spec_observation
 from lga_worker.tools.art import _load_image, _quality
 
 BACKEND = "art-paint"
@@ -91,7 +92,8 @@ def register(registry: ToolRegistry) -> None:
                 for q in b.reference_queries or [f"{work.titles[0]} {work.artist}"]:
                     try:
                         must = [w for w in work.titles[0].lower().split() if len(w) > 3][:1]
-                        got = await asyncio.to_thread(reference.fetch, q, folder, must_include=must, aspect=_aspect(work.size))
+                        got = await asyncio.to_thread(reference.fetch, q, folder, must_include=must, aspect=_aspect(work.size),
+                                                 palette=list(work.palette))
                         store.remember_reference(ReferenceRecord(
                             artwork_key=work.key, path=got.path, source_url=got.source_url, page_url=got.page_url,
                             title=got.title, license=got.license, sha256=got.sha256, retrieved_at=got.retrieved_at,
@@ -134,6 +136,7 @@ def register(registry: ToolRegistry) -> None:
             backend=BACKEND)
 
     @registry.handler("art.paint")
+    @spec_observation
     async def art_paint(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
         run = ArtRun(task_id=ctx.task_id, request=str(args.get("request") or ""))
         mode = Mode(str(args["mode"]).upper()) if args.get("mode") else None
@@ -184,10 +187,7 @@ def register(registry: ToolRegistry) -> None:
         brush_mode = mode in STROKE_MODES
 
         def work() -> dict[str, Any]:
-            driver = PaintDriver(provider, should_stop=ctx.cancel_event.is_set)
-            transform = driver.attach(session.hwnd, session.offset) if reuse else driver.open_new()
-            session.hwnd, session.offset = driver.hwnd, driver.offset
-            driver.initial_state()
+            driver, transform = open_driver(provider, session, reuse, ctx.cancel_event.is_set)
             caps = driver.discover()
             run.info["capabilities"] = {k: caps.get(k) for k in ("version", "brushes", "tools")}
             canvas = transform.canvas

@@ -14,7 +14,7 @@ import socket
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -46,6 +46,8 @@ class FetchedReference:
     retrieved_at: str
     title_match: float
     candidates: int
+    palette_share: float = 1.0
+    rejected: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self.__dict__)
@@ -111,32 +113,62 @@ def search(query: str, *, timeout: float = 20.0, limit: int = 15, width: int = 1
 
 
 def fetch(query: str, directory: Path, *, must_include: list[str] | None = None, timeout: float = 25.0,
-          aspect: float | None = None) -> FetchedReference:
-    """Search Commons for `query`, download the best candidate whose title contains every word of `must_include`."""
+          aspect: float | None = None, palette: list[str] | None = None, min_palette_share: float = 0.5,
+          tries: int = 5) -> FetchedReference:
+    """Search Commons for `query` and download the best candidate that (a) has every word of `must_include` in its title,
+    (b) is not a tile or crop, and (c) when the work's palette is known, is mostly made of the work's colours: a snapshot
+    of visitors in front of the painting is rejected by pixels, not only by its title."""
+    from PIL import Image
+    import io
+
     candidates = search(query, timeout=timeout, aspect=aspect)
     needed = [normalize(w) for w in (must_include or []) if w]
-    usable = [c for c in candidates if all(w in normalize(c["title"]) for w in needed) and c["url"] and c["score"] > 0.8]
+    usable = [c for c in candidates if all(w in normalize(c["title"]) for w in needed) and c["url"] and c["score"] > 0.8
+              and not re.search(r"-x\d+-y\d+", c["title"])]
     if not usable:
         raise ToolError(ErrorCode.NOT_FOUND, f"no matching reference picture for {query!r} on Wikimedia Commons "
                                              f"({len(candidates)} files found, none whose title matches)")
-    best = usable[0]
-    data = _get(best["url"], timeout)
-    ext = Path(urllib.parse.urlparse(best["url"]).path).suffix.lower() or ".jpg"
-    digest = hashlib.sha256(data).hexdigest()
-    directory.mkdir(parents=True, exist_ok=True)
-    slug = re.sub(r"[^a-z0-9]+", "-", normalize(query))[:48].strip("-") or "reference"
-    path = directory / f"{slug}-{digest[:8]}{ext}"
-    path.write_bytes(data)
-    try:
-        from PIL import Image
+    rejected: list[str] = []
+    for best in usable[:tries]:
+        data = _get(best["url"], timeout)
+        try:
+            with Image.open(io.BytesIO(data)) as im:
+                im.load()
+                width, height = im.size
+                share = palette_share(im, palette) if palette else 1.0
+        except Exception as exc:  # noqa: BLE001
+            rejected.append(f"{best['title']}: unreadable ({exc})")
+            continue
+        if share < min_palette_share:
+            rejected.append(f"{best['title']}: only {share:.0%} of its pixels are the work's colours")
+            continue
+        digest = hashlib.sha256(data).hexdigest()
+        ext = Path(urllib.parse.urlparse(best["url"]).path).suffix.lower() or ".jpg"
+        directory.mkdir(parents=True, exist_ok=True)
+        slug = re.sub(r"[^a-z0-9]+", "-", normalize(query))[:48].strip("-") or "reference"
+        path = directory / f"{slug}-{digest[:8]}{ext}"
+        path.write_bytes(data)
+        return FetchedReference(
+            path=str(path), title=best["title"], page_url=best["page_url"], source_url=best["url"],
+            license=best["license"] or "unknown", attribution=best["attribution"], sha256=digest, width=width, height=height,
+            retrieved_at=datetime.now(timezone.utc).isoformat(timespec="seconds"), title_match=round(best["score"], 2),
+            candidates=len(candidates), palette_share=round(share, 2), rejected=rejected)
+    raise ToolError(ErrorCode.NOT_FOUND, "no candidate looks like the work: " + "; ".join(rejected[:4]))
 
-        with Image.open(path) as im:
-            width, height = im.size
-    except Exception as exc:  # noqa: BLE001
-        path.unlink(missing_ok=True)
-        raise ToolError(ErrorCode.EXECUTION_FAILED, f"the downloaded file is not a readable picture: {exc}") from exc
-    return FetchedReference(
-        path=str(path), title=best["title"], page_url=best["page_url"], source_url=best["url"], license=best["license"] or "unknown",
-        attribution=best["attribution"], sha256=digest, width=width, height=height,
-        retrieved_at=datetime.now(timezone.utc).isoformat(timespec="seconds"), title_match=round(best["score"], 2),
-        candidates=len(candidates))
+
+def palette_share(image: "Image.Image", palette: list[str], distance: float = 58.0) -> float:
+    """Share of the picture's pixels that lie near one of the work's known colours ('#RRGGBB name' entries). A museum
+    snapshot of the painting (wall, visitors, frame) scores low; the painting itself scores high."""
+    import numpy as np
+
+    colours = []
+    for entry in palette:
+        m = re.match(r"#([0-9a-fA-F]{6})", entry.strip())
+        if m:
+            colours.append([int(m.group(1)[i:i + 2], 16) for i in (0, 2, 4)])
+    if not colours:
+        return 1.0
+    small = np.asarray(image.convert("RGB").resize((96, 72)), np.float32).reshape(-1, 3)
+    pal = np.asarray(colours, np.float32)
+    d = np.sqrt(((small[:, None, :] - pal[None, :, :]) ** 2).sum(axis=2)).min(axis=1)
+    return float((d < distance).mean())

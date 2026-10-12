@@ -49,6 +49,33 @@ async def _session(ctx: ToolContext) -> PaintSession:
     return await ctx.services.get_or_create("paint", create)
 
 
+def spec_observation(fn: Any) -> Any:
+    """Append the artwork specification line to a drawing tool's observation (so the chat can show it)."""
+    import functools
+
+    @functools.wraps(fn)
+    async def wrapper(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        out = await fn(ctx, args)
+        spec = (out.data or {}).get("specification") if isinstance(out.data, dict) else None
+        if spec:
+            out.observation += (f" Specification {spec.get('status')} ({spec.get('state')}): {spec.get('objects')} objects, "
+                                f"{spec.get('operations')} operations, about {spec.get('estimated_seconds')} s, "
+                                f"{spec.get('assumptions')} assumption(s); file {spec.get('path')}")
+        return out
+
+    return wrapper
+
+
+def open_driver(provider: Any, session: PaintSession, reuse: bool, should_stop: Any) -> tuple[PaintDriver, Any]:
+    """A calibrated Paint driver: a new window, or the one this worker opened before (`reuse`). The one place that
+    opens Paint for drawing, so the session (window, page offset) is kept the same way by every drawing tool."""
+    driver = PaintDriver(provider, should_stop=should_stop)
+    transform = driver.attach(session.hwnd, session.offset) if reuse else driver.open_new()
+    session.hwnd, session.offset = driver.hwnd, driver.offset
+    driver.initial_state()
+    return driver, transform
+
+
 def _scene_objects(args: dict[str, Any], canvas: Canvas) -> list:
     if args.get("template"):
         options = {k: str(v) for k, v in (args.get("options") or {}).items()}
@@ -89,6 +116,7 @@ def _sketch_objects(image: Image.Image, canvas: Canvas, detail: str) -> vectoriz
 
 def register(registry: ToolRegistry) -> None:
     @registry.handler("paint.draw")
+    @spec_observation
     async def draw(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
         provider = await ctx.services.desktop()
         session = await _session(ctx)
@@ -96,10 +124,7 @@ def register(registry: ToolRegistry) -> None:
         reuse = bool(args.get("reuse_window")) and session.hwnd is not None
 
         def work() -> dict[str, Any]:
-            driver = PaintDriver(provider, should_stop=ctx.cancel_event.is_set)
-            transform = driver.attach(session.hwnd, session.offset) if reuse else driver.open_new()
-            session.hwnd, session.offset = driver.hwnd, driver.offset
-            driver.initial_state()
+            driver, transform = open_driver(provider, session, reuse, ctx.cancel_event.is_set)
             canvas = transform.canvas
             plan = geometry.plan_scene(_scene_objects(args, canvas), canvas)
             session.plan, session.tolerance = plan, 0.0
@@ -142,6 +167,7 @@ def register(registry: ToolRegistry) -> None:
             backend=BACKEND)
 
     @registry.handler("paint.draw_image")
+    @spec_observation
     async def draw_image(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
         source = Path(args["image_path"])
         if not source.is_file():
@@ -163,10 +189,7 @@ def register(registry: ToolRegistry) -> None:
         reuse = bool(args.get("reuse_window")) and session.hwnd is not None
 
         def work() -> dict[str, Any]:
-            driver = PaintDriver(provider, should_stop=ctx.cancel_event.is_set)
-            transform = driver.attach(session.hwnd, session.offset) if reuse else driver.open_new()
-            session.hwnd, session.offset = driver.hwnd, driver.offset
-            driver.initial_state()
+            driver, transform = open_driver(provider, session, reuse, ctx.cancel_event.is_set)
             canvas = transform.canvas
             if style == "sketch":
                 traced = _sketch_objects(image, canvas, detail)

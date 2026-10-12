@@ -458,7 +458,18 @@ class PaintDriver:
     def _set_brush_size(self, width: int) -> None:
         if self._brush_size == width:
             return
-        slider = self._require(name="Size", ctype="Slider", refresh=True)
+        slider = None
+        for attempt in range(4):  # the size panel can be closed for a moment after a tool or brush change
+            slider = self._find(name="Size", ctype="Slider", refresh=True)
+            if slider is not None:
+                break
+            time.sleep(0.4)
+            if attempt == 1:
+                self._tool = None  # re-activate the brush tool so its side panel opens again
+                self._select_tool("Brush")
+        if slider is None:
+            raise ToolError(ErrorCode.ELEMENT_NOT_FOUND, "Paint's brush Size slider is not shown", retryable=True,
+                            details={"recoverable": "popup"})
         rv = self._pattern(slider, "RangeValuePattern")
         rv.SetValue(float(min(SIZE_SLIDER_MAX, max(0, width - 1))))
         time.sleep(SETTLE_S)
