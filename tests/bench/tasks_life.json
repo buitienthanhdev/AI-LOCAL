@@ -51,6 +51,35 @@
    ]
   },
   {
+   "id": "life-file-authors-property",
+   "category": "life",
+   "prompt": "Ai là tác giả (Authors) của file {dir}\\x.docx và file được tạo vào ngày nào?",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_contains",
+     "any": [
+      "python-docx"
+     ]
+    },
+    {
+     "kind": "tool_used",
+     "name": "file.info"
+    }
+   ],
+   "setup": {
+    "docx": {
+     "path": "{dir}\\x.docx",
+     "paragraphs": [
+      "nội dung"
+     ]
+    }
+   }
+  },
+  {
    "id": "life-activity-now",
    "category": "life",
    "prompt": "Bây giờ tôi đang mở chương trình nào trên máy?",

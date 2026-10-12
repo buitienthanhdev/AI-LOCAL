@@ -48,7 +48,7 @@ def build_registry(tools_dir) -> ToolRegistry:
     registry = ToolRegistry(load_specs(tools_dir))
     desktop.register(registry)
     # shell.exec, filesystem.*, system.* and knowledge.* run in the Rust core (core/rust-agent/src/native).
-    for optional in ("browser", "vision", "autocad", "office", "assistant", "paint", "art", "art_paint", "activity"):
+    for optional in ("browser", "vision", "autocad", "office", "assistant", "paint", "art", "art_paint", "activity", "fileinfo"):
         try:
             module = __import__(f"lga_worker.tools.{optional}", fromlist=["register"])
         except ModuleNotFoundError as exc:

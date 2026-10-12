@@ -46,6 +46,11 @@ if db.is_file():
                  [{"kind": "summary_regex",
                    "pattern": rf"({local:%d/%m/%Y}|{local:%Y-%m-%d}|{local.day} tháng {local.month}(,| năm){' ' if False else ''}.*{local.year}|{local:%d-%m-%Y}|{local:%d/%m}\b)"}])
 
+
+task("life-file-authors-property", f"Ai là tác giả (Authors) của file {D}\\x.docx và file được tạo vào ngày nào?",
+     [{"kind": "summary_contains", "any": ["python-docx"]}, {"kind": "tool_used", "name": "file.info"}],
+     {"docx": {"path": f"{D}\\x.docx", "paragraphs": ["nội dung"]}})
+
 # ---- work tracking ---------------------------------------------------------------------------------------
 task("life-activity-now", "Bây giờ tôi đang mở chương trình nào trên máy?",
      [{"kind": "tool_used", "name": "activity.now"}, {"kind": "max_steps", "n": 3}])
