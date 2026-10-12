@@ -183,6 +183,8 @@ pub struct TaskRunner<'a> {
 }
 
 /// Steps that operate applications directly: the person should keep their hands off meanwhile.
+/// After this many lookups (knowledge.*, web.*, document.read) in a row the planner is told to stop and answer.
+const LOOKUP_STREAK_WARN: usize = 6;
 const HANDS_ON_TOOLS: [&str; 16] = [
     "desktop.click", "desktop.type", "desktop.press_key", "desktop.hotkey", "desktop.drag", "desktop.scroll",
     "desktop.move_mouse", "desktop.launch_app", "desktop.focus_window", "desktop.close_app", "desktop.set_value",
@@ -790,7 +792,7 @@ impl<'a> TaskRunner<'a> {
         let decision = self.rt.policy.evaluate(&spec, &action.args);
         match decision.verdict {
             Verdict::Deny => {
-                let err = ToolErrorInfo::new(ErrorCode::PolicyDenied, decision.reasons.join("; "), false);
+                let err = ToolErrorInfo::new(ErrorCode::PolicyDenied, format!("{}. This is a firm refusal by the security policy: do not look for another way to the same data (other commands, other folders, searching for similar files). Tell the user it is not allowed and why, with task.complete.", decision.reasons.join("; ")), false);
                 return Ok(self.rejected(step, StepStatus::Denied, err));
             }
             Verdict::Confirm => {
@@ -983,6 +985,15 @@ impl<'a> TaskRunner<'a> {
     fn after_step(&mut self, record: &mut TaskRecord, outcome: StepOutcome) -> Result<()> {
         let step = outcome.record;
         self.audit.step(&step)?;
+        // A long run of lookups with nothing produced is a loop, not research: say so, in the planner's own terms.
+        let is_lookup = |t: &str| t.starts_with("knowledge.") || t.starts_with("web.") || t == "document.read";
+        if is_lookup(&step.tool) {
+            let streak = 1 + record.steps.iter().rev().take_while(|s| is_lookup(&s.tool)).count();
+            if streak == LOOKUP_STREAK_WARN || streak == 2 * LOOKUP_STREAK_WARN {
+                self.notices.push(format!(
+                    "You have made {streak} lookups in a row. Stop searching: what you have found is all there is. Do the task with it now:                      write the answer, using a neutral wording or a placeholder for what was not found, and say plainly what you could not find.                      Do not look up names or details the user did not ask you to find."));
+            }
+        }
         match step.status {
             StepStatus::Succeeded => {
                 record.consecutive_failures = 0;
