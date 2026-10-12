@@ -257,6 +257,29 @@
   .idea { border-radius: 16px; }
   .idea:hover { background: var(--accent-soft); }
   @media (prefers-reduced-motion: reduce) { .hello .sun::before, .hello .sun::after { animation: none; } }
+
+  /* learning progress */
+  .learn-mini { display: grid; grid-template-columns: auto 1fr; gap: 2px 8px; align-items: center; width: 100%; text-align: left; padding: 4px 0; color: inherit; }
+  .learn-mini .bar { grid-column: 1 / -1; height: 6px; border-radius: 99px; background: var(--border); overflow: hidden; }
+  .learn-mini .bar i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent-2), var(--accent)); transition: width .6s; }
+  #learning .sheet { max-width: 820px; }
+  .stack { display: flex; height: 26px; border-radius: 10px; overflow: hidden; background: var(--code); margin: 8px 0 4px; }
+  .stack i { display: block; height: 100%; min-width: 2px; transition: width .5s; }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .legend b { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+  .lt-row { display: grid; grid-template-columns: minmax(150px, 1.4fr) 2fr 70px 90px; gap: 10px; align-items: center; padding: 4px 6px; border-radius: 8px; font-size: 13px; }
+  .lt-row:hover { background: var(--accent-soft); }
+  .lt-row .name { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .lt-row .name span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lt-row .meter { height: 10px; border-radius: 99px; background: var(--code); overflow: hidden; }
+  .lt-row .meter i { display: block; height: 100%; border-radius: 99px; }
+  .lt-row .pct { font-weight: 650; text-align: right; font-variant-numeric: tabular-nums; }
+  .lt-row .num { color: var(--muted); font-size: 12px; text-align: right; }
+  .lt-toggle { width: 16px; text-align: center; color: var(--muted); cursor: pointer; user-select: none; }
+  .lt-child { margin-left: 18px; border-left: 1px dashed var(--border); padding-left: 6px; }
+  .seg2 { display: inline-flex; background: var(--code); border-radius: 9px; padding: 2px; }
+  .seg2 button { padding: 4px 12px; border-radius: 7px; font-size: 12.5px; color: var(--muted); }
+  .seg2 button.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -268,7 +291,10 @@
   <button class="clearall" id="clearAll" title="Xóa toàn bộ lịch sử chat">🗑 Xóa tất cả lịch sử</button>
   <div class="health" id="health" title="Bấm để kiểm tra lại">
     <div id="h-brains"><span class="dot" id="h-gateway"></span>Bộ não AI</div>
-    <div><span class="dot" id="h-knowledge"></span>Tri thức công ty</div>
+    <button class="learn-mini" id="learnBtn" title="Xem Illuminati đã học được bao nhiêu dữ liệu của máy">
+      <span class="dot" id="h-knowledge"></span><span id="learnLabel">Tri thức đã học</span>
+      <span class="bar"><i id="learnFill"></i></span>
+    </button>
     <div><span class="dot" id="h-vision"></span>Thị giác cục bộ <span class="small">(tùy chọn)</span></div>
     <button class="btn" id="settingsBtn" style="margin-top:6px;font-size:12.5px">⚙ Cài đặt bộ não AI</button>
   </div>
@@ -312,6 +338,16 @@
       <button class="btn danger" id="removeKey">Xóa khóa</button>
       <button class="btn" id="closeSettings" style="margin-left:auto">Đóng</button>
     </div>
+  </div>
+</div>
+<div id="learning" class="modal" role="dialog" aria-modal="true" aria-labelledby="learningTitle">
+  <div class="card sheet">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <h3 id="learningTitle" style="margin:0;flex:1">🧠 Illuminati đã học được gì từ máy này</h3>
+      <div class="seg2" id="learnMetric"><button data-m="files" class="on">Theo số tệp</button><button data-m="bytes">Theo dung lượng</button></div>
+      <button class="btn" id="learnClose">Đóng</button>
+    </div>
+    <div id="learnBody" class="small muted">Đang đọc danh mục…</div>
   </div>
 </div>
 <div id="lightbox"><img alt=""></div>
@@ -1227,6 +1263,77 @@ async function poll(now = false) {
   }
 }
 
+
+/* ---------- Learning progress: how much of the machine's data was learned, as one tree = 100 % ---------- */
+let learning = null, learnMetric = "files", learnOpen = new Set(["root", "Đã học (đã đọc nội dung)"]);
+const nf = n => Number(n || 0).toLocaleString("vi-VN");
+const fmtPct = v => `${Number(v || 0).toLocaleString("vi-VN", { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%`;
+function fmtBytes(b) {
+  const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0, v = Number(b || 0);
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v.toLocaleString("vi-VN", { maximumFractionDigits: v < 10 && i ? 1 : 0 })} ${u[i]}`;
+}
+async function refreshLearning() {
+  try {
+    learning = await api("/api/learning");
+    $("learnLabel").textContent = `Đã học ${fmtPct(learning.learned_percent_of_learnable)} tài liệu của máy`;
+    $("learnFill").style.width = `${Math.min(100, learning.learned_percent_of_learnable)}%`;
+    if ($("learning").classList.contains("open")) drawLearning();
+  } catch { /* the catalog is not there yet */ }
+}
+function drawLearning() {
+  const d = learning, body = $("learnBody");
+  if (!d) { body.textContent = "Chưa có danh mục tri thức."; return; }
+  const key = learnMetric === "bytes" ? "percent_bytes" : "percent_files";
+  const val = n => learnMetric === "bytes" ? fmtBytes(n.bytes) : `${nf(n.files)} tệp`;
+  const root = d.tree;
+  const learnedNode = root.children[0];
+  const stack = (nodes, total) => el("div", { class: "stack" }, nodes.map(n => el("i", { style: `width:${total ? (100 * (learnMetric === "bytes" ? n.bytes : n.files) / total) : 0}%;background:${n.color}`, title: `${n.label}: ${fmtPct(n[key])}` })));
+  const legend = nodes => el("div", { class: "legend" }, nodes.map(n => el("span", {}, el("b", { style: `background:${n.color}` }), `${n.label} ${fmtPct(n[key])}`)));
+  const totalMetric = learnMetric === "bytes" ? root.bytes : root.files;
+  const learnedTotal = learnMetric === "bytes" ? learnedNode.bytes : learnedNode.files;
+
+  function row(node, depth, id, total) {
+    const kids = node.children || [];
+    const open = learnOpen.has(id);
+    const r = el("div", { class: "lt-row", style: `padding-left:${6 + depth * 4}px` },
+      el("div", { class: "name" },
+        el("span", { class: "lt-toggle", onclick: () => { if (kids.length) { open ? learnOpen.delete(id) : learnOpen.add(id); drawLearning(); } } }, kids.length ? (open ? "▾" : "▸") : ""),
+        el("b", { style: `width:10px;height:10px;border-radius:3px;background:${node.color};flex:none` }), el("span", { title: node.label }, node.label)),
+      el("div", { class: "meter" }, el("i", { style: `width:${Math.min(100, node[key])}%;background:${node.color}` })),
+      el("div", { class: "pct" }, fmtPct(node[key])), el("div", { class: "num" }, val(node)));
+    const out = [r];
+    if (kids.length && open) out.push(el("div", { class: "lt-child" }, kids.map((k, i) => row(k, depth + 1, `${id}/${k.label}`, total))));
+    return out;
+  }
+
+  const upd = d.update && d.update.running ? el("div", { class: "small", style: "margin:6px 0;color:var(--accent)" }, "⏳ Đang học thêm tài liệu mới…") : null;
+  body.replaceChildren(...[
+    el("div", { style: "font-size:15px;color:var(--text);margin-bottom:6px" },
+      el("b", { style: "font-size:26px;color:var(--accent)" }, fmtPct(d.learned_percent_of_learnable)),
+      ` tài liệu cần học đã được đọc nội dung (${nf(d.learned_files)} / ${nf(d.learnable_files)} tệp)`),
+    el("div", { class: "meter", style: "height:14px;border-radius:99px;background:var(--code);overflow:hidden;margin-bottom:8px" },
+      el("i", { style: `display:block;height:100%;width:${Math.min(100, d.learned_percent_of_learnable)}%;background:linear-gradient(90deg,var(--accent-2),var(--accent))` })),
+    el("div", { class: "small", style: "margin-bottom:12px" },
+      `So với toàn bộ dữ liệu trên máy (${nf(d.total_files)} tệp, ${fmtBytes(d.total_bytes)}): phần đã học chiếm ${fmtPct(d.learned_percent_of_machine)} số tệp và ${fmtPct(d.learned_percent_bytes_of_machine)} dung lượng. `
+      + "Phần còn lại phần lớn là thư viện và phần mềm cài sẵn: chỉ lập danh mục theo tên để tìm, không cần đọc."),
+    upd,
+    el("div", { style: "font-weight:650;margin-top:8px" }, "Toàn bộ dữ liệu trên máy = 100%"),
+    stack(root.children, totalMetric), legend(root.children),
+    el("div", { style: "font-weight:650;margin-top:10px" }, `Phần đã học theo loại tệp (cộng lại = ${fmtPct(learnedNode[key])} của máy)`),
+    stack(learnedNode.children, learnedTotal), legend(learnedNode.children.slice(0, 12)),
+    el("div", { style: "font-weight:650;margin:12px 0 4px" }, "Cây dữ liệu (tổng = 100%)"),
+    el("div", {}, row(root, 0, "root", totalMetric))].filter(Boolean));
+}
+$("learnBtn").onclick = () => { $("learning").classList.add("open"); drawLearning(); refreshLearning(); };
+$("learnClose").onclick = () => $("learning").classList.remove("open");
+$("learning").onclick = e => { if (e.target.id === "learning") $("learning").classList.remove("open"); };
+for (const b of $("learnMetric").children) b.onclick = () => {
+  learnMetric = b.dataset.m;
+  for (const x of $("learnMetric").children) x.classList.toggle("on", x === b);
+  drawLearning();
+};
+
 /* ---------- Wiring ---------- */
 $("newBtn").onclick = showWelcome;
 $("menuBtn").onclick = () => document.body.classList.toggle("menu");
@@ -1244,7 +1351,7 @@ document.addEventListener("drop", e => { e.preventDefault(); dragDepth = 0; docu
 $("input").addEventListener("input", grow);
 $("input").addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
 for (const b of $("modes").children) b.onclick = () => setMode(b.dataset.mode);
-document.addEventListener("keydown", e => { if (e.key === "Escape") { $("lightbox").style.display = "none"; $("settings").classList.remove("open"); } if (e.ctrlKey && e.key.toLowerCase() === "n") { e.preventDefault(); showWelcome(); } });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { $("lightbox").style.display = "none"; $("settings").classList.remove("open"); $("learning").classList.remove("open"); } if (e.ctrlKey && e.key.toLowerCase() === "n") { e.preventDefault(); showWelcome(); } });
 
 setMode("normal", false);
 const linked = location.hash.match(/^#task=([A-Za-z0-9-]+)$/);
@@ -1258,6 +1365,7 @@ refreshHealth();
 setInterval(poll, POLL_MS);
 setInterval(refreshHistory, POLL_MS * 4);
 setInterval(refreshHealth, 15000);
+refreshLearning(); setInterval(refreshLearning, 45000);
 </script>
 </body>
 </html>

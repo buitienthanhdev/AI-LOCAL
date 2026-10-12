@@ -141,6 +141,7 @@ impl Api {
                     None => error(StatusCode::NOT_FOUND, "unknown asset"),
                 };
             }
+            (&Method::GET, ["api", "learning"]) => Ok(self.learning()),
             (&Method::GET, ["api", "status"]) => Ok(json_reply(StatusCode::OK, self.status())),
             (&Method::GET, ["api", "tasks"]) => Ok(json_reply(StatusCode::OK, self.list_tasks())),
             (&Method::POST, ["api", "tasks"]) => self.start_task(&body),
@@ -209,6 +210,15 @@ impl Api {
             }
         });
         Ok(json_reply(StatusCode::OK, json!({"ok": true, "gemini_api_key_set": !key.is_empty()})))
+    }
+
+    /// How much of the machine's data the assistant has learned, as a tree that adds up to 100 %.
+    fn learning(&self) -> Reply {
+        let knowledge = lga_core::native::knowledge::Knowledge::new(&self.config);
+        match knowledge.learning_progress() {
+            Ok(v) => json_reply(StatusCode::OK, v),
+            Err(e) => error(StatusCode::SERVICE_UNAVAILABLE, format!("chưa đọc được danh mục tri thức: {e}")),
+        }
     }
 
     fn list_tasks(&self) -> Value {
@@ -591,6 +601,25 @@ mod live {
         let request = Request::builder().method(method).uri(format!("lga://localhost{uri}")).body(body.to_string().into_bytes()).unwrap();
         let response = api.handle(request);
         (response.status(), serde_json::from_slice(response.body()).unwrap_or(Value::Null))
+    }
+
+    #[test]
+    #[ignore]
+    fn learning_tree_adds_up_to_one_hundred_percent() {
+        let api = api();
+        let (code, v) = call(&api, Method::GET, "/api/learning", Value::Null);
+        assert_eq!(code, StatusCode::OK, "{v}");
+        let root = &v["tree"];
+        for key in ["percent_files", "percent_bytes"] {
+            let sum: f64 = root["children"].as_array().unwrap().iter().map(|c| c[key].as_f64().unwrap()).sum();
+            assert!((sum - 100.0).abs() < 0.6, "{key}: children add up to {sum}");
+        }
+        let files: i64 = root["children"].as_array().unwrap().iter().map(|c| c["files"].as_i64().unwrap()).sum();
+        assert_eq!(files, root["files"].as_i64().unwrap());
+        let learned = &root["children"][0];
+        let by_type: i64 = learned["children"].as_array().unwrap().iter().map(|c| c["files"].as_i64().unwrap()).sum();
+        assert_eq!(by_type, learned["files"].as_i64().unwrap());
+        std::fs::write(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../logs/dev/learning.json"), v.to_string()).unwrap();
     }
 
     #[test]

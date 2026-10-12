@@ -191,7 +191,132 @@ fn fuse(query: &str, vector: &[i64], fts: &[i64], rows: &HashMap<i64, Row>, limi
     out
 }
 
+/// (group label, colour, extensions): the same grouping Company Brain's own progress report uses.
+const TYPE_GROUPS: &[(&str, &str, &[&str])] = &[
+    ("Word", "#2b6cb0", &[".docx", ".doc"]),
+    ("Excel / CSV", "#2f855a", &[".xlsx", ".xls", ".csv"]),
+    ("PDF", "#c53030", &[".pdf"]),
+    ("PowerPoint", "#dd6b20", &[".pptx", ".ppt"]),
+    ("Markdown", "#4a5568", &[".md"]),
+    ("Text", "#718096", &[".txt"]),
+    ("Python", "#d69e2e", &[".py", ".ipynb"]),
+    ("JavaScript / TS", "#ecc94b", &[".js", ".ts", ".tsx", ".jsx"]),
+    ("Web (HTML/CSS/PHP)", "#e53e9e", &[".html", ".htm", ".css", ".php"]),
+    ("Code khác", "#805ad5", &[".java", ".cs", ".cpp", ".c", ".h", ".go", ".rs", ".sql", ".sh", ".ps1", ".bat"]),
+    ("Cấu hình", "#a0aec0", &[".yaml", ".yml", ".xml", ".ini", ".toml", ".json"]),
+    ("Ảnh", "#38b2ac", &[".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"]),
+    ("Audio", "#9f7aea", &[".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac", ".wma", ".opus"]),
+    ("Video", "#f56565", &[".mp4", ".mov", ".mkv", ".avi", ".webm", ".wmv", ".m4v"]),
+];
+
+fn group_of(ext: &str) -> usize {
+    let e = ext.to_lowercase();
+    TYPE_GROUPS.iter().position(|(_, _, exts)| exts.contains(&e.as_str())).unwrap_or(TYPE_GROUPS.len())
+}
+
 impl Knowledge {
+    /// How much of the machine's data the assistant has learned, and what that data is made of, as ONE tree that
+    /// adds up to 100 % of the active files in the catalog (by count and by bytes):
+    ///
+    /// machine data = learned (content read: by file type) + waiting to be learned + unreadable
+    ///                + catalogued by name only (libraries and installed software, tier 3).
+    pub fn learning_progress(&self) -> anyhow::Result<Value> {
+        let conn = open_db(&self.db)?;
+        // tier 1-2: documents, media, code of the person; tier 3: catalogued by name only
+        let mut stmt = conn.prepare(
+            "SELECT COALESCE(tier, 3), LOWER(COALESCE(ext, '')), COUNT(*), COALESCE(SUM(size), 0),                     COALESCE(SUM(CASE WHEN indexed_sha256 IS NOT NULL AND indexed_sha256 = sha256 THEN 1 ELSE 0 END), 0),                     COALESCE(SUM(CASE WHEN indexed_sha256 IS NOT NULL AND indexed_sha256 = sha256 THEN size ELSE 0 END), 0),                     COALESCE(SUM(CASE WHEN extract_error IS NOT NULL THEN 1 ELSE 0 END), 0),                     COALESCE(SUM(CASE WHEN extract_error IS NOT NULL THEN size ELSE 0 END), 0)              FROM files WHERE status = 'active' GROUP BY 1, 2",
+        )?;
+        struct Acc {
+            files: i64,
+            bytes: i64,
+            learned: i64,
+            learned_bytes: i64,
+            failed: i64,
+            failed_bytes: i64,
+            exts: HashMap<String, (i64, i64)>, // ext -> (learned files, learned bytes)
+        }
+        let blank = || Acc { files: 0, bytes: 0, learned: 0, learned_bytes: 0, failed: 0, failed_bytes: 0, exts: HashMap::new() };
+        let mut groups: Vec<Acc> = (0..=TYPE_GROUPS.len()).map(|_| blank()).collect();
+        let (mut catalog_files, mut catalog_bytes) = (0_i64, 0_i64);
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?, r.get::<_, i64>(4)?,
+                r.get::<_, i64>(5)?, r.get::<_, i64>(6)?, r.get::<_, i64>(7)?))
+        })?;
+        for row in rows {
+            let (tier, ext, n, bytes, learned, learned_bytes, failed, failed_bytes) = row?;
+            if tier >= 3 {
+                catalog_files += n;
+                catalog_bytes += bytes;
+                continue;
+            }
+            let g = &mut groups[group_of(&ext)];
+            g.files += n;
+            g.bytes += bytes;
+            g.learned += learned;
+            g.learned_bytes += learned_bytes;
+            g.failed += failed;
+            g.failed_bytes += failed_bytes;
+            let e = g.exts.entry(if ext.is_empty() { "(không đuôi)".into() } else { ext }).or_insert((0, 0));
+            e.0 += learned;
+            e.1 += learned_bytes;
+        }
+        let learnable_files: i64 = groups.iter().map(|g| g.files).sum();
+        let learnable_bytes: i64 = groups.iter().map(|g| g.bytes).sum();
+        let learned_files: i64 = groups.iter().map(|g| g.learned).sum();
+        let learned_bytes: i64 = groups.iter().map(|g| g.learned_bytes).sum();
+        let failed_files: i64 = groups.iter().map(|g| g.failed).sum();
+        let failed_bytes: i64 = groups.iter().map(|g| g.failed_bytes).sum();
+        let waiting_files = (learnable_files - learned_files - failed_files).max(0);
+        let waiting_bytes = (learnable_bytes - learned_bytes - failed_bytes).max(0);
+        let total_files = learnable_files + catalog_files;
+        let total_bytes = learnable_bytes + catalog_bytes;
+        let pct = |part: i64, whole: i64| if whole > 0 { (1000.0 * part as f64 / whole as f64).round() / 10.0 } else { 0.0 };
+
+        let mut children: Vec<Value> = Vec::new();
+        let mut type_nodes: Vec<Value> = Vec::new();
+        for (i, g) in groups.iter().enumerate() {
+            if g.learned == 0 && g.files == 0 {
+                continue;
+            }
+            let (label, color) = TYPE_GROUPS.get(i).map(|t| (t.0, t.1)).unwrap_or(("Loại khác", "#94a3b8"));
+            let mut exts: Vec<(&String, &(i64, i64))> = g.exts.iter().filter(|(_, v)| v.0 > 0).collect();
+            exts.sort_by_key(|(_, v)| std::cmp::Reverse(v.0));
+            let ext_nodes: Vec<Value> = exts.iter().take(8).map(|(e, v)| {
+                json!({"label": e, "files": v.0, "bytes": v.1, "percent_files": pct(v.0, total_files),
+                       "percent_bytes": pct(v.1, total_bytes), "color": color})
+            }).collect();
+            type_nodes.push(json!({
+                "label": label, "color": color, "files": g.learned, "bytes": g.learned_bytes,
+                "percent_files": pct(g.learned, total_files), "percent_bytes": pct(g.learned_bytes, total_bytes),
+                "of_type_total": g.files, "type_learned_percent": pct(g.learned, (g.files - g.failed).max(1)),
+                "children": ext_nodes,
+            }));
+        }
+        type_nodes.sort_by_key(|n| std::cmp::Reverse(n["files"].as_i64().unwrap_or(0)));
+        children.push(json!({"label": "Đã học (đã đọc nội dung)", "color": "#16a34a", "files": learned_files, "bytes": learned_bytes,
+                             "percent_files": pct(learned_files, total_files), "percent_bytes": pct(learned_bytes, total_bytes),
+                             "children": type_nodes}));
+        children.push(json!({"label": "Đang chờ học", "color": "#f59e0b", "files": waiting_files, "bytes": waiting_bytes,
+                             "percent_files": pct(waiting_files, total_files), "percent_bytes": pct(waiting_bytes, total_bytes), "children": []}));
+        children.push(json!({"label": "Không đọc được (hỏng / mã hóa)", "color": "#dc2626", "files": failed_files, "bytes": failed_bytes,
+                             "percent_files": pct(failed_files, total_files), "percent_bytes": pct(failed_bytes, total_bytes), "children": []}));
+        children.push(json!({"label": "Chỉ lập danh mục theo tên (thư viện, phần mềm cài sẵn)", "color": "#94a3b8", "files": catalog_files,
+                             "bytes": catalog_bytes, "percent_files": pct(catalog_files, total_files),
+                             "percent_bytes": pct(catalog_bytes, total_bytes), "children": []}));
+        let pending: i64 = conn.query_row("SELECT COUNT(*) FROM ingest_queue", [], |r| r.get(0)).unwrap_or(0);
+        Ok(json!({
+            "total_files": total_files, "total_bytes": total_bytes,
+            "learnable_files": learnable_files, "learnable_bytes": learnable_bytes,
+            "learned_files": learned_files, "learned_bytes": learned_bytes,
+            "learned_percent_of_learnable": pct(learned_files, (learnable_files - failed_files).max(1)),
+            "learned_percent_of_machine": pct(learned_files, total_files),
+            "learned_percent_bytes_of_machine": pct(learned_bytes, total_bytes),
+            "queue": pending, "update": self.update_state(),
+            "tree": {"label": "Dữ liệu trên máy", "color": "#334155", "files": total_files, "bytes": total_bytes,
+                     "percent_files": 100.0, "percent_bytes": 100.0, "children": children},
+        }))
+    }
+
     pub fn new(config: &Config) -> Self {
         let cfg = config.knowledge.clone();
         let data = config.path(&cfg.data_dir);
