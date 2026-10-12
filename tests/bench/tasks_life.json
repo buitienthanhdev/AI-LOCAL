@@ -1,0 +1,352 @@
+{
+ "tasks": [
+  {
+   "id": "life-file-where",
+   "category": "life",
+   "prompt": "File 'thong_bao.docx' đang nằm ở thư mục nào trên máy?",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_contains",
+     "any": [
+      "lga-office"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "life-file-author",
+   "category": "life",
+   "prompt": "Ai là tác giả (người tạo) của file 'thong_bao.docx'?",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_contains",
+     "any": [
+      "TIEN THANH",
+      "THANH"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "life-file-when",
+   "category": "life",
+   "prompt": "File 'thong_bao.docx' được sửa lần cuối vào ngày nào?",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_regex",
+     "pattern": "(10/10/2026|2026-10-10|10 tháng 10(,| năm).*2026|10-10-2026|10/10\\b)"
+    }
+   ]
+  },
+  {
+   "id": "life-activity-now",
+   "category": "life",
+   "prompt": "Bây giờ tôi đang mở chương trình nào trên máy?",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "tool_used",
+     "name": "activity.now"
+    },
+    {
+     "kind": "max_steps",
+     "n": 3
+    }
+   ]
+  },
+  {
+   "id": "life-activity-summary",
+   "category": "life",
+   "prompt": "Hôm nay tôi đã dùng những chương trình nào nhiều nhất?",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "tool_used",
+     "prefix": "activity."
+    }
+   ]
+  },
+  {
+   "id": "life-dedupe-files",
+   "category": "life",
+   "prompt": "Trong thư mục {dir}\\anh có nhiều file giống hệt nhau về nội dung. Giữ lại đúng một bản của mỗi nội dung, xóa các bản trùng.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "file_count",
+     "path": "{dir}\\anh",
+     "pattern": "*.jpg",
+     "n": 2
+    }
+   ],
+   "setup": {
+    "files": {
+     "{dir}\\anh\\a1.jpg": "AAAA",
+     "{dir}\\anh\\a2.jpg": "AAAA",
+     "{dir}\\anh\\b1.jpg": "BBBB",
+     "{dir}\\anh\\a3.jpg": "AAAA"
+    }
+   }
+  },
+  {
+   "id": "life-empty-folders",
+   "category": "life",
+   "prompt": "Xóa tất cả thư mục rỗng trong {dir}\\du_an (giữ thư mục có file).",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "dir_missing",
+     "path": "{dir}\\du_an\\rong1"
+    },
+    {
+     "kind": "dir_missing",
+     "path": "{dir}\\du_an\\a\\rong2"
+    },
+    {
+     "kind": "file_exists",
+     "path": "{dir}\\du_an\\co_file\\x.txt"
+    }
+   ],
+   "setup": {
+    "dirs": [
+     "{dir}\\du_an\\rong1",
+     "{dir}\\du_an\\a\\rong2"
+    ],
+    "files": {
+     "{dir}\\du_an\\co_file\\x.txt": "x"
+    }
+   }
+  },
+  {
+   "id": "life-archive-old",
+   "category": "life",
+   "prompt": "Chuyển các file không được sửa trong 30 ngày qua trong {dir}\\hs vào thư mục {dir}\\hs\\luu_tru, giữ nguyên file mới.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "file_exists",
+     "path": "{dir}\\hs\\luu_tru\\cu.txt"
+    },
+    {
+     "kind": "file_exists",
+     "path": "{dir}\\hs\\moi.txt"
+    },
+    {
+     "kind": "file_missing",
+     "path": "{dir}\\hs\\cu.txt"
+    }
+   ],
+   "setup": {
+    "files": {
+     "{dir}\\hs\\cu.txt": "cũ",
+     "{dir}\\hs\\moi.txt": "mới"
+    },
+    "mtimes": {
+     "{dir}\\hs\\cu.txt": -7776000
+    }
+   }
+  },
+  {
+   "id": "life-excel-clean",
+   "category": "life",
+   "prompt": "Trong {dir}\\kh.xlsx hãy xóa các dòng trống và các dòng trùng nhau, giữ dòng tiêu đề, lưu lại cùng tên file.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "xlsx_rows",
+     "path": "{dir}\\kh.xlsx",
+     "rows": 4
+    },
+    {
+     "kind": "xlsx_has",
+     "path": "{dir}\\kh.xlsx",
+     "values": [
+      "An",
+      "Bình",
+      "Chi"
+     ]
+    }
+   ],
+   "setup": {
+    "xlsx": {
+     "path": "{dir}\\kh.xlsx",
+     "rows": [
+      [
+       "Tên",
+       "SĐT"
+      ],
+      [
+       "An",
+       "090"
+      ],
+      [
+       null,
+       null
+      ],
+      [
+       "Bình",
+       "091"
+      ],
+      [
+       "An",
+       "090"
+      ],
+      [
+       "Chi",
+       "092"
+      ],
+      [
+       null,
+       null
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "id": "life-word-remove-section",
+   "category": "life",
+   "prompt": "Trong file Word {dir}\\bc.docx hãy xóa đoạn 'Ghi chú nội bộ: không gửi ra ngoài' và giữ các đoạn còn lại.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "docx_absent",
+     "path": "{dir}\\bc.docx",
+     "texts": [
+      "Ghi chú nội bộ"
+     ]
+    },
+    {
+     "kind": "docx_contains",
+     "path": "{dir}\\bc.docx",
+     "texts": [
+      "Kết quả quý 3",
+      "Kiến nghị"
+     ]
+    }
+   ],
+   "setup": {
+    "docx": {
+     "path": "{dir}\\bc.docx",
+     "paragraphs": [
+      "Kết quả quý 3",
+      "Ghi chú nội bộ: không gửi ra ngoài",
+      "Kiến nghị: tăng ngân sách"
+     ]
+    }
+   }
+  },
+  {
+   "id": "life-put-in-place",
+   "category": "life",
+   "prompt": "Các file trong {dir}\\lung_tung gồm hóa đơn, hợp đồng và ảnh. Đưa mỗi loại vào một thư mục con nằm bên trong đó, tên 'hoa_don', 'hop_dong', 'anh' (hóa đơn có chữ 'hoadon' trong tên, hợp đồng có 'hopdong', còn lại là ảnh).",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "file_exists",
+     "path": "{dir}\\lung_tung\\hoa_don\\hoadon_01.pdf"
+    },
+    {
+     "kind": "file_exists",
+     "path": "{dir}\\lung_tung\\hop_dong\\hopdong_abc.docx"
+    },
+    {
+     "kind": "file_exists",
+     "path": "{dir}\\lung_tung\\anh\\chup_1.jpg"
+    }
+   ],
+   "setup": {
+    "files": {
+     "{dir}\\lung_tung\\hoadon_01.pdf": "p",
+     "{dir}\\lung_tung\\hopdong_abc.docx": "d",
+     "{dir}\\lung_tung\\chup_1.jpg": "j"
+    }
+   }
+  },
+  {
+   "id": "life-image-ocr",
+   "category": "life",
+   "prompt": "Đọc ảnh C:\\Users\\TIEN THANH\\Desktop\\AI LOCAL\\local-gemini-agent\\logs\\dev\\media\\hoadon.png và cho biết tổng tiền.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_contains",
+     "any": [
+      "4.250.000",
+      "4,250,000",
+      "4250000"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "life-audio",
+   "category": "life",
+   "prompt": "Nghe file ghi âm C:\\Users\\TIEN THANH\\Desktop\\AI LOCAL\\local-gemini-agent\\logs\\dev\\media\\noi.wav và cho biết người nói hẹn họp vào ngày nào, mấy giờ.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_regex",
+     "pattern": "(?i)(friday|thứ sáu).*(3|three|ba)|(3|three|ba).*(friday|thứ sáu)"
+    }
+   ]
+  },
+  {
+   "id": "life-video",
+   "category": "life",
+   "prompt": "Xem video C:\\Users\\TIEN THANH\\Desktop\\AI LOCAL\\local-gemini-agent\\logs\\dev\\media\\clip.mp4 và mô tả ngắn gọn có gì trong video.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_regex",
+     "pattern": "(?i)(xin chào|chữ|chấm|tròn|circle|text)"
+    }
+   ]
+  }
+ ]
+}

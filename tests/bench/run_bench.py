@@ -217,6 +217,14 @@ def check(c: dict, run: dict) -> tuple[bool, str]:
         except Exception as e:  # noqa: BLE001
             return False, f"document unreadable: {e}"
         return all(t in text for t in c["texts"]), f"document has {c['texts']}"
+    if kind == "docx_absent":
+        try:
+            import docx
+            text = " ".join(p.text for p in docx.Document(c["path"]).paragraphs)
+        except Exception as e:  # noqa: BLE001
+            return False, f"document unreadable: {e}"
+        present = [t for t in c["texts"] if t in text]
+        return not present, f"document no longer has {c['texts']} (still has {present})"
     if kind == "docx_table":
         try:
             import docx

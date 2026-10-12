@@ -291,6 +291,9 @@
   <button class="clearall" id="clearAll" title="Xóa toàn bộ lịch sử chat">🗑 Xóa tất cả lịch sử</button>
   <div class="health" id="health" title="Bấm để kiểm tra lại">
     <div id="h-brains"><span class="dot" id="h-gateway"></span>Bộ não AI</div>
+    <button class="learn-mini" id="actBtn" title="Theo dõi công việc của bạn trên máy này (chỉ ghi chương trình và tên cửa sổ, lưu trên máy)">
+      <span class="dot" id="h-activity"></span><span id="actLabel">Theo dõi công việc: tắt</span>
+    </button>
     <button class="learn-mini" id="learnBtn" title="Xem Illuminati đã học được bao nhiêu dữ liệu của máy">
       <span class="dot" id="h-knowledge"></span><span id="learnLabel">Tri thức đã học</span>
       <span class="bar"><i id="learnFill"></i></span>
@@ -348,6 +351,16 @@
       <button class="btn" id="learnClose">Đóng</button>
     </div>
     <div id="learnBody" class="small muted">Đang đọc danh mục…</div>
+  </div>
+</div>
+<div id="activity" class="modal" role="dialog" aria-modal="true" aria-labelledby="activityTitle">
+  <div class="card sheet">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+      <h3 id="activityTitle" style="margin:0;flex:1">👁 Công việc của bạn trên máy này</h3>
+      <div class="seg2" id="actPeriod"><button data-p="today" class="on">Hôm nay</button><button data-p="7d">7 ngày</button></div>
+      <button class="btn" id="actClose">Đóng</button>
+    </div>
+    <div id="actBody" class="small muted">Đang đọc…</div>
   </div>
 </div>
 <div id="lightbox"><img alt=""></div>
@@ -1327,11 +1340,66 @@ function drawLearning() {
 }
 $("learnBtn").onclick = () => { $("learning").classList.add("open"); drawLearning(); refreshLearning(); };
 $("learnClose").onclick = () => $("learning").classList.remove("open");
-$("learning").onclick = e => { if (e.target.id === "learning") $("learning").classList.remove("open"); };
+$("learning").onclick = e => { if (e.target.id === "learning") $("learning").classList.remove("open"); $("activity").classList.remove("open"); };
 for (const b of $("learnMetric").children) b.onclick = () => {
   learnMetric = b.dataset.m;
   for (const x of $("learnMetric").children) x.classList.toggle("on", x === b);
   drawLearning();
+};
+
+
+/* ---------- Work tracking: what the person works on, by program (opt-in, local) ---------- */
+let activity = null, actPeriod = "today";
+const palette = ["#e8731a", "#2b6cb0", "#16a34a", "#9333ea", "#dc2626", "#0891b2", "#ca8a04", "#db2777", "#4f46e5", "#65a30d", "#0d9488", "#7c3aed"];
+function fmtDur(sec) {
+  sec = Math.round(sec || 0);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+  return h ? `${h} giờ ${m} phút` : m ? `${m} phút` : `${sec} giây`;
+}
+async function refreshActivity() {
+  try {
+    activity = await api(`/api/activity?period=${actPeriod}`);
+    $("actLabel").textContent = activity.enabled ? `Đang theo dõi · hôm nay ${fmtDur(activity.active_seconds)}` : "Theo dõi công việc: tắt";
+    $("h-activity").className = `dot ${activity.enabled && activity.running ? "ok" : ""}`;
+    if ($("activity").classList.contains("open")) drawActivity();
+  } catch { /* the window is starting */ }
+}
+function drawActivity() {
+  const a = activity, body = $("actBody");
+  if (!a) { body.textContent = "Chưa đọc được dữ liệu."; return; }
+  const toggle = el("div", { style: "display:flex;flex-wrap:wrap;gap:8px 10px;align-items:center;margin:6px 0 10px" },
+    el("span", { class: `tag ${a.enabled && a.running ? "ok" : ""}`, style: "white-space:nowrap" }, a.enabled ? (a.running ? "đang theo dõi" : "đã bật, đang khởi động…") : "đang tắt"),
+    el("button", { class: `btn ${a.enabled ? "" : "primary"}`, style: "white-space:nowrap", onclick: async () => {
+      try { await api("/api/activity/control", { action: a.enabled ? "stop" : "start" }); } catch (e) { toast(e.message); }
+      setTimeout(refreshActivity, 1200);
+    } }, a.enabled ? "Tắt theo dõi" : "Bật theo dõi"),
+    el("span", { class: "muted small", style: "flex-basis:100%" }, "Chỉ ghi chương trình và tên cửa sổ đang mở, không ghi phím gõ, màn hình hay nội dung tệp. Lưu trên máy này, giữ 30 ngày, tiêu đề nhạy cảm (mật khẩu, ngân hàng, ẩn danh) bị ẩn."));
+  const children = [toggle];
+  if (!a.records) {
+    children.push(el("div", {}, a.enabled ? "Chưa có dữ liệu trong khoảng này — hãy làm việc một lúc rồi xem lại." : "Bật theo dõi để Illuminati biết bạn làm gì trong ngày và trả lời được 'hôm nay tôi làm gì', 'tôi dùng Excel bao lâu'."));
+  } else {
+    const total = a.active_seconds || 1;
+    children.push(
+      el("div", { style: "font-size:15px;color:var(--text)" }, el("b", { style: "font-size:22px;color:var(--accent)" }, fmtDur(a.active_seconds)),
+        ` làm việc · nghỉ ${fmtDur(a.idle_seconds)} · ghi nhận ${nf(a.records)} đoạn`),
+      el("div", { style: "font-weight:650;margin:10px 0 2px" }, "Thời gian làm việc theo chương trình (cộng lại = 100%)"),
+      el("div", { class: "stack" }, a.apps.map((x, i) => el("i", { style: `width:${x.percent_of_active}%;background:${palette[i % palette.length]}`, title: `${x.process}: ${x.percent_of_active}%` }))),
+      el("div", { class: "legend" }, a.apps.map((x, i) => el("span", {}, el("b", { style: `background:${palette[i % palette.length]}` }), `${x.process.replace(/\.exe$/i, "")} ${fmtPct(x.percent_of_active)} · ${fmtDur(x.seconds)}`))),
+      el("div", { style: "font-weight:650;margin:12px 0 4px" }, "Cửa sổ dùng nhiều nhất"),
+      ...a.windows.slice(0, 8).map(w => el("div", { class: "lt-row", style: "grid-template-columns:1fr 100px" },
+        el("div", { class: "name" }, el("span", { title: w.title }, `${w.process.replace(/\.exe$/i, "")} — ${w.title || "(không tên)"}`)),
+        el("div", { class: "num" }, fmtDur(w.seconds)))));
+    void total;
+  }
+  body.replaceChildren(...children);
+}
+$("actBtn").onclick = () => { $("activity").classList.add("open"); drawActivity(); refreshActivity(); };
+$("actClose").onclick = () => $("activity").classList.remove("open");
+$("activity").onclick = e => { if (e.target.id === "activity") $("activity").classList.remove("open"); };
+for (const b of $("actPeriod").children) b.onclick = () => {
+  actPeriod = b.dataset.p;
+  for (const x of $("actPeriod").children) x.classList.toggle("on", x === b);
+  refreshActivity();
 };
 
 /* ---------- Wiring ---------- */
@@ -1366,6 +1434,7 @@ setInterval(poll, POLL_MS);
 setInterval(refreshHistory, POLL_MS * 4);
 setInterval(refreshHealth, 15000);
 refreshLearning(); setInterval(refreshLearning, 45000);
+refreshActivity(); setInterval(refreshActivity, 20000);
 </script>
 </body>
 </html>

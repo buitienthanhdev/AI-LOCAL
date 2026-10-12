@@ -142,6 +142,17 @@ impl Api {
                 };
             }
             (&Method::GET, ["api", "learning"]) => Ok(self.learning()),
+            (&Method::GET, ["api", "activity"]) => {
+                let period = query_param(request.uri(), "period").unwrap_or_else(|| "today".into());
+                Ok(json_reply(StatusCode::OK, crate::activity::summary(&self.config, &period)))
+            }
+            (&Method::POST, ["api", "activity", "control"]) => {
+                let action = body["action"].as_str().unwrap_or("");
+                match crate::activity::control(&self.config, action) {
+                    Ok(v) => Ok(json_reply(StatusCode::OK, v)),
+                    Err(e) => Ok(error(StatusCode::BAD_REQUEST, e.to_string())),
+                }
+            }
             (&Method::GET, ["api", "status"]) => Ok(json_reply(StatusCode::OK, self.status())),
             (&Method::GET, ["api", "tasks"]) => Ok(json_reply(StatusCode::OK, self.list_tasks())),
             (&Method::POST, ["api", "tasks"]) => self.start_task(&body),
@@ -601,6 +612,21 @@ mod live {
         let request = Request::builder().method(method).uri(format!("lga://localhost{uri}")).body(body.to_string().into_bytes()).unwrap();
         let response = api.handle(request);
         (response.status(), serde_json::from_slice(response.body()).unwrap_or(Value::Null))
+    }
+
+    #[test]
+    #[ignore]
+    fn activity_summary_reads_the_tracker_database() {
+        let api = api();
+        let (code, v) = call(&api, Method::GET, "/api/activity?period=today", Value::Null);
+        assert_eq!(code, StatusCode::OK, "{v}");
+        assert!(v["enabled"].is_boolean() && v["apps"].is_array(), "{v}");
+        let active = v["active_seconds"].as_f64().unwrap_or(0.0);
+        if active > 0.0 {
+            let sum: f64 = v["apps"].as_array().unwrap().iter().map(|a| a["seconds"].as_f64().unwrap()).sum();
+            assert!(sum <= active + 1.0);
+        }
+        std::fs::write(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../logs/dev/activity.json"), v.to_string()).unwrap();
     }
 
     #[test]

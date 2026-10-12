@@ -23,6 +23,7 @@ dependencies = [
  "chrono",
  "http",
  "lga-core",
+ "rusqlite",
  "serde",
  "serde_json",
  "tao",
