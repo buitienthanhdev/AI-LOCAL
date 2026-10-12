@@ -58,6 +58,9 @@ PROFILES: dict[str, dict[str, str]] = {
     "cloud-gemma31": {"LGA_BRAIN": "cloud", "LGA_MODEL": "gemma4:31b-cloud", "LGA_THINKING": "on"},
     "cloud-gptoss20": {"LGA_BRAIN": "cloud", "LGA_MODEL": "gpt-oss:20b-cloud", "LGA_THINKING": "on"},
     "cloud-nemotron-super": {"LGA_BRAIN": "cloud", "LGA_MODEL": "nemotron-3-super:cloud", "LGA_THINKING": "on"},
+    # A model pulled into the local Ollama (through the same Ollama path as the cloud models).
+    "ollama-qwen38": {"LGA_BRAIN": "cloud", "LGA_MODEL": "qwen3.8:27b", "LGA_THINKING": "off"},
+    "ollama-qwen38-think": {"LGA_BRAIN": "cloud", "LGA_MODEL": "qwen3.8:27b", "LGA_THINKING": "on"},
     "cloud-nemotron-nano": {"LGA_BRAIN": "cloud", "LGA_MODEL": "nemotron-3-nano:30b-cloud", "LGA_THINKING": "on"},
     # Whatever the gateway's configured brain order picks (local first, cloud fallbacks): the product as shipped.
     "product": {},
