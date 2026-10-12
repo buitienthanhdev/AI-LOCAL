@@ -213,3 +213,19 @@ def test_reference_scoring_prefers_the_painting_over_derivatives() -> None:
                             1600, 1200, "Public domain")
     bad = reference._score("File:Starry Night poster detail crop.jpg", "starry night van gogh", 1600, 1200, "CC BY-SA 4.0")
     assert good > bad
+
+
+def test_self_review_finds_what_a_person_would_see() -> None:
+    from lga_worker.art import critique
+    from lga_worker.art.scene import Scene, Shape
+
+    plain = Scene([Shape(((400, 200), (500, 200), (500, 300), (400, 300)), True, (200, 120, 40), None, 1.0)])
+    codes = {f.code for f in critique.critique(plain)}
+    assert {"SUBJECT_SMALL", "FEW_COLOURS", "NO_DETAILS"} <= codes
+    rich = []
+    for i in range(14):
+        x = 150 + i * 50
+        rich.append(Shape(((x, 100), (x + 60, 100), (x + 60, 480), (x, 480)), True, (30 + i * 15, 60 + i * 10, 200 - i * 12), (0, 0, 0), 1.0))
+    for i in range(6):
+        rich.append(Shape(((300 + i * 60, 200), (310 + i * 60, 200), (310 + i * 60, 208), (300 + i * 60, 208)), True, (250, 250, 240), (0, 0, 0), 1.0))
+    assert not [f for f in critique.critique(Scene(rich)) if f.severity == "fix"]

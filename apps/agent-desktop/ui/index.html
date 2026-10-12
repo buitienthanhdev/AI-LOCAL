@@ -280,6 +280,7 @@
     <div class="box">
       <textarea id="input" rows="1" placeholder="Nhắn cho Illuminati… ví dụ: Mở Excel và tạo bảng chi phí tháng 10"></textarea>
       <div class="pending" id="pending" style="display:none"></div>
+      <div class="pending" id="queue" style="display:none" title="Yêu cầu đang xếp hàng"></div>
       <div class="bar">
         <button class="attach" id="attachBtn" title="Đính kèm tệp: ảnh, Word, Excel, PDF… (hoặc kéo thả / dán ảnh)">📎</button>
         <input type="file" id="fileInput" multiple hidden>
@@ -926,19 +927,48 @@ async function send(text) {
       await api(`/api/tasks/${last.id}/resume`, { answer: text, attachments: out }); clear(); last.settled = false; last.seen = 0;
       toast(out.length ? `Đã gửi câu trả lời và ${out.length} tệp` : "Đã gửi câu trả lời"); poll();
     } else if (data && !TERMINAL.includes(st) && !data.interrupted) {
-      toast("Trợ lý đang làm việc này. Đợi xong hoặc bấm ■ Dừng rồi gửi yêu cầu tiếp theo.");
+      const { out, shown } = await takePending();  // the next request waits in line and starts when this one ends
+      queue.push({ text, out, shown, mode });
+      clear(); drawQueue();
+      toast(`Đã xếp hàng (${queue.length}): sẽ chạy ngay khi việc hiện tại xong`);
     } else {
-      const context = conversationContext();
       const { out, shown } = await takePending();
-      const body = { task: text, mode, context, attachments: out };
-      if (conv) body.conversation_id = conv.id;
-      const { task_id, conversation_id } = await api("/api/tasks", body);
+      await startRequest(text, out, shown, mode);
       clear();
-      startTurn(task_id, conversation_id, text || "(tệp đính kèm)", shown);
-      refreshHistory();
     }
   } catch (e) { toast(e.message); }
   $("sendBtn").disabled = false;
+}
+
+/** Requests typed while the assistant is busy: they run one after another, in order, in the same chat. */
+const queue = [];
+let draining = false;
+async function startRequest(text, out, shown, useMode) {
+  const body = { task: text, mode: useMode, context: conversationContext(), attachments: out };
+  if (conv) body.conversation_id = conv.id;
+  const { task_id, conversation_id } = await api("/api/tasks", body);
+  startTurn(task_id, conversation_id, text || "(tệp đính kèm)", shown);
+  refreshHistory();
+}
+function drawQueue() {
+  const box = $("queue");
+  box.replaceChildren(...queue.map((q, i) => el("span", { class: "chip", title: q.text },
+    "⏳", el("span", {}, q.text.slice(0, 48) || "(tệp)"),
+    el("button", { title: "Bỏ khỏi hàng đợi", onclick: () => { queue.splice(i, 1); drawQueue(); } }, "×"))));
+  box.style.display = queue.length ? "" : "none";
+}
+async function drainQueue() {
+  if (draining || !queue.length) return;
+  const last = lastTurn();
+  const st = last && last.data ? last.data.task.status : null;
+  if (!last || !last.data || !(TERMINAL.includes(st) || last.data.interrupted)) return;
+  if (last.data.pending_request) return;
+  draining = true;
+  try {
+    const next = queue.shift();
+    drawQueue();
+    await startRequest(next.text, next.out, next.shown, next.mode);
+  } catch (e) { toast(e.message); } finally { draining = false; }
 }
 
 /** Plain-language reason for a failure; the raw text stays in the technical details. */
@@ -994,7 +1024,7 @@ function turnNode(turn) {
     el("div", { class: "msg" }, el("div", { class: "logo avatar" }),
       el("div", { class: "agent-body" },
         el("div", { id: `${p}-ctl`, class: "ctl" }), el("div", { id: `${p}-ask` }), el("div", { id: `${p}-live` }),
-        el("div", { id: `${p}-result` }), el("div", { id: `${p}-shot` }), el("div", { id: `${p}-steps` }))));
+        el("div", { id: `${p}-result` }), el("div", { id: `${p}-spec` }), el("div", { id: `${p}-shot` }), el("div", { id: `${p}-steps` }))));
 }
 
 /** Open a chat from the history: every request that was typed in it, in order, in one box. */
@@ -1126,6 +1156,20 @@ function render(turn) {
       answer ? el("div", { class: "answer-actions" }, el("button", { class: "ghost", title: "Chép câu trả lời", onclick: e => copyText(answer, e.currentTarget) }, "📋 Sao chép")) : null);
   });
 
+  region(turn, "spec", [task.steps.length, task.updated_at], () => {
+    for (let i = task.steps.length - 1; i >= 0; i--) {
+      const m = /Specification (\w+) \((\w+)\): (\d+) objects, (\d+) operations, about ([\d.]+) s, (\d+) assumption\(s\); file (\S+\.json)/.exec(task.steps[i].observation || "");
+      if (m) {
+        const ok = m[1] === "VALIDATED";
+        return el("div", { class: "card spec" },
+          el("div", {}, el("b", {}, "Đặc tả bức tranh "), el("span", { class: `tag ${ok ? "ok" : "bad"}` }, ok ? "đã kiểm định" : m[1]),
+            el("span", { class: "muted small" }, ` · ${m[3]} đối tượng · ${m[4]} thao tác · ~${Math.round(m[5])} giây · ${m[6]} giả định · trạng thái ${m[2]}`)),
+          el("button", { class: "btn", style: "margin-top:6px", onclick: () => reveal(m[7]) }, "Mở tệp đặc tả"));
+      }
+    }
+    return null;
+  });
+
   const shot = latestShot(task);
   region(turn, "shot", shot, () => shot ? el("div", { class: "card shot" },
     keepOpen(turn, "shot", el("details", { open: !done }, el("summary", {}, "Ảnh màn hình gần nhất"),
@@ -1175,6 +1219,7 @@ async function poll(now = false) {
     }
     const last = lastTurn();
     if (last && last.data) { currentData = last.data; selected = last.id; updateComposer(last.data); }
+    drainQueue();
     if (drew && atBottom) sc.scrollTop = sc.scrollHeight;
   } finally {
     polling = false;
