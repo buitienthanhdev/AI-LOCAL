@@ -85,6 +85,7 @@ def prepare(task: dict, folder: Path) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_text(content, encoding="utf-8")
     for path, size in setup.get("sized_files", {}).items():
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
         Path(path).write_bytes(b"\0" * int(size))
     for path in setup.get("dirs", []):
         Path(path).mkdir(parents=True, exist_ok=True)
@@ -216,6 +217,20 @@ def check(c: dict, run: dict) -> tuple[bool, str]:
         except Exception as e:  # noqa: BLE001
             return False, f"document unreadable: {e}"
         return all(t in text for t in c["texts"]), f"document has {c['texts']}"
+    if kind == "docx_table":
+        try:
+            import docx
+            d = docx.Document(c["path"])
+            cells = [cell.text.strip() for t in d.tables for row in t.rows for cell in row.cells]
+        except Exception as e:  # noqa: BLE001
+            return False, f"document unreadable: {e}"
+        missing = [t for t in c["texts"] if t not in cells]
+        return not missing and len(d.tables) >= 1, f"table cells have {c['texts']} (missing {missing})"
+    if kind == "summary_bullets":
+        lines = [l.strip() for l in (run.get("summary") or "").splitlines() if l.strip().startswith(("-", "•", "*", "+"))]
+        words = [len(re.sub(r"^[-•*+]\s*", "", l).split()) for l in lines]
+        ok = len(lines) == c["n"] and all(w <= c.get("max_words", 99) for w in words)
+        return ok, f"{len(lines)} bullets of {words} words (want {c['n']} of <= {c.get('max_words', 99)})"
     if kind == "pptx_titles":
         try:
             import pptx

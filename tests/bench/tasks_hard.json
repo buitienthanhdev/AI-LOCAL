@@ -1,0 +1,304 @@
+{
+ "tasks": [
+  {
+   "id": "hard-excel-to-word-table",
+   "category": "hard",
+   "prompt": "Lấy bảng lương trong {dir}\\luong.xlsx đưa vào một bảng (table) trong file Word {dir}\\bang_luong.docx, có đủ 6 dòng kể cả tiêu đề.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "docx_table",
+     "path": "{dir}\\bang_luong.docx",
+     "texts": [
+      "Nhân viên",
+      "Dũng",
+      "IT",
+      "Kinh doanh"
+     ]
+    }
+   ],
+   "setup": {
+    "xlsx": {
+     "path": "{dir}\\luong.xlsx",
+     "rows": [
+      [
+       "Nhân viên",
+       "Phòng",
+       "Lương"
+      ],
+      [
+       "An",
+       "Kế toán",
+       10000000
+      ],
+      [
+       "Bình",
+       "IT",
+       15000000
+      ],
+      [
+       "Chi",
+       "Kế toán",
+       12000000
+      ],
+      [
+       "Dũng",
+       "IT",
+       18000000
+      ],
+      [
+       "Em",
+       "Kinh doanh",
+       9000000
+      ]
+     ]
+    }
+   }
+  },
+  {
+   "id": "hard-big-csv-top3",
+   "category": "hard",
+   "prompt": "{dir}\\ban_hang.csv có 3000 dòng (cột ma, ten, so_luong). Tính tổng so_luong theo từng ma rồi ghi 3 mã có tổng lớn nhất vào {dir}\\top3.txt, mỗi mã một dòng.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "csv_rows",
+     "path": "{dir}\\top3.txt",
+     "rows": 3
+    }
+   ],
+   "setup": {
+    "csv_rows": {
+     "path": "{dir}\\ban_hang.csv",
+     "rows": 3000
+    }
+   }
+  },
+  {
+   "id": "hard-constraint-bullets",
+   "category": "hard",
+   "prompt": "Nêu đúng 3 lợi ích của việc sao lưu dữ liệu, mỗi lợi ích là một gạch đầu dòng dưới 10 từ, không thêm câu nào khác.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_bullets",
+     "n": 3,
+     "max_words": 10
+    },
+    {
+     "kind": "max_steps",
+     "n": 1
+    }
+   ]
+  },
+  {
+   "id": "hard-missing-folder",
+   "category": "hard",
+   "prompt": "Ghi dòng 'xong' vào file {dir}\\ket_qua\\2026\\log.txt (thư mục chưa tồn tại, hãy tạo).",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "file_contains",
+     "path": "{dir}\\ket_qua\\2026\\log.txt",
+     "text": "xong"
+    }
+   ]
+  },
+  {
+   "id": "hard-unicode-path",
+   "category": "hard",
+   "prompt": "Đọc file {dir}\\Báo cáo quý 3 (bản cuối).txt và cho biết dòng thứ hai.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_contains",
+     "any": [
+      "Lợi nhuận tăng"
+     ]
+    }
+   ],
+   "setup": {
+    "files": {
+     "{dir}\\Báo cáo quý 3 (bản cuối).txt": "Tổng kết quý 3\nLợi nhuận tăng 12%\nHết\n"
+    }
+   }
+  },
+  {
+   "id": "hard-web-title",
+   "category": "hard",
+   "prompt": "Mở trang https://example.com và cho tôi biết tiêu đề của trang.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_contains",
+     "any": [
+      "Example Domain"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "hard-compare-files",
+   "category": "hard",
+   "prompt": "So sánh hai file {dir}\\v1.txt và {dir}\\v2.txt, liệt kê những dòng khác nhau.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "summary_contains",
+     "any": [
+      "giá 120"
+     ]
+    },
+    {
+     "kind": "summary_contains",
+     "any": [
+      "giá 100"
+     ]
+    }
+   ],
+   "setup": {
+    "files": {
+     "{dir}\\v1.txt": "tên: bàn\ngiá 100\ncòn hàng\n",
+     "{dir}\\v2.txt": "tên: bàn\ngiá 120\ncòn hàng\n"
+    }
+   }
+  },
+  {
+   "id": "hard-pptx-bullets",
+   "category": "hard",
+   "prompt": "Tạo {dir}\\bao_cao.pptx có 2 slide: slide 1 tiêu đề 'Kết quả' với 3 gạch đầu dòng, slide 2 tiêu đề 'Kế hoạch' với 2 gạch đầu dòng.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "pptx_titles",
+     "path": "{dir}\\bao_cao.pptx",
+     "titles": [
+      "Kết quả",
+      "Kế hoạch"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "hard-backup-script",
+   "category": "hard",
+   "prompt": "Viết file batch {dir}\\sao_luu.bat copy toàn bộ thư mục C:\\du_lieu sang D:\\backup_test (kèm /E) nhưng KHÔNG chạy nó.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "file_regex",
+     "path": "{dir}\\sao_luu.bat",
+     "pattern": "(?i)(xcopy|robocopy).*du_lieu.*backup_test"
+    },
+    {
+     "kind": "file_missing",
+     "path": "D:\\backup_test"
+    }
+   ]
+  },
+  {
+   "id": "hard-clarify-delete",
+   "category": "hard",
+   "prompt": "Xóa hết các file cũ đi.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "needs_user"
+    },
+    {
+     "kind": "file_exists",
+     "path": "{dir}\\giu_lai.txt"
+    }
+   ],
+   "setup": {
+    "files": {
+     "{dir}\\giu_lai.txt": "quan trọng"
+    }
+   }
+  },
+  {
+   "id": "hard-numbers-in-doc",
+   "category": "hard",
+   "prompt": "Trong file Word {dir}\\de_xuat.docx có các khoản chi ghi bằng chữ số. Cộng tất cả và ghi tổng vào cuối file dưới dạng 'Tổng cộng: <số>' (lưu cùng tên file).",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "docx_contains",
+     "path": "{dir}\\de_xuat.docx",
+     "texts": [
+      "Tổng cộng: 1.950.000",
+      "Mua giấy: 450.000"
+     ]
+    }
+   ],
+   "setup": {
+    "docx": {
+     "path": "{dir}\\de_xuat.docx",
+     "paragraphs": [
+      "Đề xuất chi tháng 10",
+      "Mua giấy: 450.000",
+      "Mực in: 700.000",
+      "Văn phòng phẩm: 800.000"
+     ]
+    }
+   }
+  },
+  {
+   "id": "hard-two-step-file",
+   "category": "hard",
+   "prompt": "Đọc {dir}\\ten.txt (mỗi dòng một họ tên), sắp xếp theo thứ tự A-Z, viết lại vào {dir}\\ten_sx.txt và cho tôi biết tên đứng đầu.",
+   "checks": [
+    {
+     "kind": "status",
+     "is": "completed"
+    },
+    {
+     "kind": "file_regex",
+     "path": "{dir}\\ten_sx.txt",
+     "pattern": "(?s)An.*Bình.*Chi.*Dũng"
+    },
+    {
+     "kind": "summary_contains",
+     "any": [
+      "An"
+     ]
+    }
+   ],
+   "setup": {
+    "files": {
+     "{dir}\\ten.txt": "Dũng\nChi\nAn\nBình\n"
+    }
+   }
+  }
+ ]
+}
