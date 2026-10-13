@@ -605,6 +605,11 @@ impl<'a> TaskRunner<'a> {
             .collect();
         let now = chrono::Local::now().format("%A %Y-%m-%d %H:%M (UTC%:z)").to_string();
         let recall = self.rt.memory.recall(&record.goal, max_recalled)?.render();
+        let playbooks = {
+            let book = crate::skills::load(&self.rt.config.root.join("skills"));
+            let goal_n = brain_core::text::norm(&format!("{} {}", record.goal, record.conversation.join(" ")));
+            crate::skills::render(&crate::skills::matching(&book, &goal_n))
+        };
         let mut attachments = Vec::new();
         for image in record.attachments.iter().filter(|a| a.is_image()).take(MAX_USER_IMAGES_PER_TURN) {
             let path = PathBuf::from(&image.path);
@@ -624,6 +629,7 @@ impl<'a> TaskRunner<'a> {
         }
         for attempt in 0..=agent_cfg.max_parse_retries {
             let turn = user_turn(&TurnContext {
+                playbooks: &playbooks,
                 goal: &record.goal,
                 plan: &record.plan,
                 steps: &record.steps,
@@ -986,6 +992,14 @@ impl<'a> TaskRunner<'a> {
     fn after_step(&mut self, record: &mut TaskRecord, outcome: StepOutcome) -> Result<()> {
         let step = outcome.record;
         self.audit.step(&step)?;
+        // Many steps for one request: stop and take stock (a model that flails varies its calls, so no repeat check sees it).
+        let n_steps = record.steps.len() + 1;
+        if n_steps == 12 || n_steps == 24 || n_steps == 36 {
+            self.notices.push(format!(
+                "You have used {n_steps} steps. Stop and take stock: what is done and verified, what remains. Is there a simpler way \
+                 (one script instead of many calls, a different tool)? If the request cannot be done, say so with task.fail or ask the \
+                 user one short question; do not keep trying variations."));
+        }
         // A long run of lookups with nothing produced is a loop, not research: say so, in the planner's own terms.
         let is_lookup = |t: &str| t.starts_with("knowledge.") || t.starts_with("web.") || t == "document.read";
         if is_lookup(&step.tool) {
