@@ -51,6 +51,7 @@ Details: [docs/operations.md](docs/operations.md). Connecting a Google account (
 | [docs/desktop-control.md](docs/desktop-control.md) | working-window discipline, observation after every action, verified save/close/type, measured app behaviour |
 | [docs/paint-engine.md](docs/paint-engine.md) | drawing in Microsoft Paint: planned geometry, pixel verification, repair |
 | [docs/art-engine.md](docs/art-engine.md) | one drawing brain for every app that can draw: photo / SVG / template -> Paint, AutoCAD, PowerPoint, Word, Excel, SVG+PNG |
+| [docs/cad.md](docs/cad.md) | 3D parts from text: cad.build / cad.inspect (text-to-cad `cadgen`, build123d on Open CASCADE) -> STEP / STL / GLB / 3MF, measured and previewed |
 | [docs/attachments.md](docs/attachments.md) | files attached in the chat window: storage, planner view, limits |
 | [docs/environment.md](docs/environment.md) | audited machine (Phase 0) |
 | [docs/repository-inventory.md](docs/repository-inventory.md) | upstream audit, pinned commits, licenses, integration mode (Phase 1) |

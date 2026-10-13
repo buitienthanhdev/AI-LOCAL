@@ -35,3 +35,8 @@ commit = "11f7c47e5038796a20451b38b23032e625b5aa26"
 name = "agent-tars"
 url = "https://github.com/bytedance/UI-TARS-desktop"
 commit = "20b2dfe85e0a84eb2fe7b2f5db1c2807a4c8d829"
+
+[[repo]]
+name = "text-to-cad"
+url = "https://github.com/earthtojake/text-to-cad"
+commit = "24573128ceaab564f497d7c12f995c41784c9539"
