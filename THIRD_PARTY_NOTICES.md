@@ -14,6 +14,7 @@ This project integrates or adapts code from the projects below. Full license tex
 | WebAI-to-API (© 2026 Mohammad) | MIT | Run from the pinned source as a separate local process. Not modified. | none |
 | UI-TARS-desktop (Bytedance) | Apache-2.0 | Architecture reference only; no code copied. | none |
 | KaTeX 0.16 (© Khan Academy and other contributors) | MIT | Renders LaTeX formulas in the chat window; embedded unmodified (woff2 fonts only, CSS trimmed to match). | `apps/agent-desktop/ui/vendor/katex/`, `apps/agent-desktop/src/vendor.rs` (generated), license in `third_party/licenses/KaTeX-LICENSE.txt` |
+| text-to-cad / cadgen (© 2026 Thompson Labs LLC) | MIT | `cadgen` 0.7.21 (build123d on Open CASCADE) installed from PyPI into the git-ignored `runtime/cad`; run as a separate process by `cad.build` / `cad.inspect`. Upstream repo pinned in `references/manifest.toml`. Not modified. | `services/python-agent/lga_worker/tools/cad.py` (wrapper only), license in `third_party/licenses/text-to-cad-MIT.txt` |
 
 ## Other runtime dependencies (installed from PyPI / crates.io, not redistributed)
 

@@ -1,0 +1,94 @@
+{
+  "category": "cad",
+  "description": "Parametric 3D CAD from text (text-to-cad / cadgen / build123d): STEP, STL, GLB, 3MF.",
+  "tools": [
+    {
+      "name": "cad.build",
+      "description": "Make a 3D part or assembly from text with build123d (Open CASCADE): brackets, enclosures, gears, shafts, plates, fixtures, furniture, anything with real dimensions. You write Python that assigns the finished shape to `result`; `bd` is build123d (every build123d name such as Box, Cylinder, Pos is also in scope; do not write import lines). Units are millimetres, +Z up, XY ground. Example code: \"base = bd.Box(60, 30, 6)\\nwall = bd.Pos(0, -12, 18) * bd.Box(60, 6, 30)\\nresult = base + wall - bd.Pos(20, 0, 0) * bd.Cylinder(4, 10)\". Writes STEP (+ STL / GLB / 3MF), measures the model (size, volume, faces, solids, validity) and returns an isometric preview. If it fails the error is returned: fix that line and call again. Check the measured size against what was asked (pass expected_size_mm), and name every dimension as a constant at the top of the code.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Optional file name stem (default part); other characters become _."
+          },
+          "code": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 20000,
+            "description": "Python statements (no function wrapper, no imports needed: bd is build123d) that end by assigning the shape to result."
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "stl",
+                "glb",
+                "3mf"
+              ]
+            },
+            "description": "Extra files besides STEP (default stl and glb)."
+          },
+          "expected_size_mm": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3,
+            "description": "Overall X, Y, Z size the user asked for (any order): the build is flagged when the model differs."
+          },
+          "assembly": {
+            "type": "boolean",
+            "default": false,
+            "description": "true when several separate solids are intended."
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 300000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "possible",
+      "policy_category": "cad.build"
+    },
+    {
+      "name": "cad.inspect",
+      "description": "Measure an existing STEP/STP file: bounding box in mm, volume, area, faces, solids, validity, and an isometric preview picture.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 3
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 300000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "cad.read"
+    }
+  ]
+}

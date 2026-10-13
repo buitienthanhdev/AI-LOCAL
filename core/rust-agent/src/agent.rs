@@ -195,7 +195,7 @@ const BANNER_TEXT: &str = "Trợ lý đang điều khiển máy tính — xin t�
 /// Tool groups always shown in full; the rest load when the request mentions them or the planner asks.
 const BASE_GROUPS: [&str; 7] = ["system", "knowledge", "web", "documents", "memory", "assistant", "task"];
 /// Words (lower case, without accents) that load a group from the start.
-const GROUP_TRIGGERS: [(&str, &[&str]); 8] = [
+const GROUP_TRIGGERS: [(&str, &[&str]); 9] = [
     ("office", &["excel", "word", "powerpoint", "outlook", "email", "e-mail", "mail", "thu dien tu", "gui thu", "hop thu", "pdf",
                  ".xlsx", ".docx", ".pptx", "bang tinh", "van ban"]),
     ("desktop", &["mo ", "open", "click", "bam ", "nhan ", "cua so", "window", "ung dung", "app", "notepad", "word", "excel",
@@ -206,6 +206,7 @@ const GROUP_TRIGGERS: [(&str, &[&str]); 8] = [
     ("vision", &["man hinh", "screen", "nhin", "anh chup", "screenshot", "hinh anh", "thay gi", "doc chu tren"]),
     ("autocad", &["autocad", "cad", "ban ve", "mat bang", "dwg", "dxf", "ve "]),
     ("paint", &["paint", "mspaint"]),
+    ("cad", &["3d", "mo hinh 3d", "step", "stl", "3mf", "glb", "in 3d", "cad 3d", "build123d", "chi tiet co khi", "gia do", "ban le", "banh rang", "vo hop", "ngam", "ve 3d", "thiet ke 3d"]),
     ("activity", &["theo doi", "tracking", "hom nay toi", "toi dang", "toi da lam", "toi lam gi", "dang lam gi", "thoi gian su dung", "screen time", "nang suat", "dung bao lau", "mat bao lau"]),
     ("art", &["ve ", "draw", "tranh", "paint", "mspaint", "autocad", "dwg", "sketch", "ki hoa", "svg", "doraemon", "photo", "hinh anh"]),
 ];
