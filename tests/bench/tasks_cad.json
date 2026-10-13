@@ -26,7 +26,7 @@
   {
    "id": "cad-tube",
    "category": "cad",
-   "prompt": "Tạo mô hình 3D ống tròn đường kính ngoài 20 mm, đường kính trong 14 mm, dài 40 mm để in 3D, xuất STL và STEP.",
+   "prompt": "Tạo mô hình 3D ống tròn đường kính ngoài 20 mm, đường kính trong 14 mm, dài 40 mm để in 3D, xuất STL và STEP, và cho biết thể tích.",
    "checks": [
     {
      "kind": "status",
@@ -45,7 +45,7 @@
   {
    "id": "cad-box-lid",
    "category": "cad",
-   "prompt": "Thiết kế vỏ hộp 3D hình chữ nhật 80 x 50 x 30 mm, thành dày 2 mm, hở mặt trên. Cho biết thể tích vật liệu.",
+   "prompt": "Thiết kế vỏ hộp 3D hình chữ nhật 80 x 50 x 30 mm, thành và đáy đều dày 2 mm, hở mặt trên. Cho biết thể tích vật liệu.",
    "checks": [
     {
      "kind": "status",

@@ -16,9 +16,9 @@ task("cad-bracket",
      "Xuất file STEP và cho biết thể tích.",
      [{"kind": "summary_regex", "pattern": r"(?i)(20[ .,]?9\d\d|21[ .,]?0\d\d|60\s*[x×]\s*30\s*[x×]\s*36)"},
       {"kind": "summary_regex", "pattern": r"(?i)\.step"}])
-task("cad-tube", "Tạo mô hình 3D ống tròn đường kính ngoài 20 mm, đường kính trong 14 mm, dài 40 mm để in 3D, xuất STL và STEP.",
+task("cad-tube", "Tạo mô hình 3D ống tròn đường kính ngoài 20 mm, đường kính trong 14 mm, dài 40 mm để in 3D, xuất STL và STEP, và cho biết thể tích.",
      [{"kind": "summary_regex", "pattern": r"(?i)(6[ .,]?4\d\d|20\s*[x×]\s*20\s*[x×]\s*40)"}])
-task("cad-box-lid", "Thiết kế vỏ hộp 3D hình chữ nhật 80 x 50 x 30 mm, thành dày 2 mm, hở mặt trên. Cho biết thể tích vật liệu.",
+task("cad-box-lid", "Thiết kế vỏ hộp 3D hình chữ nhật 80 x 50 x 30 mm, thành và đáy đều dày 2 mm, hở mặt trên. Cho biết thể tích vật liệu.",
      [{"kind": "summary_regex", "pattern": r"(?i)(22[ .,]?[01]\d\d)"}])
 
 out = Path(__file__).parent / "tasks_cad.json"
