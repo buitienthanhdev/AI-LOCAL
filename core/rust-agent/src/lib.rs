@@ -17,6 +17,7 @@ pub mod memory;
 pub mod state;
 pub mod agent;
 pub mod planner;
+pub mod skills;
 pub mod doctor;
 pub mod process;
 pub mod interaction;

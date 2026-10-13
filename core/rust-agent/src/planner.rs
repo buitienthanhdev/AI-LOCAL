@@ -97,6 +97,8 @@ pub struct TurnContext<'a> {
     pub conversation: &'a [String],
     /// Files the user attached to the request.
     pub attachments: &'a [UserAttachment],
+    /// Playbooks (skills/*.md) that match the request, rendered; "" when none.
+    pub playbooks: &'a str,
 }
 
 fn step_line(step: &StepRecord, full: bool) -> String {
@@ -139,6 +141,9 @@ pub fn user_turn(ctx: &TurnContext<'_>) -> String {
         for line in ctx.conversation {
             out.push_str(&format!("- {}\n", clip(line, 1500)));
         }
+    }
+    if !ctx.playbooks.trim().is_empty() {
+        out.push_str(&format!("\n# Playbooks for this kind of job (tested procedures: follow them)\n{}", ctx.playbooks));
     }
     if !ctx.recall.trim().is_empty() {
         out.push_str(&format!("\n# Relevant memory from earlier tasks\n{}", ctx.recall));
@@ -254,9 +259,108 @@ fn strip_autolinks_in(value: &mut Value) {
     }
 }
 
-/// The first JSON object in a model reply, if any.
+/// Repair the usual damage in a model's JSON: a backslash that is not a valid escape (Windows paths), raw line
+/// breaks inside strings, trailing commas, and a reply that was cut off (unclosed string / brackets). Starts at the
+/// first `{`; returns None when there is none.
+pub fn repair_json(text: &str) -> Option<String> {
+    let start = text.find('{')?;
+    let chars: Vec<char> = text[start..].chars().collect();
+    let mut out = String::with_capacity(chars.len() + 16);
+    let mut stack: Vec<char> = Vec::new();
+    let mut in_string = false;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if in_string {
+            match c {
+                '\\' => {
+                    let next = chars.get(i + 1).copied();
+                    let valid = match next {
+                        Some('"' | '\\' | '/' | 'b' | 'f' | 'n' | 'r' | 't') => true,
+                        Some('u') => chars.get(i + 2..i + 6).is_some_and(|h| h.len() == 4 && h.iter().all(|x| x.is_ascii_hexdigit())),
+                        _ => false,
+                    };
+                    if valid {
+                        out.push('\\');
+                        out.push(next.unwrap());
+                        i += 2;
+                        continue;
+                    }
+                    out.push_str("\\\\"); // a lone backslash: keep it as a literal backslash
+                }
+                '"' => {
+                    // a quote that ends the string only if what follows can follow a string in JSON
+                    let rest = chars[i + 1..].iter().find(|x| !x.is_whitespace());
+                    if matches!(rest, None | Some(',' | '}' | ']' | ':')) {
+                        in_string = false;
+                        out.push('"');
+                    } else {
+                        out.push_str("\\\"");
+                    }
+                }
+                '\n' => out.push_str("\\n"),
+                '\r' => out.push_str("\\r"),
+                '\t' => out.push_str("\\t"),
+                c if (c as u32) < 0x20 => {}
+                c => out.push(c),
+            }
+        } else {
+            match c {
+                '"' => {
+                    in_string = true;
+                    out.push('"');
+                }
+                '{' => {
+                    stack.push('}');
+                    out.push('{');
+                }
+                '[' => {
+                    stack.push(']');
+                    out.push('[');
+                }
+                '}' | ']' => {
+                    // a trailing comma before the closer
+                    let trimmed = out.trim_end().len();
+                    if out[..trimmed].ends_with(',') {
+                        out.truncate(trimmed - 1);
+                    }
+                    if stack.last() == Some(&c) {
+                        stack.pop();
+                    }
+                    out.push(c);
+                    if stack.is_empty() {
+                        return Some(out);
+                    }
+                }
+                c => out.push(c),
+            }
+        }
+        i += 1;
+    }
+    // cut off: close the open string and the open brackets
+    if in_string {
+        out.push('"');
+    }
+    let trimmed = out.trim_end().len();
+    if out[..trimmed].ends_with(',') {
+        out.truncate(trimmed - 1);
+    }
+    let trimmed = out.trim_end().len();
+    if out[..trimmed].ends_with(':') {
+        out.push_str("null");
+    }
+    while let Some(closer) = stack.pop() {
+        out.push(closer);
+    }
+    Some(out)
+}
+
+/// The first JSON object in a model reply, if any (repaired when it is not valid as written).
 pub fn extract_json_value(text: &str) -> Option<Value> {
-    extract_json_object(text).and_then(|raw| serde_json::from_str(raw).ok())
+    if let Some(v) = extract_json_object(text).and_then(|raw| serde_json::from_str(raw).ok()) {
+        return Some(v);
+    }
+    repair_json(text).and_then(|raw| serde_json::from_str(&raw).ok())
 }
 
 fn parse_action(action: &Value) -> Result<(String, Value), String> {
@@ -280,8 +384,15 @@ fn parse_action(action: &Value) -> Result<(String, Value), String> {
 /// Parse a planner reply into the actions to run in order (at most `MAX_ACTIONS_PER_REPLY`, ending at the
 /// first `task.*` call). The first action carries the thought and the plan.
 pub fn parse_reply(text: &str) -> Result<Vec<PlannerAction>, String> {
-    let raw = extract_json_object(text).ok_or_else(|| "the reply contains no JSON object".to_string())?;
-    let value: Value = serde_json::from_str(raw).map_err(|e| format!("the reply is not valid JSON: {e}"))?;
+    let raw = extract_json_object(text);
+    let value: Value = match raw.map(serde_json::from_str::<Value>) {
+        Some(Ok(v)) => v,
+        _ => {
+            // not valid as written (a Windows path with single backslashes, a cut-off reply): repair, then parse
+            let repaired = repair_json(text).ok_or_else(|| "the reply contains no JSON object".to_string())?;
+            serde_json::from_str(&repaired).map_err(|e| format!("the reply is not valid JSON: {e}"))?
+        }
+    };
     let thought = value.get("thought").and_then(Value::as_str).unwrap_or_default().to_string();
     let plan = match value.get("plan") {
         None | Some(Value::Null) => None,
@@ -320,6 +431,22 @@ pub fn parse_reply(text: &str) -> Result<Vec<PlannerAction>, String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn repairs_windows_paths_trailing_commas_and_cut_off_replies() {
+        // single backslashes (invalid escapes) in a path
+        let reply = r#"{"thought": "t", "actions": [{"tool": "filesystem.read", "args": {"path": "C:\Users\An\a.txt"}}]}"#;
+        let actions = parse_reply(reply).unwrap();
+        assert_eq!(actions[0].args["path"], "C:\\Users\\An\\a.txt".replace("\\\\", "\\"));
+        // a trailing comma and a raw line break inside a string
+        let reply = "{\"thought\": \"a\nb\", \"actions\": [{\"tool\": \"task.complete\", \"args\": {\"summary\": \"xong\",}},]}";
+        assert_eq!(parse_reply(reply).unwrap()[0].tool, "task.complete");
+        // cut off in the middle of the summary: the part that arrived is kept
+        let cut = r#"{"thought": "x", "actions": [{"tool": "task.complete", "args": {"summary": "Thư mục C:\Users\An co 3 tep"#;
+        let actions = parse_reply(cut).unwrap();
+        assert!(actions[0].args["summary"].as_str().unwrap().starts_with("Thư mục C:"));
+        assert!(parse_reply("no json here").is_err());
+    }
 
     #[test]
     fn parses_fenced_reply_with_braces_in_strings() {
