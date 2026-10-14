@@ -44,6 +44,9 @@ LIB_MARKERS = (
     "/python314/tcl/", "/python314/include/", "/python313/", "/python312/", "/python311/",
     # bộ công cụ Rust (~60.000 file tài liệu/mã nguồn của toolchain + crate tải về) và thư mục build
     "/.rustup/", "/.cargo/registry/", "/.cargo/git/", "/rust/target/", "/target/release/", "/target/debug/",
+    # đầu ra do chính Trợ lý sinh ra (ảnh chụp, tác phẩm, log, bản tham chiếu): tìm được theo tên, không đọc/embed
+    "/local-gemini-agent/artifacts/", "/local-gemini-agent/references/", "/local-gemini-agent/runtime/",
+    "/local-gemini-agent/logs/", "/local-gemini-agent/memory/", "/local-gemini-agent/third_party/",
 )
 CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".php", ".java", ".cs", ".cpp", ".c", ".h",
             ".go", ".rs", ".sql", ".sh", ".ps1", ".bat", ".yaml", ".yml", ".xml", ".ini", ".toml", ".ipynb"}
