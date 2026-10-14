@@ -2,9 +2,8 @@
 
 **One agent, one AI.** Company Brain (company RAG knowledge) lives in this repository
 (`services/company-brain`) and is the agent's knowledge subsystem: a single chat, a single orchestrator, and
-one model for every job: gemma-4-12B (Q8) served by llama.cpp (LlamaApp router), used both by the planner and
-by Company Brain's answering, extraction and media reading. Gemini API / Gemini Web / Ollama are only
-fallbacks for the planner. Company knowledge is just more tools (`knowledge.*`), searched natively by the Rust
+the brain order is Gemini Web -> Gemini API -> Ollama (cloud gemma4:31b, then a local Ollama
+model); Company Brain uses an Ollama model too. No llama.cpp anywhere (owner rule 2026-10-14). Company knowledge is just more tools (`knowledge.*`), searched natively by the Rust
 core (hybrid Qdrant vectors + SQLite FTS5, reciprocal rank fusion) with no Python process at query time; the
 index is refreshed on demand with `Cập nhật tri thức.bat`. Start/stop everything with
 `Chạy Trợ lý.bat` / `Tắt Trợ lý.bat` next to this folder. See [docs/unification.md](docs/unification.md).

@@ -23,10 +23,6 @@ QDRANT_URL = "http://127.0.0.1:6333"
 QDRANT_EXE = DATA_DIR.parent / "data" / "qdrant-server" / "qdrant.exe" if not os.environ.get("BRAIN_DATA_DIR")     else ROOT / "data" / "qdrant-server" / "qdrant.exe"
 
 OLLAMA_URL = "http://localhost:11434"
-# llama.cpp (llama-server): model đăng ký tên "llamacpp/<alias>" được gọi qua API kiểu OpenAI ở địa chỉ này
-# Một bộ não chung với Trợ lý máy tính: gemma-4-12B Q8 qua bộ định tuyến llama-server của LlamaApp (cổng 9931, tự nạp model).
-LLAMACPP_URL = os.environ.get("LLAMACPP_URL", "http://127.0.0.1:9931")
-LLAMACPP_PREFIX = "llamacpp/"
 EMBED_MODEL = "qwen3-embedding:0.6b"
 CHAT_MODEL = "gemma4:12b"   # đa phương thức: chữ + ảnh + audio, có tool calling
 MEDIA_MODEL = CHAT_MODEL     # model đọc ảnh/audio/video

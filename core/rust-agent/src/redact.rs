@@ -28,6 +28,11 @@ fn rules() -> &'static [Rule] {
                 r#"(?i)(["']?\b(?:api[ _-]?key|x-api-key|access[_-]?token|refresh[_-]?token|admin[_-]?token|client[_-]?secret|secret|password|passwd)["']?\s*[:=]\s*["']?)[^"'\s,}]+"#,
             ),
             whole(r"\b(?:sk-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{30,}|ghp_[A-Za-z0-9]{30,})\b"),
+            // AWS access key id, JWT, Slack token, PEM private key block.
+            whole(r"\bAKIA[0-9A-Z]{16}\b"),
+            whole(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"),
+            whole(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"),
+            whole(r"(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----"),
         ]
     })
 }

@@ -140,6 +140,11 @@ deny_file_patterns = [
     '^id_(rsa|dsa|ecdsa|ed25519)$',
     '\.(pem|pfx|p12|ppk|kdbx|gpg)$',
     '^(\.npmrc|\.pypirc|\.netrc|credentials\.json)$',
+    '^\.env$',
+    # The core's own approval channel: a task must never be able to answer its own confirmation request.
+    '\.(request|response)\.json$',
+    '^\.env\.(local|prod|production|dev|development|staging|test|secret|secrets)$',
+    '^\.env\.[a-z0-9_-]+\.local$',
 ]
 # In normal mode, writes outside these roots need confirmation.
 write_roots_normal = [
@@ -154,9 +159,16 @@ write_roots_normal = [
 # Writes here need confirmation in every mode except full_access (and usually fail without elevation).
 protected = ["%WINDIR%", "%ProgramFiles%", "%ProgramFiles(x86)%", "%ProgramData%"]
 
+[always_confirm]
+# Deleting inside these areas (agent housekeeping) does not need a confirmation; everywhere else a deletion does,
+# in every mode including full_access. Other always-confirm classes (data leaving the machine, shutdown/restart,
+# system changes, writes to protected locations, file: URLs, unclassifiable commands) have no exemption.
+scratch_roots = ["%TEMP%", "%TMP%", "C:\\temp", "{artifacts}"]
+
 [shell]
 # Refused in every mode.
 deny = [
+    '\.(request|response)\.json\b',                # the approval channel (see filesystem.deny_file_patterns)
     '-verb\s+runas',                               # elevation request (UAC prompt)
     '\b(consentpromptbehavior\w*|enablelua)\b',    # UAC configuration
     '\bfodhelper\b|\bcomputerdefaults\b|\beventvwr\b.*mscfile', # known UAC bypass vectors

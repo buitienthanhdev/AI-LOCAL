@@ -15,7 +15,7 @@ pub struct GatewaySettings {
     pub attachment_max_bytes: usize,
     pub attachment_total_bytes: usize,
     pub attachment_ttl_ms: u64,
-    /// Which brain is tried first: route names in order ("api", "primary", "fallback", "local_server",
+    /// Which brain is tried first: route names in order ("api", "primary", "fallback", "cloud",
     /// "local"); unlisted routes follow in their default order.
     #[serde(default)]
     pub brain_order: Vec<String>,
@@ -30,50 +30,58 @@ pub struct GatewaySettings {
     pub cloud: CloudCfg,
     #[serde(default)]
     pub api: ApiCfg,
+    /// Gemini Web through a dedicated Chrome profile (services/chrome-gemini). Off unless enabled.
     #[serde(default)]
-    pub local_server: LocalServerCfg,
+    pub chrome_gemini: ChromeGeminiCfg,
 }
 
-/// A local OpenAI-compatible server (llama.cpp llama-server, LM Studio). Tried before Ollama when set.
-#[derive(Debug, Clone, Deserialize, Default)]
-pub struct LocalServerCfg {
-    /// e.g. "http://127.0.0.1:8081"; empty = not used.
+/// The Chrome Gemini provider. Disabled by default; enabling it adds a route named "chrome_gemini" that
+/// is tried only where `brain_order` places it (unlisted routes come last), so it never changes the
+/// default routing by itself.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct ChromeGeminiCfg {
+    pub enabled: bool,
     pub base_url: String,
-    /// "" or "auto": the first model the server lists.
-    #[serde(default)]
-    pub model: String,
-    /// Program and arguments that start this server when it is down (%VAR% expanded), e.g. llama.cpp's
-    /// server with a fixed context, every layer on the GPU and one slot. Empty: the user runs it.
-    #[serde(default)]
-    pub launch: Vec<String>,
-    /// Longest wait for one answer before the next brain is tried.
-    #[serde(default = "default_local_server_attempt_ms")]
+    /// The gateway starts and supervises the adapter process (which in turn is the only owner of the profile).
+    pub manage_process: bool,
+    /// Python with lga_worker and aiohttp installed (the python-agent venv).
+    pub python: String,
+    pub source_dir: String,
+    /// Dedicated profile; never the user's own Chrome profile.
+    pub profile_dir: String,
+    /// JSON file of page selectors with `"verified": true`; without it no prompt is ever sent.
+    pub selectors: String,
+    /// "" = detect from the registry / standard install folders.
+    pub chrome_path: String,
+    pub startup_timeout_ms: u64,
     pub attempt_timeout_ms: u64,
-    /// Generation settings sent with every request (unset: the server's own defaults). A request can
-    /// override them through its metadata (thinking, temperature, top_p, top_k), which benchmarks use.
-    #[serde(default)]
-    pub thinking: bool,
-    #[serde(default)]
-    pub temperature: Option<f64>,
-    #[serde(default)]
-    pub top_p: Option<f64>,
-    #[serde(default)]
-    pub top_k: Option<u32>,
-    /// Use the model's native tool calling (its chat template's tool format) instead of the JSON reply.
-    #[serde(default)]
-    pub native_tools: bool,
-    /// The server can read images (llama.cpp with its vision projector, mmproj). When false, screenshots are
-    /// left out of the request with a note, instead of the server refusing the whole request.
-    #[serde(default = "default_true")]
-    pub vision: bool,
-    /// Other llama.cpp routers (e.g. LlamaApp's, "http://127.0.0.1:9931") whose loaded models are unloaded
-    /// before this server starts or when it runs too slowly: two copies of the model do not fit the GPU.
-    #[serde(default)]
-    pub release: Vec<String>,
+    /// On a normal stop, how long an exchange in flight may still finish before it is ended as
+    /// uncertain (never re-sent) and the adapter's own Chrome is closed.
+    pub shutdown_grace_ms: u64,
+    /// The model label the Gemini page must show, exactly, for a prompt to be sent. Locked by default to the one
+    /// model verified to answer on this account (3.1 Pro refused plain questions; see docs). Empty = no check
+    /// (discouraged). The adapter reads the label from the page; it never selects a model itself.
+    pub require_model: String,
 }
 
-fn default_local_server_attempt_ms() -> u64 {
-    90_000
+impl Default for ChromeGeminiCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: "http://127.0.0.1:8795".into(),
+            manage_process: true,
+            python: "services/python-agent/.venv/Scripts/python.exe".into(),
+            source_dir: "services/chrome-gemini".into(),
+            profile_dir: "runtime/gemini-profile".into(),
+            selectors: "configs/chrome-gemini.selectors.json".into(),
+            chrome_path: String::new(),
+            startup_timeout_ms: 30_000,
+            attempt_timeout_ms: 150_000,
+            shutdown_grace_ms: 10_000,
+            require_model: "Gemini Flash-Lite".into(),
+        }
+    }
 }
 
 /// The official Gemini API (optional). Used first when the user has saved a key: it is the fastest and
@@ -189,6 +197,3 @@ pub fn ms(value: u64) -> Duration {
     Duration::from_millis(value)
 }
 
-fn default_true() -> bool {
-    true
-}

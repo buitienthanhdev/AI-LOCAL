@@ -105,16 +105,58 @@ struct State {
     start_count: u32,
 }
 
+/// How a backend is asked to stop itself before it is terminated: `POST <url>` on loopback, then up to
+/// `wait` for the process to exit on its own.
+#[derive(Debug, Clone)]
+pub struct GracefulShutdown {
+    pub url: String,
+    pub wait: Duration,
+    /// Sent as `Authorization: Bearer <token>`; never logged, never put in the URL.
+    pub token: Option<String>,
+}
+
 pub struct ManagedProcess {
     pub spec: ProcessSpec,
     job: Arc<KillOnCloseJob>,
     redactor: Arc<Redactor>,
     state: Mutex<State>,
+    graceful: Option<GracefulShutdown>,
+}
+
+/// A bare `POST` to a loopback `http://host:port/path`; the reply is not needed, only that it was delivered.
+fn post_shutdown(url: &str, token: Option<&str>, timeout: Duration) -> std::io::Result<()> {
+    use std::net::{TcpStream, ToSocketAddrs};
+    let rest = url.strip_prefix("http://").ok_or_else(|| std::io::Error::other("shutdown url must be http://"))?;
+    let (authority, path) = rest.split_once('/').map_or((rest, "/".to_string()), |(a, p)| (a, format!("/{p}")));
+    if !(authority.starts_with("127.0.0.1:") || authority.starts_with("localhost:")) {
+        return Err(std::io::Error::other("shutdown url must be loopback"));
+    }
+    let address = authority.to_socket_addrs()?.next().ok_or_else(|| std::io::Error::other("unresolvable"))?;
+    let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(2))?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    let auth = token.map(|t| format!("Authorization: Bearer {t}\r\n")).unwrap_or_default();
+    let request = format!("POST {path} HTTP/1.1\r\nHost: {authority}\r\n{auth}Content-Length: 0\r\nConnection: close\r\n\r\n");
+    stream.write_all(request.as_bytes())?;
+    let mut head = [0u8; 64];
+    let n = stream.read(&mut head)?; // the adapter answers once its browser is closed
+    let line = String::from_utf8_lossy(&head[..n]);
+    // "HTTP/1.1 200 OK": anything but 200 means the adapter did not stop (wrong token, shutdown timed out).
+    if line.split_whitespace().nth(1) != Some("200") {
+        return Err(std::io::Error::other(format!("shutdown refused: {}", line.lines().next().unwrap_or(""))));
+    }
+    Ok(())
 }
 
 impl ManagedProcess {
     pub fn new(spec: ProcessSpec, job: Arc<KillOnCloseJob>, redactor: Arc<Redactor>) -> Self {
-        Self { spec, job, redactor, state: Mutex::new(State::default()) }
+        Self { spec, job, redactor, state: Mutex::new(State::default()), graceful: None }
+    }
+
+    /// Ask the process to stop itself (and close what it owns) before `stop()` terminates it.
+    pub fn with_graceful_shutdown(mut self, url: String, wait: Duration, token: Option<String>) -> Self {
+        self.graceful = Some(GracefulShutdown { url, wait, token });
+        self
     }
 
     fn running(state: &mut State) -> bool {
@@ -203,10 +245,23 @@ impl ManagedProcess {
             .expect("spawning a log thread");
     }
 
-    /// gemini-web2api-go has no graceful shutdown handler; terminating is the stop path.
+    /// Stop the process. With a graceful shutdown configured it is asked first and given `wait` to exit
+    /// (so what it owns, such as a browser profile, is closed cleanly); it is terminated if it does not.
+    /// Without one (gemini-web2api-go has no shutdown handler) terminating is the stop path.
     pub fn stop(&self) {
         let mut state = self.state.lock().expect("process lock");
         if let Some(mut child) = state.child.take() {
+            if let Some(graceful) = &self.graceful {
+                match post_shutdown(&graceful.url, graceful.token.as_deref(), graceful.wait) {
+                    Ok(()) => {
+                        let deadline = Instant::now() + graceful.wait;
+                        while Instant::now() < deadline && matches!(child.try_wait(), Ok(None)) {
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                    }
+                    Err(e) => crate::log::warn(&format!("{}: graceful shutdown request failed: {e}", self.spec.name)),
+                }
+            }
             let _ = child.kill();
             if let Ok(status) = child.wait() {
                 state.last_exit_code = status.code();
@@ -225,5 +280,60 @@ impl ManagedProcess {
             "starts": state.start_count,
             "last_exit_code": state.last_exit_code,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::TcpListener;
+
+    #[test]
+    fn shutdown_request_is_a_post_to_the_given_path_and_waits_for_the_reply() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let n = stream.read(&mut buf).unwrap();
+            std::thread::sleep(Duration::from_millis(200)); // the adapter closes its browser before answering
+            stream.write_all(b"HTTP/1.1 200 OK").unwrap();
+            String::from_utf8_lossy(&buf[..n]).into_owned()
+        });
+        let started = Instant::now();
+        post_shutdown(&format!("http://127.0.0.1:{port}/shutdown"), Some("s3cret"), Duration::from_secs(5)).unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(150), "must wait for the reply, not just the send");
+        let request = server.join().unwrap();
+        assert!(request.starts_with("POST /shutdown HTTP/1.1"), "{request}");
+        assert!(request.contains("Authorization: Bearer s3cret"), "{request}");
+        assert!(!request.lines().next().unwrap().contains("s3cret"), "token must not be in the request line");
+    }
+
+    #[test]
+    fn shutdown_url_must_be_loopback_http() {
+        assert!(post_shutdown("http://10.0.0.5:80/shutdown", None, Duration::from_secs(1)).is_err());
+        assert!(post_shutdown("https://127.0.0.1:80/shutdown", None, Duration::from_secs(1)).is_err());
+    }
+
+    #[test]
+    fn unreachable_adapter_fails_fast_so_stop_can_fall_back_to_terminate() {
+        let started = Instant::now();
+        assert!(post_shutdown("http://127.0.0.1:9/shutdown", None, Duration::from_secs(5)).is_err());
+        assert!(started.elapsed() < Duration::from_secs(4));
+    }
+
+    #[test]
+    fn a_non_200_reply_is_a_refusal_so_stop_does_not_wait_for_nothing() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 512];
+            let _ = stream.read(&mut buf).unwrap();
+            stream.write_all(b"HTTP/1.1 403 Forbidden").unwrap();
+        });
+        let error = post_shutdown(&format!("http://127.0.0.1:{port}/shutdown"), Some("wrong"), Duration::from_secs(5)).unwrap_err();
+        server.join().unwrap();
+        assert!(error.to_string().contains("403"), "{error}");
     }
 }

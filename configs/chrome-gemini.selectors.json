@@ -1,0 +1,14 @@
+{
+  "verified": true,
+  "verified_on": "2026-10-14",
+  "verified_how": "one supervised exchange on runtime/gemini-profile, UI language vi; evidence in docs/chrome-gemini-dom-evidence.md",
+  "input": "rich-textarea div[role=\"textbox\"][contenteditable=\"true\"]",
+  "send": "input-area-v2 .send-button button",
+  "answer": "model-response message-content",
+  "generating": "input-area-v2 .send-button.stop, model-response [aria-busy=\"true\"]",
+  "login_marker": "a[href*=\"accounts.google.com/SignOutOptions\"]",
+  "answer_done": "model-response .markdown[aria-busy=\"false\"]",
+  "pending": "pending-response, thinking-dots-animation",
+  "user_query": "user-query",
+  "model_label": "bard-mode-switcher button"
+}

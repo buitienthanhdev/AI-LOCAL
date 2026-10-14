@@ -101,7 +101,6 @@ async fn ensure_on_demand(route: &Route) {
         *last = Some(Instant::now());
     }
     let name = &route.backend.name;
-    route.backend.release_other_servers().await;
     if let Err(e) = crate::supervisor::spawn_independent(&on_demand.program, &on_demand.args) {
         crate::log::error(&format!("cannot start {name} server {}: {e}", on_demand.program.display()));
         return;
@@ -137,6 +136,7 @@ fn failed(backend: &str, error: &BackendError, started: Instant) -> Attempt {
         message: Some(error.message.clone()),
         duration_ms: millis(started),
         status: error.status,
+        last_observed_state: error.last_observed_state.clone(),
     }
 }
 
@@ -267,7 +267,7 @@ impl Gateway {
 
     /// Configured order, except that a brain known to be degraded (a local model running on the CPU) goes
     /// last until it recovers: it is still used when nothing else answers.
-    /// A request whose metadata names a brain ("brain": "local_server") is served by that brain only.
+    /// A request whose metadata names a brain ("brain": "cloud") is served by that brain only.
     fn ordered_routes(&self, request: &ChatRequest) -> Vec<&Arc<Route>> {
         if let Some(pinned) = request.metadata.get("brain").filter(|b| !b.is_empty()) {
             return self.routes.iter().filter(|r| r.backend.name == *pinned).collect();
@@ -307,6 +307,7 @@ impl Gateway {
                         message: Some(format!("circuit open for {wait}s more")),
                         duration_ms: 0,
                         status: None,
+                        last_observed_state: None,
                     });
                     continue;
                 }
@@ -320,7 +321,7 @@ impl Gateway {
                 match route.backend.chat(request, if pinned { remaining } else { route.attempt_budget(remaining) }).await {
                     Ok(reply) => {
                         route.breaker().record_success();
-                        attempts.push(Attempt { backend: name.clone(), ok: true, error_kind: None, message: None, duration_ms: millis(t0), status: Some(200) });
+                        attempts.push(Attempt { backend: name.clone(), ok: true, error_kind: None, message: None, duration_ms: millis(t0), status: Some(200), last_observed_state: None });
                         return Ok(ChatResult {
                             content: reply.content,
                             reasoning: reply.reasoning,
@@ -374,6 +375,7 @@ impl Gateway {
                     message: Some("circuit open".into()),
                     duration_ms: 0,
                     status: None,
+                    last_observed_state: None,
                 });
                 continue;
             }

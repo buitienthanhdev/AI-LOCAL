@@ -895,7 +895,7 @@ async function refreshHealth() {
 }
 
 /* ---------- Brain settings ---------- */
-const BRAIN_NAMES = { api: "Gemini API", primary: "Gemini Web", fallback: "Gemini Web (dự phòng)", local_server: "AI trên máy (llama.cpp)", local: "AI trên máy (Ollama)" };
+const BRAIN_NAMES = { api: "Gemini API", primary: "Gemini Web", fallback: "Gemini Web (dự phòng)", local: "AI trên máy (Ollama)" };
 let lastBrains = [];
 function brainState(b) {
   if (b.state === "ready" && b.breaker !== "open") return ["ok", "sẵn sàng"];
@@ -1159,12 +1159,20 @@ function render(turn) {
   region(turn, "ask", pending, () => {
     if (!pending) return null;
     if (pending.kind === "confirm") {
-      return el("div", { class: "card ask" },
-        el("h3", {}, "🔐 Trợ lý xin phép: ", friendly(pending.tool)),
-        (pending.reasons || []).length ? el("div", { class: "small" }, "Lý do cần hỏi: ", pending.reasons.join("; ")) : null,
-        keepOpen(turn, "ask", el("details", {}, el("summary", {}, "Xem chi tiết"), el("pre", {}, `${pending.tool}\n${short(pending.args, 2000)}`))),
+      // "always": the core refuses to run this class of action (deletion outside scratch folders, data leaving the PC,
+      // shutdown, system changes, protected writes, file: URLs, unclassifiable commands) without a person's yes, in
+      // every mode. The details are shown open: the person must see WHAT and WHERE before agreeing.
+      const always = pending.always === true;
+      const reasons = pending.reasons || [];
+      return el("div", { class: `card ask${always ? " always" : ""}` },
+        el("h3", {}, always ? "⚠ Hành động luôn cần bạn xác nhận: " : "🔐 Trợ lý xin phép: ", friendly(pending.tool)),
+        always ? el("div", { class: "small" }, "Việc này có thể không hoàn tác được hoặc gửi dữ liệu ra ngoài máy. Chỉ đồng ý nếu đúng là điều bạn muốn.") : null,
+        reasons.length ? (always
+          ? el("ul", { class: "plan reasons" }, reasons.map(r => el("li", {}, String(r))))
+          : el("div", { class: "small" }, "Lý do cần hỏi: ", reasons.join("; "))) : null,
+        keepOpen(turn, "ask", el("details", { open: always }, el("summary", {}, "Xem chi tiết"), el("pre", {}, `${pending.tool}\n${short(pending.args, 2000)}`))),
         el("div", { class: "actions" },
-          el("button", { class: "btn primary", onclick: () => respond({ approve: true }) }, "✓ Cho phép"),
+          el("button", { class: "btn primary", onclick: () => respond({ approve: true }) }, always ? "✓ Cho phép đúng hành động này" : "✓ Cho phép"),
           el("button", { class: "btn", onclick: () => respond({ approve: false }) }, "✗ Không cho phép")));
     }
     const input = el("input", { type: "text", placeholder: "Nhập câu trả lời…", onkeydown: e => { if (e.key === "Enter") respond({ answer: input.value }); } });
@@ -1190,16 +1198,27 @@ function render(turn) {
       task.plan && task.plan.length ? el("ul", { class: "plan" }, task.plan.map(p => el("li", {}, p))) : null);
   });
 
-  region(turn, "result", [st, task.final_summary, task.failure_reason, task.artifacts, task.escalation, task.updated_at && done, data.interrupted], () => {
+  region(turn, "result", [st, task.final_summary, task.failure_reason, task.artifacts, task.escalation, task.updated_at && done, data.interrupted,
+    task.completion_basis, task.unverified_checks], () => {
     if (!done && !task.escalation) return null;
     const files = [...new Set(task.artifacts || [])].filter(a => !/\.png$/i.test(a));
-    const kind = st === "completed" ? "ok" : st === "failed" ? "bad" : "warn";
+    // The core records HOW a completion was established (machine-readable); the text of the summary is not the source.
+    // "unverified" = accepted after repeated rejections although some check could not be confirmed. Older records have
+    // no completion_basis and are shown as before.
+    const unverified = st === "completed" && task.completion_basis === "unverified";
+    const unconfirmed = Array.isArray(task.unverified_checks) ? task.unverified_checks : [];
+    const kind = unverified ? "warn" : st === "completed" ? "ok" : st === "failed" ? "bad" : "warn";
     const head = data.interrupted ? "⚠ Bị gián đoạn (trợ lý đã tắt giữa chừng) — bấm ↻ Chạy tiếp"
+      : unverified ? "⚠ Đã xong nhưng chưa kiểm chứng đủ"
       : { ok: "✓ Hoàn thành", bad: "✗ Chưa làm được", warn: "■ Đã dừng" }[kind];
     const answer = task.final_summary || (task.failure_reason ? reasonText(task.failure_reason) : "");
     return el("div", { class: `answer ${kind}` },
       el("div", { class: "status" }, head, el("span", { class: "muted", style: "font-weight:400" }, ` · ${duration(task.created_at, task.updated_at)} · ${task.steps.length} bước`)),
       answer ? el("div", { class: "md" }, MD.render(answer)) : null,
+      unverified ? el("div", { class: "unverified", style: "margin-top:6px" },
+        el("div", { class: "txt" }, `Kết quả chưa được kiểm chứng đầy đủ: ${unconfirmed.length} điều kiện không xác nhận được. Hãy tự kiểm tra trước khi dùng.`),
+        unconfirmed.length ? el("details", {}, el("summary", {}, "Những điều kiện chưa xác nhận"),
+          el("ul", { class: "plan" }, unconfirmed.map(c => el("li", {}, String(c))))) : null) : null,
       task.escalation ? el("div", { class: "txt", style: "margin-top:6px" }, "⚠ Việc này cần quyền Administrator. Trợ lý không tự vượt UAC — hãy tự chạy với quyền quản trị nếu bạn đồng ý.") : null,
       files.length ? el("div", { class: "files" }, files.map(f => el("button", { class: "chip", title: `Mở thư mục chứa ${f}`, onclick: () => reveal(f) }, "📄", el("span", {}, fileName(f))))) : null,
       answer ? el("div", { class: "answer-actions" }, el("button", { class: "ghost", title: "Chép câu trả lời", onclick: e => copyText(answer, e.currentTarget) }, "📋 Sao chép")) : null);

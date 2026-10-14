@@ -8,7 +8,7 @@
       "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
       "output_schema": {"type": "object", "required": ["ready", "backend"], "properties": {"ready": {"type": "boolean"}, "backend": {"type": "string"}, "ocr_languages": {"type": "array", "items": {"type": "string"}}}},
       "timeout_ms": 40000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "none", "policy_category": "vision.observe"
+      "verification": "none", "policy_category": "vision.observe", "side_effects": "none"
     },
     {
       "name": "vision.ocr",
@@ -16,7 +16,7 @@
       "input_schema": {"type": "object", "additionalProperties": false, "properties": {"hwnd": {"type": "integer"}, "region": {"type": "object", "required": ["left", "top", "right", "bottom"], "properties": {"left": {"type": "integer"}, "top": {"type": "integer"}, "right": {"type": "integer"}, "bottom": {"type": "integer"}}}, "find_text": {"type": "string", "minLength": 1}, "vietnamese": {"type": "boolean", "default": false, "description": "Use the local Vietnamese OCR engine (reads diacritics). Set when the text on screen is Vietnamese."}, "max_lines": {"type": "integer", "minimum": 1, "maximum": 500, "default": 120}}},
       "output_schema": {"type": "object", "required": ["language", "lines", "screenshot"], "properties": {"language": {"type": "string"}, "screenshot": {"type": "string"}, "lines": {"type": "array", "items": {"type": "object", "required": ["text", "left", "top", "right", "bottom", "center_x", "center_y"], "properties": {"text": {"type": "string"}, "left": {"type": "integer"}, "top": {"type": "integer"}, "right": {"type": "integer"}, "bottom": {"type": "integer"}, "center_x": {"type": "integer"}, "center_y": {"type": "integer"}}}}}},
       "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "none", "policy_category": "vision.observe"
+      "verification": "none", "policy_category": "vision.observe", "side_effects": "possible"
     },
     {
       "name": "vision.locate",
@@ -32,7 +32,7 @@
       "input_schema": {"type": "object", "required": ["question"], "additionalProperties": false, "properties": {"question": {"type": "string", "minLength": 3}, "hwnd": {"type": "integer"}}},
       "output_schema": {"type": "object", "required": ["answer", "backend", "screenshot"], "properties": {"answer": {"type": "string"}, "backend": {"type": "string"}, "screenshot": {"type": "string"}}},
       "timeout_ms": 180000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "none", "policy_category": "vision.observe"
+      "verification": "none", "policy_category": "vision.observe", "side_effects": "possible"
     }
   ]
 }

@@ -22,6 +22,9 @@ pub enum ErrorKind {
     Config,
     /// The request itself is invalid (too long, malformed). Failing over would not help.
     ClientError,
+    /// A browser adapter may already have sent the prompt (or is still generating the answer). Never
+    /// retried on the same backend and not held against its breaker; other brains may still answer.
+    SubmissionUncertain,
 }
 
 impl ErrorKind {
@@ -33,6 +36,7 @@ impl ErrorKind {
             ErrorKind::Capability => "capability",
             ErrorKind::Config => "config",
             ErrorKind::ClientError => "client_error",
+            ErrorKind::SubmissionUncertain => "submission_uncertain",
         }
     }
 
@@ -56,15 +60,22 @@ pub struct BackendError {
     pub kind: ErrorKind,
     pub message: String,
     pub status: Option<u16>,
+    /// A browser adapter's last observation of its page, when the exchange ended without an answer.
+    pub last_observed_state: Option<String>,
 }
 
 impl BackendError {
     pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
-        Self { kind, message: message.into(), status: None }
+        Self { kind, message: message.into(), status: None, last_observed_state: None }
+    }
+
+    pub fn with_observed(mut self, state: Option<String>) -> Self {
+        self.last_observed_state = state;
+        self
     }
 
     pub fn with_status(kind: ErrorKind, message: impl Into<String>, status: u16) -> Self {
-        Self { kind, message: message.into(), status: Some(status) }
+        Self { kind, message: message.into(), status: Some(status), last_observed_state: None }
     }
 }
 

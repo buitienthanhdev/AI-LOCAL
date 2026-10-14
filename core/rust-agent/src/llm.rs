@@ -119,7 +119,7 @@ pub struct GatewayProvider {
 }
 
 /// Environment variables a benchmark sets to pin the brain and its generation settings
-/// (LGA_BRAIN=local_server, LGA_THINKING=on, LGA_TEMPERATURE=1.0, LGA_TOP_P=0.95, LGA_TOP_K=64,
+/// (LGA_BRAIN=cloud, LGA_THINKING=on, LGA_TEMPERATURE=1.0, LGA_TOP_P=0.95, LGA_TOP_K=64,
 /// LGA_NATIVE_TOOLS=on).
 const BENCHMARK_KNOBS: [(&str, &str); 7] = [
     ("LGA_BRAIN", "brain"),

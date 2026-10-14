@@ -30,7 +30,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "desktop.observe"
+      "policy_category": "desktop.observe", "side_effects": "none"
     },
     {
       "name": "desktop.launch_app",
@@ -103,7 +103,7 @@
       "idempotent": false,
       "supports_rollback": true,
       "verification": "self",
-      "policy_category": "desktop.app"
+      "policy_category": "desktop.app", "side_effects": "process"
     },
     {
       "name": "desktop.close_app",
@@ -146,7 +146,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "desktop.app"
+      "policy_category": "desktop.app", "side_effects": "yes"
     },
     {
       "name": "desktop.focus_window",
@@ -180,7 +180,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "desktop.input"
+      "policy_category": "desktop.input", "side_effects": "yes"
     },
     {
       "name": "desktop.wait_for_window",
@@ -221,7 +221,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "desktop.observe"
+      "policy_category": "desktop.observe", "side_effects": "none"
     },
     {
       "name": "desktop.inspect_ui",
@@ -284,7 +284,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "desktop.observe"
+      "policy_category": "desktop.observe", "side_effects": "none"
     },
     {
       "name": "desktop.find_element",
@@ -344,7 +344,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "desktop.observe"
+      "policy_category": "desktop.observe", "side_effects": "none"
     },
     {
       "name": "desktop.read_element",
@@ -402,7 +402,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "desktop.observe"
+      "policy_category": "desktop.observe", "side_effects": "none"
     },
     {
       "name": "desktop.set_value",
@@ -443,7 +443,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "desktop.input"
+      "policy_category": "desktop.input", "side_effects": "yes"
     },
     {
       "name": "desktop.click",
@@ -512,6 +512,12 @@
           },
           "element": {
             "$ref": "#/$defs/element"
+          },
+          "under_pointer": {
+            "type": [
+              "object",
+              "null"
+            ]
           }
         }
       },
@@ -521,7 +527,7 @@
       "idempotent": false,
       "supports_rollback": false,
       "verification": "observe",
-      "policy_category": "desktop.input"
+      "policy_category": "desktop.input", "side_effects": "yes"
     },
     {
       "name": "desktop.move_mouse",
@@ -563,7 +569,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "desktop.input"
+      "policy_category": "desktop.input", "side_effects": "yes"
     },
     {
       "name": "desktop.drag",
@@ -608,7 +614,7 @@
       "idempotent": false,
       "supports_rollback": false,
       "verification": "observe",
-      "policy_category": "desktop.input"
+      "policy_category": "desktop.input", "side_effects": "yes"
     },
     {
       "name": "desktop.scroll",
@@ -652,7 +658,7 @@
       "idempotent": false,
       "supports_rollback": false,
       "verification": "observe",
-      "policy_category": "desktop.input"
+      "policy_category": "desktop.input", "side_effects": "yes"
     },
     {
       "name": "desktop.type",
@@ -710,7 +716,7 @@
       "idempotent": false,
       "supports_rollback": false,
       "verification": "observe",
-      "policy_category": "desktop.input"
+      "policy_category": "desktop.input", "side_effects": "yes"
     },
     {
       "name": "desktop.press_key",
@@ -744,7 +750,7 @@
       "idempotent": false,
       "supports_rollback": false,
       "verification": "observe",
-      "policy_category": "desktop.input"
+      "policy_category": "desktop.input", "side_effects": "yes"
     },
     {
       "name": "desktop.hotkey",
@@ -777,7 +783,7 @@
       "idempotent": false,
       "supports_rollback": false,
       "verification": "observe",
-      "policy_category": "desktop.input"
+      "policy_category": "desktop.input", "side_effects": "yes"
     },
     {
       "name": "desktop.screenshot",
@@ -847,7 +853,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "desktop.observe"
+      "policy_category": "desktop.observe", "side_effects": "possible"
     },
     {
       "name": "desktop.read_window_text",
@@ -896,7 +902,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "desktop.observe"
+      "policy_category": "desktop.observe", "side_effects": "none"
     },
     {
       "name": "desktop.save_as",
@@ -957,7 +963,7 @@
       "idempotent": false,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "desktop.input"
+      "policy_category": "desktop.input", "side_effects": "yes"
     },
     {
       "name": "desktop.observe",
@@ -1031,6 +1037,12 @@
               "string",
               "null"
             ]
+          },
+          "no_change": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -1040,7 +1052,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "desktop.observe"
+      "policy_category": "desktop.observe", "side_effects": "possible"
     }
   ],
   "$defs": {
