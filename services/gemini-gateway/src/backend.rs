@@ -49,6 +49,9 @@ pub enum Kind {
     GeminiApi { api_key: String, discovered_default: Mutex<Option<String>>, candidates: Mutex<Vec<String>> },
     /// A local OpenAI-compatible server (llama.cpp's llama-server, LM Studio, ...).
     OpenAiServer { discovered_default: Mutex<Option<String>> },
+    /// The Chrome Gemini adapter (services/chrome-gemini): a web page behind a transaction contract, not an
+    /// OpenAI-style API. Its calls are never repeated blindly; see provider.rs.
+    ChromeGemini,
 }
 
 #[derive(Debug, Clone)]
@@ -83,17 +86,10 @@ pub struct Backend {
     degraded_until: Mutex<Option<std::time::Instant>>,
     /// Local server only: slow answers (or timeouts) in a row.
     slow_streak: std::sync::atomic::AtomicU32,
-    /// Local server only: when the other routers were last checked for a second copy of the model.
-    last_release_check: Mutex<Option<std::time::Instant>>,
     /// Local server only: thinking mode and sampling.
     pub generation: Generation,
-    /// Local server only: other llama.cpp routers whose loaded models are unloaded before this server starts
-    /// or when it turns out too slow. Two copies of a 13 GB model do not fit a 16 GB GPU; the driver then
-    /// silently spills into system memory and both run at CPU speed.
-    pub release: Vec<String>,
-    /// Local server only: the gateway started this server itself (its port is in `base_url`), so it may stop
-    /// it when it is degraded; the next request starts it again with the GPU memory free.
-    pub managed: bool,
+    /// ChromeGemini only: bearer token the adapter requires on /v1/chat (random per gateway start).
+    pub adapter_token: Option<String>,
 }
 
 /// Below this generation speed a local model is (partly) running on the CPU, typically because it was
@@ -107,24 +103,6 @@ const DEGRADED_STREAK: u32 = 2;
 /// A degraded model is reloaded at most this often (a reload that cannot do better must not loop), and is
 /// tried after the other brains for this long.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(600);
-
-/// Unload every loaded model of the given llama.cpp routers (`GET /v1/models`, `POST /models/unload`).
-async fn release_servers(client: &reqwest::Client, bases: &[String], name: &str) {
-    for base in bases {
-        let base = base.trim_end_matches('/');
-        let Ok(response) = client.get(format!("{base}/v1/models")).timeout(Duration::from_secs(5)).send().await else { continue };
-        let Ok(listing) = response.json::<Value>().await else { continue };
-        for model in listing["data"].as_array().cloned().unwrap_or_default() {
-            if model.pointer("/status/value").and_then(Value::as_str) != Some("loaded") {
-                continue;
-            }
-            let id = model["id"].as_str().unwrap_or_default().to_string();
-            let unloaded = client.post(format!("{base}/models/unload")).timeout(Duration::from_secs(30))
-                .json(&json!({"model": id})).send().await.is_ok_and(|r| r.status().is_success());
-            crate::log::info(&format!("{name}: unloaded {id} from {base} to free GPU memory ({})", if unloaded { "ok" } else { "failed" }));
-        }
-    }
-}
 
 impl Default for Generation {
     fn default() -> Self {
@@ -170,10 +148,8 @@ impl Backend {
             last_reload: Mutex::new(None),
             degraded_until: Mutex::new(None),
             slow_streak: std::sync::atomic::AtomicU32::new(0),
-            last_release_check: Mutex::new(None),
             generation: Generation::default(),
-            release: Vec::new(),
-            managed: false,
+            adapter_token: None,
         }
     }
 
@@ -184,42 +160,6 @@ impl Backend {
         }
         let on = request.metadata.get("native_tools").map_or(self.generation.native_tools, |v| v == "on" || v == "true");
         request.tools.as_ref().filter(|_| on)
-    }
-
-    /// Unload every model the configured other routers hold (best effort, a few seconds at most).
-    pub async fn release_other_servers(&self) {
-        release_servers(&self.client, &self.release, &self.name).await;
-    }
-
-    /// The assistant has priority on the GPU: before answering, a model another router loaded meanwhile (e.g.
-    /// LlamaApp's chat) is unloaded, since both copies do not fit and both would crawl. Checked at most every
-    /// 10 s (one local HTTP request).
-    async fn claim_gpu(&self) {
-        if !self.managed || self.release.is_empty() {
-            return;
-        }
-        {
-            let mut last = self.last_release_check.lock().expect("release lock");
-            if last.is_some_and(|at| at.elapsed() < Duration::from_secs(10)) {
-                return;
-            }
-            *last = Some(std::time::Instant::now());
-        }
-        self.release_other_servers().await;
-    }
-
-    /// Stop the llama.cpp server this gateway started (matched by its port on the command line).
-    fn stop_managed_server(&self) {
-        let Some(port) = self.base_url.rsplit(':').next().and_then(|p| p.split('/').next()).filter(|p| p.chars().all(|c| c.is_ascii_digit())) else { return };
-        let script = format!(
-            "Get-CimInstance Win32_Process | Where-Object {{ $_.Name -like 'llama*' -and $_.CommandLine -like '*--port {port}*' }} | \
-             ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
-        );
-        use std::os::windows::process::CommandExt;
-        let _ = std::process::Command::new("powershell")
-            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-            .creation_flags(0x0800_0000)
-            .status();
     }
 
     /// True while a local model is known to be too slow (it timed out or generated far below GPU speed).
@@ -261,17 +201,6 @@ impl Backend {
             }
             *last = Some(std::time::Instant::now());
         }
-        if self.managed {
-            // Our own server: free the GPU and restart it (the next request starts it again on demand).
-            crate::log::warn(&format!("{}: too slow (model not fully on the GPU); restarting it with the GPU freed", self.name));
-            let release = self.release.clone();
-            let client = self.client.clone();
-            let name = self.name.clone();
-            self.stop_managed_server();
-            tokio::spawn(async move { release_servers(&client, &release, &name).await });
-            *self.degraded_until.lock().expect("degraded lock") = None;
-            return;
-        }
         let (client, url, model) = (self.client.clone(), format!("{}/models/unload", self.base_url), model.to_string());
         tokio::spawn(async move {
             let _ = client.post(url).timeout(Duration::from_secs(30)).json(&json!({"model": model})).send().await;
@@ -298,6 +227,16 @@ impl Backend {
         Self::new(name, base_url, model, Kind::OpenAiServer { discovered_default: Mutex::new(None) }, store, connect)
     }
 
+    pub fn with_adapter_token(mut self, token: Option<String>) -> Self {
+        self.adapter_token = token;
+        self
+    }
+
+    pub fn chrome_gemini(name: &str, base_url: &str, store: Arc<AttachmentStore>, connect: Duration) -> Self {
+        // The model is whatever the page shows; nothing is configured here and nothing is assumed.
+        Self::new(name, base_url, "", Kind::ChromeGemini, store, connect)
+    }
+
     pub fn local(name: &str, base_url: &str, model: &str, num_ctx: u32, store: Arc<AttachmentStore>, connect: Duration) -> Self {
         Self::new(name, base_url, model, Kind::Ollama { num_ctx }, store, connect)
     }
@@ -309,6 +248,7 @@ impl Backend {
             Kind::OpenAiServer { .. } => "openai_server",
             Kind::WebAiToApi { .. } => "webai_to_api",
             Kind::Ollama { .. } => "ollama",
+            Kind::ChromeGemini => "chrome_gemini",
         }
     }
 
@@ -319,6 +259,7 @@ impl Backend {
             Kind::OpenAiServer { .. } => "/v1/chat/completions",
             Kind::WebAiToApi { .. } => "/v1/stateless/chat/completions",
             Kind::Ollama { .. } => "/api/chat",
+            Kind::ChromeGemini => "/v1/chat",
         }
     }
 
@@ -334,7 +275,7 @@ impl Backend {
             return requested.to_string();
         }
         match &self.kind {
-            Kind::Web2ApiGo { .. } | Kind::Ollama { .. } => self.default_model.clone(),
+            Kind::Web2ApiGo { .. } | Kind::Ollama { .. } | Kind::ChromeGemini => self.default_model.clone(),
             Kind::OpenAiServer { discovered_default } => {
                 if !self.default_model.is_empty() && self.default_model != "auto" {
                     self.default_model.clone()
@@ -369,6 +310,7 @@ impl Backend {
                 json!({"type": "image_url", "image_url": {"url": attachment.data_url()}})
             }
             Kind::Ollama { .. } => unreachable!("Ollama images are sent in the message's images field"),
+            Kind::ChromeGemini => return Err(BackendError::new(ErrorKind::Capability, format!("{}: images are not supported by this provider", self.name))),
             Kind::WebAiToApi { .. } => {
                 let ext = match attachment.mime_type.as_str() {
                     "image/jpeg" => "jpg",
@@ -556,6 +498,14 @@ impl Backend {
                     _ => BackendError::with_status(ErrorKind::BackendDown, format!("{name}: upstream error {status}: {message}"), status),
                 }
             }
+            // The adapter reports outcomes in the transaction body; an HTTP error here means the exchange
+            // itself broke, so it is not known whether the prompt left.
+            Kind::ChromeGemini => match status {
+                400 => BackendError::with_status(ErrorKind::ClientError, format!("{name}: bad request: {}", truncate(body)), status),
+                // Rejected before the adapter looked at the prompt: nothing was sent, the token is misconfigured.
+                401 | 403 => BackendError::with_status(ErrorKind::Config, format!("{name}: adapter refused the gateway's token"), status),
+                _ => BackendError::with_status(ErrorKind::SubmissionUncertain, format!("{name}: adapter error {status}: {}", truncate(body)), status),
+            },
         }
     }
 
@@ -591,7 +541,60 @@ impl Backend {
         Ok(response)
     }
 
+    /// One exchange with the Chrome Gemini adapter. Exactly one HTTP call, never repeated here.
+    async fn chat_transaction(&self, request: &ChatRequest, timeout: Duration) -> Result<Reply, BackendError> {
+        let prompt = crate::provider::flatten_prompt(&self.name, &request.messages)?;
+        let transaction_id = request
+            .metadata
+            .get("transaction_id")
+            .filter(|id| !id.is_empty())
+            .cloned()
+            .unwrap_or_else(|| hex::encode(rand::random::<[u8; 16]>()));
+        // The adapter gives up a little before the HTTP call does, so its verdict arrives with the answer.
+        let adapter_budget = timeout.saturating_sub(Duration::from_secs(5)).max(Duration::from_secs(1));
+        let payload = json!({"prompt": prompt, "transaction_id": transaction_id, "timeout_s": adapter_budget.as_secs_f64()});
+        let started = std::time::Instant::now();
+        let mut call = self.client.post(format!("{}{}", self.base_url, self.chat_path())).timeout(timeout);
+        if let Some(token) = &self.adapter_token {
+            call = call.bearer_auth(token);
+        }
+        let response = call
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| {
+                if e.is_connect() {
+                    // The adapter was never reached: nothing was sent.
+                    BackendError::new(ErrorKind::BackendDown, format!("{}: adapter not reachable", self.name))
+                } else {
+                    // Sent, but no verdict came back (timeout, reset): the page may have the prompt.
+                    BackendError::new(ErrorKind::SubmissionUncertain, format!("{}: no verdict from the adapter ({e}); transaction {transaction_id}", self.name))
+                }
+            })?;
+        let status = response.status().as_u16();
+        let text = response
+            .text()
+            .await
+            .map_err(|e| BackendError::new(ErrorKind::SubmissionUncertain, format!("{}: adapter reply unreadable: {e}", self.name)))?;
+        if status != 200 {
+            return Err(self.classify(status, &text));
+        }
+        let transaction: crate::provider::Transaction = serde_json::from_str(&text)
+            .map_err(|e| BackendError::new(ErrorKind::SubmissionUncertain, format!("{}: adapter reply is not a transaction: {e}", self.name)))?;
+        let done = crate::provider::interpret(&self.name, &transaction)?;
+        Ok(Reply {
+            content: done.content,
+            reasoning: None,
+            // Verified by the page, or labelled as unknown: never the configured name.
+            model: done.model_verified.unwrap_or_else(|| "unverified".into()),
+            usage: Some(json!({"transaction": done.transaction, "adapter_ms": started.elapsed().as_millis() as u64})),
+        })
+    }
+
     pub async fn chat(&self, request: &ChatRequest, timeout: Duration) -> Result<Reply, BackendError> {
+        if matches!(self.kind, Kind::ChromeGemini) {
+            return self.chat_transaction(request, timeout).await;
+        }
         // Gemini API with model "auto": a model that is overloaded (503 "high demand"), rate limited or gone
         // is skipped for the next candidate; the one that answers becomes the default.
         if let Kind::GeminiApi { discovered_default, candidates, .. } = &self.kind {
@@ -633,7 +636,6 @@ impl Backend {
 
     async fn chat_once(&self, request: &ChatRequest, timeout: Duration) -> Result<Reply, BackendError> {
         let model = self.resolve_model(&request.model);
-        self.claim_gpu().await;
         let response = match self.post(request, false, timeout).await {
             Ok(response) => response,
             Err(e) => {
@@ -705,6 +707,16 @@ impl Backend {
     /// Stream deltas into `tx`. Returns whether anything was emitted alongside the outcome, so the caller
     /// knows whether failing over is still safe.
     pub async fn stream(&self, request: &ChatRequest, timeout: Duration, tx: &mpsc::Sender<StreamDelta>) -> (bool, Result<(), BackendError>) {
+        if matches!(self.kind, Kind::ChromeGemini) {
+            // No incremental output from a page: the whole answer arrives as one delta.
+            return match self.chat_transaction(request, timeout).await {
+                Ok(reply) => {
+                    let sent = tx.send(StreamDelta { content: reply.content, reasoning: None }).await.is_ok();
+                    (sent, Ok(()))
+                }
+                Err(e) => (false, Err(e)),
+            };
+        }
         let mut emitted = false;
         let result = async {
             let response = self.post(request, true, timeout).await?;
@@ -802,6 +814,20 @@ impl Backend {
 
     pub async fn probe(&self) -> Result<ProbeResult, BackendError> {
         match &self.kind {
+            Kind::ChromeGemini => {
+                let (status, body) = self.get_json("/health", PRIMARY_PROBE_TIMEOUT, None).await?;
+                if status != 200 {
+                    return Ok(ProbeResult { state: BackendState::Unavailable, detail: format!("health returned {status}"), capabilities: Capabilities::NONE });
+                }
+                let state = match body.get("state").and_then(Value::as_str) {
+                    Some("ready") => BackendState::Ready,
+                    Some("degraded") => BackendState::Degraded,
+                    _ => BackendState::Unavailable,
+                };
+                let detail = body.get("detail").and_then(Value::as_str).unwrap_or("").to_string();
+                let images = body.pointer("/capabilities/images").and_then(Value::as_bool).unwrap_or(false);
+                Ok(ProbeResult { state, detail, capabilities: Capabilities { chat: state == BackendState::Ready, images } })
+            }
             Kind::GeminiApi { .. } | Kind::OpenAiServer { .. } => match self.list_models().await {
                 Ok(models) if !models.is_empty() => Ok(ProbeResult {
                     state: BackendState::Ready,
@@ -879,12 +905,23 @@ impl Backend {
     }
 
     pub async fn list_models(&self) -> Result<Vec<ModelInfo>, BackendError> {
+        if matches!(self.kind, Kind::ChromeGemini) {
+            // Only a model the page actually shows is listed.
+            let (_, body) = self.get_json("/health", PRIMARY_PROBE_TIMEOUT, None).await?;
+            return Ok(body
+                .get("model_verified")
+                .and_then(Value::as_str)
+                .map(|id| ModelInfo { id: id.to_string(), backend: self.name.clone(), description: "model shown by the Gemini page".into() })
+                .into_iter()
+                .collect());
+        }
         let (path, timeout) = match self.kind {
             Kind::Ollama { .. } => ("/api/tags", PRIMARY_PROBE_TIMEOUT),
             Kind::Web2ApiGo { .. } => ("/v1/models", PRIMARY_PROBE_TIMEOUT),
             Kind::WebAiToApi { .. } => ("/v1/stateless/models", FALLBACK_PROBE_TIMEOUT),
             Kind::GeminiApi { .. } => ("/models", FALLBACK_PROBE_TIMEOUT),
             Kind::OpenAiServer { .. } => ("/v1/models", PRIMARY_PROBE_TIMEOUT),
+            Kind::ChromeGemini => unreachable!("handled above"),
         };
         let (status, body) = self.get_json(path, timeout, None).await?;
         if status != 200 {

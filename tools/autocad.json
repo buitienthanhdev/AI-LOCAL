@@ -79,7 +79,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "autocad.read"
+      "policy_category": "autocad.read", "side_effects": "none"
     },
     {
       "name": "autocad.launch",
@@ -129,7 +129,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "autocad.write"
+      "policy_category": "autocad.write", "side_effects": "process"
     },
     {
       "name": "autocad.new_document",
@@ -172,7 +172,7 @@
       "idempotent": false,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "autocad.write"
+      "policy_category": "autocad.write", "side_effects": "yes"
     },
     {
       "name": "autocad.list_documents",
@@ -202,7 +202,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "autocad.read"
+      "policy_category": "autocad.read", "side_effects": "none"
     },
     {
       "name": "autocad.get_entities",
@@ -255,7 +255,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "autocad.read"
+      "policy_category": "autocad.read", "side_effects": "none"
     },
     {
       "name": "autocad.create_line",
@@ -288,7 +288,7 @@
       "idempotent": false,
       "supports_rollback": true,
       "verification": "self",
-      "policy_category": "autocad.write"
+      "policy_category": "autocad.write", "side_effects": "yes"
     },
     {
       "name": "autocad.create_circle",
@@ -322,7 +322,7 @@
       "idempotent": false,
       "supports_rollback": true,
       "verification": "self",
-      "policy_category": "autocad.write"
+      "policy_category": "autocad.write", "side_effects": "yes"
     },
     {
       "name": "autocad.create_polyline",
@@ -360,7 +360,7 @@
       "idempotent": false,
       "supports_rollback": true,
       "verification": "self",
-      "policy_category": "autocad.write"
+      "policy_category": "autocad.write", "side_effects": "yes"
     },
     {
       "name": "autocad.create_text",
@@ -404,7 +404,7 @@
       "idempotent": false,
       "supports_rollback": true,
       "verification": "self",
-      "policy_category": "autocad.write"
+      "policy_category": "autocad.write", "side_effects": "yes"
     },
     {
       "name": "autocad.create_layer",
@@ -451,7 +451,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "autocad.write"
+      "policy_category": "autocad.write", "side_effects": "yes"
     },
     {
       "name": "autocad.verify_geometry",
@@ -563,7 +563,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "autocad.read"
+      "policy_category": "autocad.read", "side_effects": "none"
     },
     {
       "name": "autocad.save",
@@ -607,7 +607,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "autocad.write"
+      "policy_category": "autocad.write", "side_effects": "yes"
     },
     {
       "name": "autocad.export_dxf",
@@ -661,7 +661,7 @@
       "idempotent": false,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "autocad.write"
+      "policy_category": "autocad.write", "side_effects": "yes"
     },
     {
       "name": "autocad.export_pdf",
@@ -719,7 +719,7 @@
       "idempotent": false,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "autocad.write"
+      "policy_category": "autocad.write", "side_effects": "yes"
     },
     {
       "name": "autocad.zoom_extents",
@@ -746,7 +746,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "autocad.write"
+      "policy_category": "autocad.write", "side_effects": "yes"
     },
     {
       "name": "autocad.erase",
@@ -788,7 +788,7 @@
       "idempotent": false,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "autocad.destructive"
+      "policy_category": "autocad.destructive", "side_effects": "yes"
     },
     {
       "name": "autocad.draw_floor_plan",
@@ -978,7 +978,7 @@
       "idempotent": false,
       "supports_rollback": true,
       "verification": "self",
-      "policy_category": "autocad.write"
+      "policy_category": "autocad.write", "side_effects": "yes"
     }
   ],
   "$defs": {

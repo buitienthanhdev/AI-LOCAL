@@ -253,7 +253,7 @@
       "idempotent": false,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "paint.draw"
+      "policy_category": "paint.draw", "side_effects": "yes"
     },
     {
       "name": "art.brief",
@@ -358,7 +358,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "paint.observe"
+      "policy_category": "paint.observe", "side_effects": "possible"
     },
     {
       "name": "art.paint",
@@ -465,7 +465,7 @@
       "idempotent": false,
       "supports_rollback": false,
       "verification": "self",
-      "policy_category": "paint.draw"
+      "policy_category": "paint.draw", "side_effects": "yes"
     }
   ]
 }

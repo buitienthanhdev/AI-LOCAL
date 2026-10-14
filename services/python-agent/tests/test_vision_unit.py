@@ -110,4 +110,6 @@ async def test_auto_backend_prefers_gemini_then_ui_tars(config: Config, monkeypa
     monkeypatch.setattr(vp, "_gemini_can_do_images", lambda: True)
     assert isinstance(await vp.grounding_backend(), GeminiGrounding)
     monkeypatch.setattr(vp, "_gemini_can_do_images", lambda: False)
+    # Independent of the local config (the owner's config.toml has no UI-TARS model any more).
+    monkeypatch.setattr(vp, "_ui_tars_backend", lambda: UiTarsGrounding("http://127.0.0.1:1/v1", "m", 0))
     assert isinstance(await vp.grounding_backend(), UiTarsGrounding)

@@ -9,7 +9,7 @@ outcome.
     python tests/bench/run_bench.py --profile google --only file-create,excel-report --repeat 3
     python tests/bench/run_bench.py --compare logs/bench/A.json logs/bench/B.json
 
-Profiles pin the brain to the local llama.cpp model (LGA_BRAIN=local_server) and set its thinking mode and
+Profiles pin the brain to the local Ollama model (LGA_BRAIN=local) and set its thinking mode and
 sampling through request metadata, so they are compared on the same model with nothing else changed.
 Reports: logs/bench/<timestamp>-<profile>.json and .md.
 """
@@ -39,18 +39,18 @@ TASK_TIMEOUT_S = 900
 WEEKDAYS_VI = ["thứ hai", "thứ ba", "thứ tư", "thứ năm", "thứ sáu", "thứ bảy", "chủ nhật"]
 
 PROFILES: dict[str, dict[str, str]] = {
-    # The server's own defaults (llama.cpp: temperature 0.8, top_k 40, top_p 0.95), thinking off.
-    "baseline": {"LGA_BRAIN": "local_server", "LGA_THINKING": "off"},
+    # The server's own defaults (temperature 0.8, top_k 40, top_p 0.95), thinking off.
+    "baseline": {"LGA_BRAIN": "local", "LGA_THINKING": "off"},
     # Google's recommended Gemma 4 sampling.
-    "google": {"LGA_BRAIN": "local_server", "LGA_THINKING": "off", "LGA_TEMPERATURE": "1.0", "LGA_TOP_P": "0.95", "LGA_TOP_K": "64"},
-    "google-think": {"LGA_BRAIN": "local_server", "LGA_THINKING": "on", "LGA_TEMPERATURE": "1.0", "LGA_TOP_P": "0.95", "LGA_TOP_K": "64"},
+    "google": {"LGA_BRAIN": "local", "LGA_THINKING": "off", "LGA_TEMPERATURE": "1.0", "LGA_TOP_P": "0.95", "LGA_TOP_K": "64"},
+    "google-think": {"LGA_BRAIN": "local", "LGA_THINKING": "on", "LGA_TEMPERATURE": "1.0", "LGA_TOP_P": "0.95", "LGA_TOP_K": "64"},
     # Low temperature: near-deterministic tool calls.
-    "precise": {"LGA_BRAIN": "local_server", "LGA_THINKING": "off", "LGA_TEMPERATURE": "0.2", "LGA_TOP_P": "0.95", "LGA_TOP_K": "40"},
-    "precise-think": {"LGA_BRAIN": "local_server", "LGA_THINKING": "on", "LGA_TEMPERATURE": "0.2", "LGA_TOP_P": "0.95", "LGA_TOP_K": "40"},
+    "precise": {"LGA_BRAIN": "local", "LGA_THINKING": "off", "LGA_TEMPERATURE": "0.2", "LGA_TOP_P": "0.95", "LGA_TOP_K": "40"},
+    "precise-think": {"LGA_BRAIN": "local", "LGA_THINKING": "on", "LGA_TEMPERATURE": "0.2", "LGA_TOP_P": "0.95", "LGA_TOP_K": "40"},
     # Same, with the model's native tool calling instead of the schema-constrained JSON reply.
-    "native-think": {"LGA_BRAIN": "local_server", "LGA_THINKING": "on", "LGA_TEMPERATURE": "1.0", "LGA_TOP_P": "0.95", "LGA_TOP_K": "64",
+    "native-think": {"LGA_BRAIN": "local", "LGA_THINKING": "on", "LGA_TEMPERATURE": "1.0", "LGA_TOP_P": "0.95", "LGA_TOP_K": "64",
                      "LGA_NATIVE_TOOLS": "on"},
-    "json-think": {"LGA_BRAIN": "local_server", "LGA_THINKING": "on", "LGA_TEMPERATURE": "1.0", "LGA_TOP_P": "0.95", "LGA_TOP_K": "64",
+    "json-think": {"LGA_BRAIN": "local", "LGA_THINKING": "on", "LGA_TEMPERATURE": "1.0", "LGA_TOP_P": "0.95", "LGA_TOP_K": "64",
                    "LGA_NATIVE_TOOLS": "off"},
     # Ollama cloud models (through the local Ollama daemon; free plan models).
     "cloud-gptoss": {"LGA_BRAIN": "cloud", "LGA_MODEL": "gpt-oss:120b-cloud", "LGA_THINKING": "on"},
@@ -400,7 +400,7 @@ def run_task(task: dict, env_knobs: dict[str, str]) -> dict:
     run["false_success"] = run["status"] == "completed" and not run["passed"]
     run["tool_errors"] = sum(1 for s in run["steps"] if s["status"] != "succeeded")
     run["recovered"] = run["passed"] and run["tool_errors"] > 0
-    run["local_only"] = all(x["backend"] == "local_server" for x in llm) if llm else None
+    run["local_only"] = all(x["backend"] == "local" for x in llm) if llm else None
     cleanup(task)
     return run
 

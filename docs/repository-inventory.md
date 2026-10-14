@@ -213,3 +213,14 @@ Every upstream is MIT or Apache-2.0, and both are compatible with this project. 
 Obligations are tracked in `THIRD_PARTY_NOTICES.md`:
 - keep the copyright and permission notices for MIT sources we adapt (Windows-Use, AutoCAD-MCP);
 - keep the Apache-2.0 headers, add modification notices, and include the license text for vendored UI-TARS code and Windows-Use's `uia/`.
+
+## Evaluation only: microsoft/OmniParser (`references/omniparser`, 2026-10-14)
+
+Cloned (depth 1, commit `3540212`, 2026-07-19) to judge it as a screen-element detector for `vision.locate`. **Not integrated, not run, nothing vendored.**
+
+- **License is inconsistent upstream.** The `LICENSE` file is **CC-BY-4.0** (attribution; not a software licence), the README badge says MIT. Treat the code as needing written clarification before it is copied into this repository.
+- **Weights.** README: `icon_detect_v3` is based on MIT-licensed YOLOv9; earlier Ultralytics-based detectors stay **AGPL**; caption models MIT. `util/utils.py` falls back to `from ultralytics import YOLO` (AGPL) for non-v3 weights, and `requirements.txt` pins `ultralytics==8.3.70`. The v3 weight is fetched from a Hugging Face PR revision (`refs/pr/37`), per upstream's README.
+- **Dependencies are heavy and clash with ours.** `requirements.txt` pulls torch, easyocr, paddleocr/paddlepaddle, transformers, numpy==1.26.4, opencv, gradio, plus cloud SDKs (anthropic, boto3, openai) that are not needed for parsing. `util/utils.py` constructs an `easyocr.Reader` at import time.
+- **Measured here:** nothing (no weights downloaded, no VRAM or latency figure). The GPU already holds ~15 GB.
+
+To go further, in this order: (1) get the licence question answered; (2) run only the v3 detector (`util/yolov9.py`, torch + torchvision, no ultralytics) on saved screenshots in a separate venv, outside the worker; (3) compare against `vision.locate` on the same images; (4) only then consider an adapter behind the existing `VisionProvider`.

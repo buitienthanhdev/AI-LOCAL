@@ -18,6 +18,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::config::{Config, ExecutionMode};
+use crate::guard::Guard;
 use crate::tools::{RiskLevel, ToolSpec};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
@@ -34,6 +35,11 @@ pub struct Decision {
     pub reasons: Vec<String>,
     /// Arguments after path normalisation; this is what gets executed.
     pub args: Value,
+    /// Classes of the "always confirm" guard that fired (empty = none). When non-empty the verdict is at least
+    /// Confirm in EVERY mode, and the confirmation must come from a person (see guard.rs).
+    pub always_confirm: Vec<String>,
+    /// Fingerprint of the exact call (tool + normalised arguments) a confirmation is bound to.
+    pub fingerprint: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,9 +81,24 @@ struct AutocadRules {
     destructive_tools: Vec<String>,
 }
 
+/// Areas where deleting is the agent's own housekeeping (its temp and artifact folders): the "always confirm"
+/// deletion classes do not fire for targets strictly inside them. Absent section = these defaults.
+#[derive(Debug, Deserialize)]
+struct AlwaysConfirmCfg {
+    scratch_roots: Vec<String>,
+}
+
+impl Default for AlwaysConfirmCfg {
+    fn default() -> Self {
+        Self { scratch_roots: vec!["%TEMP%".into(), "%TMP%".into(), "C:\\temp".into(), "{artifacts}".into()] }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct PolicyFile {
     modes: HashMap<String, HashMap<String, Verdict>>,
+    #[serde(default)]
+    always_confirm: AlwaysConfirmCfg,
     risk: RiskRules,
     paths: PathRules,
     filesystem: FsRules,
@@ -99,6 +120,7 @@ pub struct Policy {
     shell_confirm: Vec<Regex>,
     browser: BrowserRules,
     destructive_tools: Vec<String>,
+    guard: Guard,
 }
 
 fn regexes(patterns: &[String]) -> Result<Vec<Regex>> {
@@ -207,12 +229,15 @@ impl Policy {
                 .map(|p| normalize(Path::new(&p)))
                 .collect()
         };
+        let protected = paths(&file.filesystem.protected);
+        let guard = Guard::new(paths(&file.always_confirm.scratch_roots), protected.clone());
         Ok(Self {
             mode,
+            guard,
             deny_always: paths(&file.filesystem.deny_always),
             deny_files: regexes(&file.filesystem.deny_file_patterns)?,
             write_roots: paths(&file.filesystem.write_roots_normal),
-            protected: paths(&file.filesystem.protected),
+            protected,
             shell_deny: regexes(&file.shell.deny)?,
             shell_confirm: regexes(&file.shell.confirm)?,
             modes: file.modes,
@@ -314,16 +339,20 @@ impl Policy {
             }
 
             if spec.policy_category == "shell" {
-                if let Some(Value::String(command)) = map.get("command") {
+                // shell.exec carries its text in `command`, python.exec in `code`. Both run with the user's rights, so
+                // both are scanned: before this, python.exec bypassed every shell pattern (it is not a boundary against
+                // obfuscation, only against the plain cases; mode and confirmation remain the real control).
+                for key in ["command", "code"] {
+                    let Some(Value::String(command)) = map.get(key) else { continue };
                     for re in &self.shell_deny {
                         if re.is_match(command) {
-                            raise(Verdict::Deny, format!("shell command matches a forbidden pattern ({})", re.as_str()), &mut verdict, &mut reasons);
+                            raise(Verdict::Deny, format!("{key} matches a forbidden pattern ({})", re.as_str()), &mut verdict, &mut reasons);
                         }
                     }
                     if self.mode != ExecutionMode::FullAccess {
                         for re in &self.shell_confirm {
                             if re.is_match(command) {
-                                raise(Verdict::Confirm, format!("shell command needs consent ({})", re.as_str()), &mut verdict, &mut reasons);
+                                raise(Verdict::Confirm, format!("{key} needs consent ({})", re.as_str()), &mut verdict, &mut reasons);
                             }
                         }
                     }
@@ -345,7 +374,15 @@ impl Policy {
                 }
             }
         }
-        Decision { verdict, reasons, args: normalized }
+        // "Always confirm": evaluated after everything else and in every mode, full_access included. It can only
+        // raise a verdict (Allow -> Confirm); a Deny stays a Deny.
+        let assessment = self.guard.assess(spec, &normalized);
+        let always_confirm: Vec<String> = assessment.classes().iter().map(|c| c.to_string()).collect();
+        for finding in &assessment.findings {
+            raise(Verdict::Confirm, format!("always-confirm [{}]: {}", finding.class, finding.detail), &mut verdict, &mut reasons);
+        }
+        let fingerprint = crate::guard::fingerprint(&spec.name, &normalized);
+        Decision { verdict, reasons, args: normalized, always_confirm, fingerprint }
     }
 }
 

@@ -34,7 +34,7 @@
         }
       },
       "timeout_ms": 15000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "none", "policy_category": "browser.observe"
+      "verification": "none", "policy_category": "browser.observe", "side_effects": "none"
     },
     {
       "name": "browser.open",
@@ -49,7 +49,7 @@
         }
       },
       "timeout_ms": 90000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "self", "policy_category": "browser.navigate"
+      "verification": "self", "policy_category": "browser.navigate", "side_effects": "yes"
     },
     {
       "name": "browser.navigate",
@@ -67,7 +67,7 @@
         }
       },
       "timeout_ms": 90000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": true,
-      "verification": "self", "policy_category": "browser.navigate"
+      "verification": "self", "policy_category": "browser.navigate", "side_effects": "yes"
     },
     {
       "name": "browser.tabs",
@@ -75,7 +75,7 @@
       "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
       "output_schema": {"type": "object", "required": ["tabs"], "properties": {"tabs": {"type": "array", "items": {"$ref": "#/$defs/tab"}}, "restarted": {"type": "boolean"}}},
       "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "none", "policy_category": "browser.observe"
+      "verification": "none", "policy_category": "browser.observe", "side_effects": "none"
     },
     {
       "name": "browser.switch_tab",
@@ -83,7 +83,7 @@
       "input_schema": {"type": "object", "required": ["tab_id"], "additionalProperties": false, "properties": {"tab_id": {"type": "string", "minLength": 4}}},
       "output_schema": {"$ref": "#/$defs/page"},
       "timeout_ms": 30000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "self", "policy_category": "browser.navigate"
+      "verification": "self", "policy_category": "browser.navigate", "side_effects": "yes"
     },
     {
       "name": "browser.close_tab",
@@ -91,7 +91,7 @@
       "input_schema": {"type": "object", "required": ["tab_id"], "additionalProperties": false, "properties": {"tab_id": {"type": "string", "minLength": 4}}},
       "output_schema": {"type": "object", "required": ["closed", "tabs"], "properties": {"closed": {"type": "string"}, "tabs": {"type": "array", "items": {"$ref": "#/$defs/tab"}}}},
       "timeout_ms": 30000, "risk_level": "medium", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "self", "policy_category": "browser.navigate"
+      "verification": "self", "policy_category": "browser.navigate", "side_effects": "yes"
     },
     {
       "name": "browser.get_state",
@@ -108,7 +108,7 @@
         }
       },
       "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "none", "policy_category": "browser.observe"
+      "verification": "none", "policy_category": "browser.observe", "side_effects": "none"
     },
     {
       "name": "browser.click",
@@ -123,7 +123,7 @@
         }
       },
       "timeout_ms": 60000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
-      "verification": "observe", "policy_category": "browser.input"
+      "verification": "observe", "policy_category": "browser.input", "side_effects": "yes"
     },
     {
       "name": "browser.type",
@@ -140,7 +140,7 @@
         "properties": {"value": {"type": ["string", "null"]}, "url": {"type": "string"}, "title": {"type": "string"}, "url_changed": {"type": "boolean"}}
       },
       "timeout_ms": 90000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
-      "verification": "self", "policy_category": "browser.input"
+      "verification": "self", "policy_category": "browser.input", "side_effects": "yes"
     },
     {
       "name": "browser.press_keys",
@@ -148,7 +148,7 @@
       "input_schema": {"type": "object", "required": ["keys"], "additionalProperties": false, "properties": {"keys": {"type": "string", "minLength": 1, "maxLength": 200}}},
       "output_schema": {"type": "object", "required": ["url", "title"], "properties": {"url": {"type": "string"}, "title": {"type": "string"}, "url_changed": {"type": "boolean"}}},
       "timeout_ms": 60000, "risk_level": "medium", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
-      "verification": "observe", "policy_category": "browser.input"
+      "verification": "observe", "policy_category": "browser.input", "side_effects": "yes"
     },
     {
       "name": "browser.scroll",
@@ -165,7 +165,7 @@
         "properties": {"scroll_y_before": {"type": "integer"}, "scroll_y_after": {"type": "integer"}, "page_height": {"type": "integer"}}
       },
       "timeout_ms": 30000, "risk_level": "low", "requires_confirmation": false, "idempotent": false, "supports_rollback": true,
-      "verification": "observe", "policy_category": "browser.input"
+      "verification": "observe", "policy_category": "browser.input", "side_effects": "yes"
     },
     {
       "name": "browser.upload",
@@ -179,7 +179,7 @@
         "properties": {"path": {"type": "string"}, "files": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "size": {"type": "integer"}}}}}
       },
       "timeout_ms": 60000, "risk_level": "high", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "self", "policy_category": "browser.upload"
+      "verification": "self", "policy_category": "browser.upload", "side_effects": "yes"
     },
     {
       "name": "browser.wait_for",
@@ -194,7 +194,7 @@
       },
       "output_schema": {"type": "object", "required": ["url", "title", "waited_ms"], "properties": {"url": {"type": "string"}, "title": {"type": "string"}, "waited_ms": {"type": "integer"}}},
       "timeout_ms": 310000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "self", "policy_category": "browser.observe"
+      "verification": "self", "policy_category": "browser.observe", "side_effects": "none"
     },
     {
       "name": "browser.page_matches",
@@ -208,7 +208,7 @@
         "properties": {"matches": {"type": "boolean"}, "url": {"type": "string"}, "title": {"type": "string"}, "details": {"type": "array", "items": {"type": "string"}}}
       },
       "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "none", "policy_category": "browser.observe"
+      "verification": "none", "policy_category": "browser.observe", "side_effects": "none"
     },
     {
       "name": "browser.screenshot",
@@ -216,7 +216,7 @@
       "input_schema": {"type": "object", "additionalProperties": false, "properties": {"full_page": {"type": "boolean", "default": false}}},
       "output_schema": {"type": "object", "required": ["path", "width", "height", "url"], "properties": {"path": {"type": "string"}, "width": {"type": "integer"}, "height": {"type": "integer"}, "url": {"type": "string"}}},
       "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "self", "policy_category": "browser.observe"
+      "verification": "self", "policy_category": "browser.observe", "side_effects": "possible"
     },
     {
       "name": "browser.go_back",
@@ -224,7 +224,7 @@
       "input_schema": {"type": "object", "properties": {}, "additionalProperties": false},
       "output_schema": {"type": "object", "required": ["url", "title", "url_changed"], "properties": {"url": {"type": "string"}, "title": {"type": "string"}, "url_changed": {"type": "boolean"}}},
       "timeout_ms": 60000, "risk_level": "low", "requires_confirmation": false, "idempotent": false, "supports_rollback": false,
-      "verification": "observe", "policy_category": "browser.navigate"
+      "verification": "observe", "policy_category": "browser.navigate", "side_effects": "yes"
     },
     {
       "name": "browser.downloads",
@@ -238,7 +238,7 @@
         }
       },
       "timeout_ms": 10000, "risk_level": "low", "requires_confirmation": false, "idempotent": true, "supports_rollback": false,
-      "verification": "none", "policy_category": "browser.observe"
+      "verification": "none", "policy_category": "browser.observe", "side_effects": "none"
     }
   ]
 }

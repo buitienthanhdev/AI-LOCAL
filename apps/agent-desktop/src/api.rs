@@ -255,6 +255,7 @@ impl Api {
                     "task_id": r["task_id"], "goal": r["goal"], "status": r["status"], "mode": r["mode"],
                     "updated_at": r["updated_at"], "created_at": r["created_at"],
                     "steps": r["steps"].as_array().map_or(0, Vec::len),
+                    "completion_basis": r["completion_basis"],
                     "attachments": r["attachments"].as_array().map_or(0, Vec::len),
                     "interrupted": interrupted(&r),
                     "conversation_id": self.conversation_of(r["task_id"].as_str().unwrap_or("")),
@@ -586,6 +587,48 @@ mod tests {
         }
         assert!(crate::vendor::asset("katex/../../Cargo.toml").is_none());
         assert!(crate::vendor::asset("katex/fonts/").is_none());
+    }
+
+    /// The chat window shows how a completion was established; that only works if the API hands the core's
+    /// machine-readable fields through, and still serves records written before they existed.
+    #[test]
+    fn completion_basis_reaches_the_ui_and_old_records_still_load() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let root = std::env::temp_dir().join(format!("lga-api-test-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(root.join("configs")).unwrap();
+        std::fs::copy(repo.join("configs/config.example.toml"), root.join("configs/config.example.toml")).unwrap();
+        let config = Config::load_from(&root).unwrap();
+        let tasks = config.tasks_dir();
+        std::fs::create_dir_all(&tasks).unwrap();
+        let base = json!({"version": 1, "goal": "g", "mode": "normal", "status": "completed",
+            "created_at": "2026-10-14T00:00:00Z", "updated_at": "2026-10-14T00:00:01Z", "plan": [], "steps": [],
+            "consecutive_failures": 0, "worker_restarts": 0, "llm_calls": 0, "final_summary": "done", "failure_reason": null,
+            "artifacts": [], "escalation": null, "pending_question": null, "runner_pid": null});
+        let mut unverified = base.clone();
+        unverified["task_id"] = json!("t-unverified");
+        unverified["completion_basis"] = json!("unverified");
+        unverified["unverified_checks"] = json!(["check 0 (filesystem.stat): exists = false, expected true"]);
+        let mut old = base.clone();
+        old["task_id"] = json!("t-old");
+        std::fs::write(tasks.join("t-unverified.json"), unverified.to_string()).unwrap();
+        std::fs::write(tasks.join("t-old.json"), old.to_string()).unwrap();
+        let api = Api { config, agent_exe: PathBuf::from("agent.exe") };
+        let get = |uri: &str| {
+            let request = Request::builder().method(Method::GET).uri(format!("lga://localhost{uri}")).body(Vec::new()).unwrap();
+            let response = api.handle(request);
+            assert_eq!(response.status(), StatusCode::OK, "{uri}");
+            serde_json::from_slice::<Value>(response.body()).unwrap()
+        };
+        let one = get("/api/tasks/t-unverified");
+        assert_eq!(one["task"]["completion_basis"], "unverified");
+        assert_eq!(one["task"]["unverified_checks"][0], "check 0 (filesystem.stat): exists = false, expected true");
+        let older = get("/api/tasks/t-old");
+        assert!(older["task"].get("completion_basis").is_none(), "an old record must not gain a basis it never had");
+        let list = get("/api/tasks");
+        let find = |id: &str| list["tasks"].as_array().unwrap().iter().find(|t| t["task_id"] == id).cloned().unwrap();
+        assert_eq!(find("t-unverified")["completion_basis"], "unverified");
+        assert!(find("t-old")["completion_basis"].is_null());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

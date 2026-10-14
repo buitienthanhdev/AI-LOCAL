@@ -11,7 +11,7 @@ use lga_core::redact::Redactor;
 use lga_core::secrets::resolve_secret;
 
 use crate::attachments::AttachmentStore;
-use crate::backend::{Backend, Generation};
+use crate::backend::Backend;
 use crate::gateway::{Gateway, Route};
 use crate::resilience::{BackoffPolicy, BreakerSettings, CircuitBreaker};
 use crate::settings::{ms, GatewaySettings};
@@ -55,24 +55,6 @@ fn find_ollama(configured: &str) -> Option<PathBuf> {
         let local = std::env::var("LOCALAPPDATA").ok()?;
         Some(PathBuf::from(local).join("Programs").join("Ollama").join("ollama.exe")).filter(|p| p.is_file())
     })
-}
-
-/// `%NAME%` replaced by the environment variable (left as is when it is not set).
-fn expand_env(value: &str) -> String {
-    let mut out = String::new();
-    let mut rest = value;
-    while let Some(start) = rest.find('%') {
-        let Some(len) = rest[start + 1..].find('%') else { break };
-        let name = &rest[start + 1..start + 1 + len];
-        out.push_str(&rest[..start]);
-        match std::env::var(name) {
-            Ok(v) if !name.is_empty() => out.push_str(&v),
-            _ => out.push_str(&rest[start..start + len + 2]),
-        }
-        rest = &rest[start + len + 2..];
-    }
-    out.push_str(rest);
-    out
 }
 
 fn text(path: PathBuf) -> String {
@@ -189,28 +171,6 @@ pub fn assemble(config: &Config, redactor: Arc<Redactor>) -> Result<Assembly> {
         Route::new(primary, CircuitBreaker::new(breaker), primary_process, ms(p.startup_timeout_ms)).with_attempt_timeout(ms(p.attempt_timeout_ms)),
         Route::new(fallback, CircuitBreaker::new(breaker), fallback_process, ms(f.startup_timeout_ms)).with_attempt_timeout(ms(f.attempt_timeout_ms)),
     ]);
-    // A local OpenAI-compatible server the user runs (llama.cpp, LM Studio), when configured.
-    if !s.local_server.base_url.trim().is_empty() {
-        loopback_port(s.local_server.base_url.trim())?;
-        let mut server = Backend::openai_server("local_server", s.local_server.base_url.trim(), &s.local_server.model, Arc::clone(&store), connect);
-        server.generation = Generation {
-            thinking: s.local_server.thinking,
-            temperature: s.local_server.temperature,
-            top_p: s.local_server.top_p,
-            top_k: s.local_server.top_k,
-            native_tools: s.local_server.native_tools,
-            vision: s.local_server.vision,
-        };
-        server.release = s.local_server.release.clone();
-        server.managed = !s.local_server.launch.is_empty();
-        // Capped so a stuck local server still leaves time for the other brains.
-        let mut route = Route::new(server, CircuitBreaker::new(breaker), None, ms(0))
-            .with_attempt_timeout(ms(s.local_server.attempt_timeout_ms));
-        if let Some((program, args)) = s.local_server.launch.split_first() {
-            route = route.with_on_demand_start(PathBuf::from(expand_env(program)), args.iter().map(|a| expand_env(a)).collect());
-        }
-        routes.push(route);
-    }
     // A large Ollama cloud model through the local Ollama daemon.
     if s.cloud.enabled && !s.cloud.model.trim().is_empty() {
         loopback_port(&s.cloud.base_url)?;
@@ -233,7 +193,69 @@ pub fn assemble(config: &Config, redactor: Arc<Redactor>) -> Result<Assembly> {
         }
         routes.push(route);
     }
-    // A user-chosen order (e.g. the local llama.cpp model first); a stable sort keeps the rest as they are.
+    // Gemini Web through its own Chrome profile. Added last: it takes part only where brain_order names it.
+    let c = &s.chrome_gemini;
+    if c.enabled {
+        let port = loopback_port(&c.base_url)?;
+        let mut process = None;
+        // Two independent random tokens per start: asking questions must not authorise stopping the adapter.
+        let chat_token = hex::encode(rand::random::<[u8; 32]>());
+        if c.manage_process {
+            let source_dir = config.path(&c.source_dir);
+            let mut argv = vec![
+                text(config.path(&c.python)),
+                "-m".into(),
+                "chrome_gemini".into(),
+                "--port".into(),
+                port,
+                "--profile-dir".into(),
+                text(config.path(&c.profile_dir)),
+                "--log-dir".into(),
+                text(logs.join("chrome-gemini")),
+                "--selectors".into(),
+                text(config.path(&c.selectors)),
+            ];
+            argv.extend(["--shutdown-grace-s".into(), format!("{}", c.shutdown_grace_ms as f64 / 1000.0)]);
+            if !c.require_model.trim().is_empty() {
+                argv.extend(["--require-model".into(), c.require_model.trim().to_string()]);
+            }
+            if !c.chrome_path.trim().is_empty() {
+                argv.extend(["--chrome".into(), c.chrome_path.trim().to_string()]);
+            }
+            // lga_worker (the one Chrome launcher) lives in the python-agent package.
+            let python_path = format!("{};{}", text(source_dir.clone()), text(config.path("services/python-agent")));
+            let shutdown_url = format!("{}/shutdown", c.base_url.trim_end_matches('/'));
+            let shutdown_token = hex::encode(rand::random::<[u8; 32]>());
+            process = Some(ManagedProcess::new(
+                ProcessSpec {
+                    name: "chrome_gemini".into(),
+                    argv,
+                    cwd: source_dir,
+                    env: HashMap::from([
+                        ("PYTHONPATH".into(), python_path),
+                        ("PYTHONIOENCODING".into(), "utf-8".into()),
+                        // Per start, random, only in this process's environment: the adapter's /shutdown needs it.
+                        ("LGA_ADAPTER_SHUTDOWN_TOKEN".into(), shutdown_token.clone()),
+                        ("LGA_ADAPTER_CHAT_TOKEN".into(), chat_token.clone()),
+                    ]),
+                    log_path: Some(logs.join("chrome_gemini.log")),
+                },
+                Arc::clone(&job),
+                Arc::clone(&redactor),
+            ).with_graceful_shutdown(
+                // The adapter ends an exchange in flight after the grace, then closes Chrome (a few seconds).
+                shutdown_url,
+                ms(c.shutdown_grace_ms) + std::time::Duration::from_secs(15),
+                Some(shutdown_token),
+            ));
+        }
+        // Without a managed adapter nobody hands over a token: the gateway then calls it unauthenticated and
+        // the adapter (token-less) refuses, which is the safe failure.
+        let backend = Backend::chrome_gemini("chrome_gemini", &c.base_url, Arc::clone(&store), connect)
+            .with_adapter_token(c.manage_process.then_some(chat_token));
+        routes.push(Route::new(backend, CircuitBreaker::new(breaker), process, ms(c.startup_timeout_ms)).with_attempt_timeout(ms(c.attempt_timeout_ms)));
+    }
+    // A user-chosen order (e.g. the cloud model first); a stable sort keeps the rest as they are.
     routes.sort_by_key(|r| s.brain_order.iter().position(|n| *n == r.backend.name).unwrap_or(usize::MAX));
     let gateway = Gateway::new(routes, store, retry, ms(s.request_timeout_ms), ms(s.health_interval_ms));
     Ok(Assembly {
@@ -258,11 +280,4 @@ mod tests {
         assert!(loopback_port("http://127.0.0.1").is_err());
     }
 
-    #[test]
-    fn env_variables_expand_in_launch_paths() {
-        std::env::set_var("LGA_TEST_DIR", "C:/x");
-        assert_eq!(expand_env("%LGA_TEST_DIR%/llama.exe"), "C:/x/llama.exe");
-        assert_eq!(expand_env("%LGA_UNSET_VAR_123%/a"), "%LGA_UNSET_VAR_123%/a");
-        assert_eq!(expand_env("50%"), "50%");
-    }
 }

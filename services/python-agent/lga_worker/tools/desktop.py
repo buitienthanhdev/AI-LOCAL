@@ -10,6 +10,7 @@ from typing import Any
 from lga_worker.errors import ErrorCode, ToolError
 from lga_worker.registry import Check, ToolContext, ToolOutcome, ToolRegistry
 from lga_worker.windows import win32
+from lga_worker.windows.feedback import pointer_line
 from lga_worker.windows.provider import ElementQuery, Rect, UIElement, WindowInfo
 from lga_worker.windows.windows_use_provider import WindowsUseProvider
 
@@ -205,6 +206,10 @@ def register(registry: ToolRegistry) -> None:
         else:
             x, y = args["x"], args["y"]
             await _sta(ctx, provider, provider.bring_point_window_to_front, x, y)
+            # What is under the point decides what this click does: tell the planner, so a vision hit that was a few
+            # pixels off shows up as "no named control" instead of passing as success.
+            under = await _sta(ctx, provider, provider.element_at, x, y)
+            under_line = pointer_line(x, y, under)
         if args["count"] == 2:
             await _sta(ctx, provider, provider.double_click, x, y)
         else:
@@ -212,9 +217,12 @@ def register(registry: ToolRegistry) -> None:
         data: dict[str, Any] = {"x": x, "y": y, "method": "mouse"}
         if element is not None:
             data["element"] = element
+        else:
+            data["under_pointer"] = under
         what = f"{args['element_id']} at ({x},{y})" if element else f"({x},{y})"
         return ToolOutcome(data=data, backend=BACKEND,
                            observation=f"{args['button']} click x{args['count']} on {what}. "
+                           + (under_line + " " if element is None else "")
                            + await _foreground_note(ctx, provider))
 
     @registry.handler("desktop.move_mouse")
@@ -336,6 +344,8 @@ def register(registry: ToolRegistry) -> None:
             lines.append(f"In front: hwnd={f['hwnd']} '{f['title']}' [{f['process_name']}]")
         if data["surprise"]:
             lines.append(f"ATTENTION: {data['surprise']}")
+        if data.get("no_change"):
+            lines.append(data["no_change"])
         lines.append(_focused_line(data["focused"]))
         texts = _texts_block(data["texts"], 25)
         if texts:

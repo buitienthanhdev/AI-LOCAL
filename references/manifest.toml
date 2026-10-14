@@ -40,3 +40,8 @@ commit = "20b2dfe85e0a84eb2fe7b2f5db1c2807a4c8d829"
 name = "text-to-cad"
 url = "https://github.com/earthtojake/text-to-cad"
 commit = "24573128ceaab564f497d7c12f995c41784c9539"
+
+[[repo]]
+name = "omniparser"
+url = "https://github.com/microsoft/OmniParser"
+commit = "354021201345a96178360b28733573e27269f2de"

@@ -8,7 +8,7 @@ from contextlib import contextmanager
 import requests
 
 from . import obs, registry
-from .config import CHAT_KEEP_ALIVE, LLAMACPP_PREFIX, LLAMACPP_URL, LLM_OPTIONS, OLLAMA_URL
+from .config import CHAT_KEEP_ALIVE, LLM_OPTIONS, OLLAMA_URL
 
 # Ollama xử lý LẦN LƯỢT từng yêu cầu: nếu việc học nền (đọc ảnh/video, trích tri thức) xếp sẵn nhiều yêu cầu thì câu hỏi
 # của người dùng phải chờ sau cả hàng (đo được ~6 phút). Cổng GPU: khi người dùng đang hỏi, việc nền không gửi yêu cầu mới;
@@ -108,114 +108,6 @@ def _post_preemptible(payload: dict, timeout: int) -> requests.Response | dict:
     return last
 
 
-# ---------------------------------------------------------------- llama.cpp (llama-server, API kiểu OpenAI)
-# Model tên "llamacpp/<alias>" => gọi llama-server thay vì Ollama. Đi chung registry (benchmark -> canary -> production),
-# lỗi thì tự lùi về model production như mọi model khác. Phản hồi được đổi về ĐÚNG dạng của Ollama cho phần còn lại.
-def _is_llamacpp(m: str) -> bool:
-    return m.startswith(LLAMACPP_PREFIX)
-
-
-def _openai_messages(messages: list[dict]) -> list[dict]:
-    out, ids, n = [], [], 0
-    for msg in messages:
-        m = {"role": msg["role"], "content": msg.get("content") or ""}
-        if msg.get("images"):
-            parts = [{"type": "text", "text": m["content"]}]
-            for b in msg["images"]:
-                if b.startswith("UklGR"):  # "RIFF" = WAV
-                    parts.append({"type": "input_audio", "input_audio": {"data": b, "format": "wav"}})
-                else:
-                    parts.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + b}})
-            m["content"] = parts
-        if msg.get("tool_calls"):
-            ids, m["tool_calls"] = [], []
-            for c in msg["tool_calls"]:
-                n += 1
-                cid = c.get("id") or f"call_{n}"
-                ids.append(cid)
-                args = c["function"].get("arguments") or {}
-                m["tool_calls"].append({"id": cid, "type": "function", "function": {
-                    "name": c["function"]["name"],
-                    "arguments": args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)}})
-        if msg["role"] == "tool":
-            m["tool_call_id"] = ids.pop(0) if ids else f"call_{n}"
-        out.append(m)
-    return out
-
-
-def _openai_payload(payload: dict) -> dict:
-    o = payload["options"]
-    p = {"model": payload["model"][len(LLAMACPP_PREFIX):], "messages": _openai_messages(payload["messages"]),
-         "temperature": o["temperature"], "max_tokens": o["num_predict"], "cache_prompt": True,
-         "chat_template_kwargs": {"enable_thinking": False}}  # như "think": False của Ollama
-    if "repeat_penalty" in o:
-        p["repeat_penalty"] = o["repeat_penalty"]
-    if payload.get("tools"):
-        p["tools"] = payload["tools"]
-    if payload.get("format"):
-        p["response_format"] = {"type": "json_schema", "json_schema": {"name": "out", "schema": payload["format"]}}
-    return p
-
-
-def _from_openai(r: dict) -> dict:
-    ch = r["choices"][0]
-    msg = ch.get("message") or {}
-    out = {"role": "assistant", "content": msg.get("content") or ""}
-    if msg.get("tool_calls"):
-        out["tool_calls"] = []
-        for c in msg["tool_calls"]:
-            args = c["function"].get("arguments") or "{}"
-            try:
-                args = json.loads(args) if isinstance(args, str) else args
-            except ValueError:
-                args = {}
-            out["tool_calls"].append({"id": c.get("id"), "function": {"name": c["function"]["name"], "arguments": args}})
-    t = r.get("timings") or {}
-    return {"message": out, "done_reason": "length" if ch.get("finish_reason") == "length" else "stop",
-            "eval_count": (r.get("usage") or {}).get("completion_tokens"),
-            "eval_duration": int(t["predicted_ms"] * 1e6) if t.get("predicted_ms") else None}
-
-
-class _Resp:
-    """Bọc phản hồi đã đổi dạng để vòng thử lại bên dưới dùng chung cho cả hai backend."""
-    def __init__(self, status: int, text: str, data: dict | None = None):
-        self.status_code, self.text, self._data = status, text, data
-
-    def raise_for_status(self):
-        if self.status_code >= 400:
-            raise requests.HTTPError(f"{self.status_code}: {self.text[:200]}")
-
-    def json(self):
-        return self._data
-
-
-def _post_llamacpp(payload: dict, timeout: int, preemptible: bool) -> _Resp:
-    p = _openai_payload(payload)
-    url = f"{LLAMACPP_URL}/v1/chat/completions"
-    if not (preemptible and not p.get("tools")):
-        r = requests.post(url, json=p, timeout=timeout)
-        return _Resp(r.status_code, r.text, _from_openai(r.json()) if r.status_code < 400 else None)
-    r = requests.post(url, json={**p, "stream": True}, timeout=timeout, stream=True)
-    if r.status_code >= 400:
-        return _Resp(r.status_code, r.text)
-    content, finish, timings = [], None, {}
-    try:
-        for line in r.iter_lines():
-            if _fg > 0:
-                raise _Preempted()
-            if not line.startswith(b"data: ") or line == b"data: [DONE]":
-                continue
-            d = json.loads(line[6:])
-            if d.get("choices"):
-                content.append((d["choices"][0].get("delta") or {}).get("content") or "")
-                finish = d["choices"][0].get("finish_reason") or finish
-            timings = d.get("timings") or timings
-    finally:
-        r.close()
-    return _Resp(200, "", _from_openai({"choices": [{"message": {"content": "".join(content)}, "finish_reason": finish}],
-                                        "timings": timings, "usage": {"completion_tokens": timings.get("predicted_n")}}))
-
-
 def _chat(messages, model, role, tools, fmt, temperature, num_ctx, keep_alive, timeout, preemptible=False) -> dict:
     chosen = model or registry.pick(role)
     candidates = [chosen] if model else [chosen, registry.production(role)]
@@ -234,9 +126,7 @@ def _chat(messages, model, role, tools, fmt, temperature, num_ctx, keep_alive, t
                 payload["format"] = fmt
             t0 = time.time()
             try:
-                if _is_llamacpp(m):
-                    r = _post_llamacpp(payload, timeout, preemptible)
-                elif preemptible and not tools:
+                if preemptible and not tools:
                     r = _post_preemptible(payload, timeout)
                     if isinstance(r, dict):
                         r, data = None, r

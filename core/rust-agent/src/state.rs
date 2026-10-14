@@ -250,6 +250,14 @@ pub struct TaskRecord {
     /// Files the user attached to the request. Images are shown to the planner; documents are read with tools.
     #[serde(default)]
     pub attachments: Vec<UserAttachment>,
+    /// How a COMPLETED task was established: "verified" (the completion checks / cited evidence passed),
+    /// "unverified" (accepted after repeated rejections; `unverified_checks` says what could not be confirmed),
+    /// "direct_answer" (no tools were used: there was nothing to verify). None while not completed, and for
+    /// records written before this field existed. Machine-readable: the summary text is not the source of truth.
+    #[serde(default)]
+    pub completion_basis: Option<String>,
+    #[serde(default)]
+    pub unverified_checks: Vec<String>,
 }
 
 impl TaskRecord {
@@ -276,6 +284,8 @@ impl TaskRecord {
             runner_pid: None,
             conversation: Vec::new(),
             attachments: Vec::new(),
+            completion_basis: None,
+            unverified_checks: Vec::new(),
         }
     }
 
@@ -392,6 +402,23 @@ impl TaskStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_basis_is_machine_readable_and_old_records_still_load() {
+        let mut r = TaskRecord::new("t".into(), "g".into(), ExecutionMode::Normal);
+        assert_eq!(r.completion_basis, None);
+        r.completion_basis = Some("unverified".into());
+        r.unverified_checks = vec!["check 0 (filesystem.stat): exists missing".into()];
+        let json = serde_json::to_value(&r).unwrap();
+        assert_eq!(json["completion_basis"], "unverified");
+        // A record written before the field existed (no such keys) deserialises to None / empty.
+        let mut old = json.clone();
+        old.as_object_mut().unwrap().remove("completion_basis");
+        old.as_object_mut().unwrap().remove("unverified_checks");
+        let loaded: TaskRecord = serde_json::from_value(old).unwrap();
+        assert_eq!(loaded.completion_basis, None);
+        assert!(loaded.unverified_checks.is_empty());
+    }
 
     #[test]
     fn transitions_follow_the_loop() {

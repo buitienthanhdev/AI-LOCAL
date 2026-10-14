@@ -59,6 +59,10 @@ pub struct Attempt {
     pub message: Option<String>,
     pub duration_ms: u64,
     pub status: Option<u16>,
+    /// What a browser adapter last saw on its page (SUBMITTED / GENERATING / ...), when it knows. Informational:
+    /// the error kind keeps its meaning and its no-resend rules.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_observed_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

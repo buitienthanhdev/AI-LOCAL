@@ -93,14 +93,11 @@ their health at the bottom-left. A second launch only brings the existing window
 The page reaches the app only through the webview's private `lga://` scheme; navigation to any other origin
 opens in your browser instead. Screenshots are served only from inside the artifacts directory.
 
-## Local vision (offline, no Google account)
+## Vision
 
-`pwsh scripts/start-vision-server.ps1` serves UI-TARS-1.5-7B for visual grounding on `127.0.0.1:11435`.
-With `[vision] backend = "auto"` (the default in `configs/config.toml`) the agent uses Gemini when a
-Google account that accepts images is signed in, and otherwise this local server. The model files live in
-`runtime/models/ui-tars/` (downloaded once). Grounding is accurate; on CPU it takes ~25 s per call, so a
-signed-in Gemini account is still the fast path. To accelerate the local model, serve it on the GPU with a
-CUDA-enabled llama.cpp build or vLLM and point `[vision] ui_tars_base_url` at it.
+Screenshots go to the brain through the gateway (Gemini Web/API or Ollama cloud). The local UI-TARS
+server (`start-vision-server.ps1`, llama.cpp based) was removed on 2026-10-14: local models run only
+through Ollama. `[vision] backend` is `gemini` or `none`.
 
 ## Vietnamese OCR
 

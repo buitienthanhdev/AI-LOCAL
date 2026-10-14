@@ -171,6 +171,26 @@ impl Interaction for ConsoleUi {
         matches!(read_line("     Allow? [y/N] ").as_deref(), Some("y" | "Y" | "yes"))
     }
 
+    /// The "always confirm" classes (deletion outside scratch areas, data leaving the machine, shutdown, system
+    /// changes, protected writes, file: URLs, unclassifiable commands) need a person per action. `--yes` is a
+    /// blanket approval given before anything was known, so it does not cover them; with nobody at a terminal
+    /// they are declined.
+    fn confirm_always(&self, tool: &str, args: &Value, reasons: &[String]) -> bool {
+        if self.auto_approve {
+            println!("   ! declined {tool}: --yes does not cover actions that always need a person ({})", reasons.join("; "));
+            return false;
+        }
+        if !self.interactive {
+            println!("   ! declined {tool}: needs a person to confirm and no terminal is attached ({})", reasons.join("; "));
+            return false;
+        }
+        println!("   ?! ALWAYS-CONFIRM: the agent wants to run {tool} {}", clip(&args.to_string(), 400));
+        for reason in reasons {
+            println!("     - {reason}");
+        }
+        matches!(read_line("     Allow this exact action? [y/N] ").as_deref(), Some("y" | "Y" | "yes"))
+    }
+
     fn ask(&self, question: &str) -> Option<String> {
         if !self.interactive {
             return None;
@@ -193,6 +213,9 @@ fn print_summary(record: &TaskRecord) {
     println!("Task:     {}", record.task_id);
     println!("Status:   {}", record.status.as_str());
     println!("Steps:    {} ({} LLM calls, {} worker restarts)", record.steps.len(), record.llm_calls, record.worker_restarts);
+    if let Some(basis) = record.completion_basis.as_deref().filter(|b| *b == "unverified") {
+        println!("completion: {basis} ({} check(s) could not be confirmed)", record.unverified_checks.len());
+    }
     if let Some(summary) = &record.final_summary {
         println!("Result:   {summary}");
     }
@@ -471,5 +494,22 @@ async fn main() -> ExitCode {
             eprintln!("error: {err:#}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn yes_and_a_missing_terminal_never_approve_always_confirm_actions() {
+        let args = serde_json::json!({"command": "shutdown /s /t 0"});
+        let reasons = vec!["always-confirm [system_power]: shutdown".to_string()];
+        let yes = ConsoleUi { auto_approve: true, interactive: true };
+        assert!(yes.confirm("shell.exec", &args, &reasons), "--yes still covers ordinary confirmations");
+        assert!(!yes.confirm_always("shell.exec", &args, &reasons), "--yes must not cover always-confirm actions");
+        let unattended = ConsoleUi { auto_approve: false, interactive: false };
+        assert!(!unattended.confirm("shell.exec", &args, &reasons));
+        assert!(!unattended.confirm_always("shell.exec", &args, &reasons), "nobody to ask: declined, not approved");
     }
 }

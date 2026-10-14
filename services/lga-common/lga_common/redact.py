@@ -28,6 +28,11 @@ _RULES: tuple[tuple[re.Pattern[str], int | None], ...] = (
     ),
     # Well-known key formats.
     (re.compile(r"\b(?:sk-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{30,}|ghp_[A-Za-z0-9]{30,})\b"), None),
+    # AWS access key id, JWT, Slack token, PEM private key block (mirrors core/rust-agent/src/redact.rs).
+    (re.compile(r"\bAKIA[0-9A-Z]{16}\b"), None),
+    (re.compile(r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b"), None),
+    (re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"), None),
+    (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----", re.S), None),
 )
 
 MIN_LITERAL_LENGTH = 6

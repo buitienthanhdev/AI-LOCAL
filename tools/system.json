@@ -128,7 +128,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "filesystem.read"
+      "policy_category": "filesystem.read", "side_effects": "none"
     },
     {
       "name": "filesystem.write",
@@ -191,7 +191,7 @@
       "idempotent": true,
       "supports_rollback": true,
       "verification": "self",
-      "policy_category": "filesystem.write"
+      "policy_category": "filesystem.write", "side_effects": "yes"
     },
     {
       "name": "filesystem.list",
@@ -258,7 +258,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "filesystem.read"
+      "policy_category": "filesystem.read", "side_effects": "none"
     },
     {
       "name": "filesystem.stat",
@@ -312,7 +312,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "filesystem.read"
+      "policy_category": "filesystem.read", "side_effects": "none"
     },
     {
       "name": "system.environment",
@@ -449,7 +449,7 @@
       "idempotent": true,
       "supports_rollback": false,
       "verification": "none",
-      "policy_category": "desktop.observe"
+      "policy_category": "desktop.observe", "side_effects": "none"
     },
     {
       "name": "system.open",

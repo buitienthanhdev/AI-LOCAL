@@ -17,6 +17,7 @@ import win32gui
 
 from lga_worker.errors import ErrorCode, ToolError
 from lga_worker.windows import win32
+from lga_worker.windows.feedback import no_change_note, observation_signature
 from lga_worker.windows.provider import CloseResult, ElementQuery, Rect, UIElement, WindowInfo
 
 SAVE_DIALOG_WAIT_S = 4.0
@@ -359,7 +360,7 @@ class DesktopOpsMixin:
                 shot = self.take_screenshot(path, rect, None)
             except ToolError:
                 shot = None
-        return {
+        result = {
             "working": working.to_dict() if working else None,
             "foreground": foreground.to_dict() if foreground else None,
             "surprise": surprise,
@@ -370,3 +371,19 @@ class DesktopOpsMixin:
             "truncated": bool(snapshot.truncated) if snapshot else False,
             "screenshot": shot,
         }
+        # Two identical observations in a row: the action in between probably did nothing (or needs time).
+        signature = observation_signature(result)
+        result["no_change"] = no_change_note(getattr(self, "_last_observe_signature", None), signature)
+        self._last_observe_signature = signature
+        return result
+
+    def element_at(self, x: int, y: int) -> dict[str, Any] | None:
+        """The control under a screen point (UI Automation hit test), or None when it cannot be told."""
+        try:
+            control = self.uia.ControlFromPoint(x, y)
+        except Exception:
+            return None
+        if control is None:
+            return None
+        return {"name": control.Name or "", "control_type": control.ControlTypeName or "",
+                "automation_id": control.AutomationId or ""}

@@ -8,6 +8,7 @@ pub mod backend;
 pub mod errors;
 pub mod gateway;
 pub mod log;
+pub mod provider;
 pub mod resilience;
 pub mod server;
 pub mod settings;

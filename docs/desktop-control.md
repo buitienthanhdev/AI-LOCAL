@@ -32,8 +32,7 @@ After every hands-on step (launch, focus, click, type, keys, drag, scroll, save,
 * the text the window shows (`window_texts`: labels, status bars, document contents, a calculator's display);
 * the interactive controls in reading order with state (`[focused]`, `[on]`, `[expanded]`, `[selected]`);
 * a screenshot of the working and foreground windows, attached to the next planner call when the brain can
-  see images (the cloud Gemma 4 and the Gemini API can; the local llama.cpp server runs without a vision
-  projector and gets text only).
+  see images (the cloud Gemma 4 and the Gemini API can; a local text-only model gets text only).
 
 The observation is written to the audit log (`kind: "observe"`), so a failed GUI task can be replayed.
 

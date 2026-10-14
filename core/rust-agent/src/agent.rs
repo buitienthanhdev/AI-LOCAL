@@ -18,6 +18,7 @@ use chrono::Utc;
 use serde_json::{json, Value};
 
 use crate::audit::{input_hash, AuditEvent, AuditLog};
+use crate::completion;
 use crate::cancel::CancelToken;
 use crate::config::{Config, ExecutionMode};
 use crate::error::{ErrorCode, ToolErrorInfo};
@@ -29,7 +30,7 @@ use crate::redact::Redactor;
 use crate::retry::Backoff;
 use crate::secrets::resolve_secret;
 use crate::state::{StepRecord, StepStatus, TaskRecord, TaskStatus, TaskStore, PLANNER_IMAGE_EXTENSIONS};
-use crate::tools::{ToolCatalog, ToolSpec, VerificationMode};
+use crate::tools::{ToolCatalog, ToolSpec};
 use crate::worker::{ToolCall, ToolResponse, WorkerClient, WorkerError};
 
 /// Elements requested for the automatic observation after an unverified desktop action.
@@ -37,7 +38,6 @@ const OBSERVE_MAX_ELEMENTS: u64 = 80;
 const OBSERVE_TIMEOUT: Duration = Duration::from_secs(30);
 const MIN_TOOL_TIMEOUT: Duration = Duration::from_secs(1);
 /// Characters of each completion check's result data shown to the verifier.
-const VERIFIER_DATA_CHARS: usize = 1500;
 const VERIFIER_OBSERVATION_CHARS: usize = 600;
 const VERIFIER_RECENT_STEPS: usize = 6;
 const VERIFIER_PROMPT: &str = "You are a strict, independent verifier for a Windows automation agent. You receive the user's goal, the agent's claimed summary, the completion checks it ran (with the ACTUAL result data) and its recent steps. Decide whether this evidence proves that the goal was achieved as the user asked. Reject when: the evidence is generic and would also pass if the goal were not achieved (e.g. only 'URL contains github.com' for 'open the Windows-Use repository'); the actual data contradicts the summary (wrong page, wrong file, wrong value); a part of the goal has no evidence at all. Accept only when every part of the goal is supported by the actual data. Reply with exactly one JSON object: {\"verdict\": \"accept\" | \"reject\", \"reason\": \"<one or two sentences; for reject, say what is wrong or what evidence is missing>\"}";
@@ -50,20 +50,16 @@ fn clip_text(text: &str, max: usize) -> String {
     }
 }
 
-fn clip_json(value: &Value, max: usize) -> Value {
-    let text = value.to_string();
-    if text.chars().count() <= max {
-        value.clone()
-    } else {
-        Value::String(clip_text(&text, max))
-    }
-}
-
 /// What the user interface (CLI, future UI) must provide to the runner.
 pub trait Interaction: Send + Sync {
     fn event(&self, event: RunEvent<'_>);
     /// Ask for consent to run a call the policy marked "confirm". Returns true to proceed.
     fn confirm(&self, tool: &str, args: &Value, reasons: &[String]) -> bool;
+    /// Consent for a call of the "always confirm" classes (guard.rs). Only a person can give it: an interface that
+    /// auto-approves (`--yes`) or has nobody to ask must decline. The default asks like `confirm`.
+    fn confirm_always(&self, tool: &str, args: &Value, reasons: &[String]) -> bool {
+        self.confirm(tool, args, reasons)
+    }
     /// Ask the user a question; None when nobody can answer (non-interactive).
     fn ask(&self, question: &str) -> Option<String>;
 }
@@ -180,6 +176,8 @@ pub struct TaskRunner<'a> {
     loaded_groups: Vec<String>,
     /// Shown while the agent operates applications with the mouse and keyboard.
     banner: Option<crate::banner::Banner>,
+    /// Per-call approvals of the always-confirm classes (single use, short lived).
+    approvals: crate::guard::Ledger,
 }
 
 /// Steps that operate applications directly: the person should keep their hands off meanwhile.
@@ -190,7 +188,7 @@ const HANDS_ON_TOOLS: [&str; 16] = [
     "desktop.move_mouse", "desktop.launch_app", "desktop.focus_window", "desktop.close_app", "desktop.set_value",
     "paint.draw", "paint.draw_image", "art.draw", "art.paint", "desktop.save_as",
 ];
-const BANNER_TEXT: &str = "Trợ lý đang điều khiển máy tính — xin tạm thời không dùng chuột, bàn phím. Muốn dừng: bấm Dừng trong cửa sổ Trợ lý.";
+const BANNER_TEXT: &str = "Trợ lý đang điều khiển máy tính\nTạm thời đừng dùng chuột, bàn phím · Muốn dừng: bấm Dừng trong cửa sổ Trợ lý";
 
 /// Tool groups always shown in full; the rest load when the request mentions them or the planner asks.
 const BASE_GROUPS: [&str; 7] = ["system", "knowledge", "web", "documents", "memory", "assistant", "task"];
@@ -325,38 +323,6 @@ fn now_ms(started: Instant) -> u64 {
     started.elapsed().as_millis() as u64
 }
 
-/// Whitespace-insensitive, case-insensitive form of a text for completion checks.
-fn normalize_text(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
-}
-
-fn json_matches(actual: &Value, expect: &Value) -> Result<(), String> {
-    let Value::Object(expected) = expect else {
-        return if actual == expect { Ok(()) } else { Err(format!("expected {expect}, got {actual}")) };
-    };
-    for (key, want) in expected {
-        let got = key
-            .split('.')
-            .try_fold(actual, |node, part| node.get(part))
-            .ok_or_else(|| format!("{key} missing in result"))?;
-        let ok = match (got, want) {
-            (Value::Number(a), Value::Number(b)) => match (a.as_f64(), b.as_f64()) {
-                (Some(x), Some(y)) => (x - y).abs() <= 1e-6 * y.abs().max(1.0),
-                _ => a == b,
-            },
-            // A text expectation is a substring test: a file's content or a window's text is checked for the
-            // part that matters, not reproduced in full (line endings and surrounding text differ anyway).
-            (Value::String(a), Value::String(b)) => a == b || (!b.is_empty() && normalize_text(a).contains(&normalize_text(b))),
-            (Value::Array(items), Value::String(b)) => items.iter().any(|i| i.as_str().is_some_and(|a| normalize_text(a).contains(&normalize_text(b)))),
-            (a, b) => a == b,
-        };
-        if !ok {
-            return Err(format!("{key} = {got}, expected {want}"));
-        }
-    }
-    Ok(())
-}
-
 impl<'a> TaskRunner<'a> {
     pub fn new(rt: &'a mut Runtime, ui: &'a dyn Interaction, record: &TaskRecord) -> Result<Self> {
         let cancel = CancelToken::new(rt.store.dir(), &record.task_id);
@@ -377,6 +343,7 @@ impl<'a> TaskRunner<'a> {
             loaded_groups: groups_for(&format!("{} {} {}", record.goal, record.conversation.join(" "),
                                                record.attachments.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(" "))),
             banner: None,
+            approvals: crate::guard::Ledger::new(Duration::from_secs(120)),
         })
     }
 
@@ -825,12 +792,41 @@ impl<'a> TaskRunner<'a> {
                 return Ok(self.rejected(step, StepStatus::Denied, err));
             }
             Verdict::Confirm => {
-                if !self.ui.confirm(&spec.name, &decision.args, &decision.reasons) {
+                let always = !decision.always_confirm.is_empty();
+                let approved = if always {
+                    self.ui.confirm_always(&spec.name, &decision.args, &decision.reasons)
+                } else {
+                    self.ui.confirm(&spec.name, &decision.args, &decision.reasons)
+                };
+                if !approved {
                     let err = ToolErrorInfo::new(ErrorCode::PolicyDenied, format!("the user declined: {}", decision.reasons.join("; ")), false);
                     return Ok(self.rejected(step, StepStatus::Denied, err));
                 }
+                if always {
+                    // The approval belongs to exactly this call. It is recorded, then consumed by the check below
+                    // right before the call runs; anything that changed the call in between would not match.
+                    self.approvals.approve(&decision.fingerprint);
+                    self.audit.record(AuditEvent {
+                        kind: "always_confirm_approved",
+                        step_id: Some(step.step_id.clone()),
+                        tool: Some(spec.name.clone()),
+                        detail: json!({"classes": decision.always_confirm, "fingerprint": decision.fingerprint, "reasons": decision.reasons}),
+                        ..Default::default()
+                    })?;
+                }
             }
             Verdict::Allow => {}
+        }
+        if !decision.always_confirm.is_empty() {
+            let executed = crate::guard::fingerprint(&spec.name, &decision.args);
+            if !self.approvals.consume(&executed) {
+                let err = ToolErrorInfo::new(
+                    ErrorCode::PolicyDenied,
+                    "the confirmation does not match the call that was about to run; it was not executed",
+                    false,
+                );
+                return Ok(self.rejected(step, StepStatus::Denied, err));
+            }
         }
         self.set_status(record, TaskStatus::Executing, None)?;
         if self.banner.is_none() && HANDS_ON_TOOLS.contains(&spec.name.as_str()) {
@@ -1114,7 +1110,8 @@ impl<'a> TaskRunner<'a> {
         })
     }
 
-    /// VERIFY: run the planner's completion checks; complete only if all pass.
+    /// VERIFY: run the planner's completion checks; complete only if all pass. The rules (what counts as proof,
+    /// when the second opinion is asked, when a completion is accepted and as what) are in `completion.rs`.
     async fn verify_completion(&mut self, record: &mut TaskRecord, action: &PlannerAction) -> Result<bool> {
         let normalized = PlannerAction { args: normalize_completion(&action.args), ..action.clone() };
         let action = &normalized;
@@ -1130,90 +1127,16 @@ impl<'a> TaskRunner<'a> {
             return Ok(false);
         }
         self.set_status(record, TaskStatus::Verifying, None)?;
-        let checks = action.args["checks"].as_array().cloned().unwrap_or_default();
-        let mut failures = Vec::new();
-        let mut evidence = Vec::new();
-        let mut check_results: Vec<Value> = Vec::new();
-        let state_changing: Vec<String> = record
-            .steps
-            .iter()
-            .filter(|s| s.status == StepStatus::Succeeded)
-            .filter(|s| self.rt.catalog.get(&s.tool).is_some_and(|spec| spec.changes_state()))
-            // A change the tool verified itself by reading it back (files, AutoCAD entities, whole drawings)
-            // is already proven; only unconfirmed effects (clicks, typing, shell commands) need checks.
-            .filter(|s| s.verification.as_deref() != Some("passed"))
-            .map(|s| format!("{} {}", s.step_id, s.tool))
-            .collect();
-        if checks.is_empty() && !state_changing.is_empty() {
-            failures.push(format!(
-                "this task changed state ({}); evidence_steps are not enough - give read-only checks that prove the result",
-                state_changing.join(", ")
-            ));
-        }
-        for step_id in action.args["evidence_steps"].as_array().cloned().unwrap_or_default() {
-            let id = step_id.as_str().unwrap_or_default();
-            match record.steps.iter().find(|s| s.step_id == id) {
-                None => failures.push(format!("evidence step {id} does not exist")),
-                Some(step) if step.status != StepStatus::Succeeded => {
-                    failures.push(format!("evidence step {id} did not succeed ({:?})", step.status))
-                }
-                Some(step) if !matches!(step.verification.as_deref(), Some("passed" | "not_applicable")) => failures.push(
-                    format!("evidence step {id} is not verified (verification {})", step.verification.as_deref().unwrap_or("none")),
-                ),
-                Some(step) => evidence.push(format!("{id} {} succeeded (verification {})", step.tool, step.verification.as_deref().unwrap_or("?"))),
-            }
-        }
-        for (i, check) in checks.iter().enumerate() {
-            let tool = check["tool"].as_str().unwrap_or_default();
-            let Some(spec) = self.rt.catalog.get(tool).cloned() else {
-                failures.push(format!("check {i}: unknown tool {tool}"));
-                continue;
-            };
-            if spec.verification != VerificationMode::None || spec.is_core_tool() {
-                failures.push(format!("check {i}: {tool} is not a read-only tool; checks must only observe"));
-                continue;
-            }
-            let mut args = check["args"].clone();
-            self.rt.catalog.coerce_args(tool, &mut args);
-            let violations = self.rt.catalog.validate_args(tool, &args);
-            if !violations.is_empty() {
-                failures.push(format!("check {i}: invalid args for {tool}: {}", violations.join("; ")));
-                continue;
-            }
-            let decision = self.rt.policy.evaluate(&spec, &args);
-            if decision.verdict == Verdict::Deny {
-                failures.push(format!("check {i}: policy denied {tool}"));
-                continue;
-            }
-            let worker = self.rt.worker().await?;
-            let call = ToolCall::new(&record.task_id, "verify", tool, decision.args, Duration::from_millis(spec.timeout_ms));
-            match worker.call(&call).await {
-                Ok(response) if response.is_ok() => {
-                    let data = response.result.map(|r| r.data).unwrap_or(Value::Null);
-                    check_results.push(json!({"tool": tool, "args": args, "expect": check["expect"],
-                                              "actual": clip_json(&data, VERIFIER_DATA_CHARS)}));
-                    match json_matches(&data, &check["expect"]) {
-                        Ok(()) => evidence.push(format!("{tool} {} -> {}", args, check["expect"])),
-                        Err(problem) => failures.push(format!("check {i} ({tool}): {problem}")),
-                    }
-                }
-                Ok(response) => failures.push(format!("check {i} ({tool}) failed: {}", response.error.map(|e| e.to_string()).unwrap_or_default())),
-                Err(err) => failures.push(format!("check {i} ({tool}) could not run: {err}")),
-            }
-        }
+        let assessment = {
+            let mut executor = WorkerChecks { rt: &mut *self.rt, task_id: record.task_id.clone() };
+            completion::assess(&action.args, &record.steps, &mut executor).await?
+        };
+        let mut failures = assessment.failures;
         let summary = action.args["summary"].as_str().unwrap_or_default().to_string();
-        // A direct answer (greeting, small talk, general knowledge) touched nothing: there is nothing for
-        // a second opinion to verify, and asking one would only cost another slow LLM call.
-        let direct_answer = record.steps.is_empty() && checks.is_empty();
-        // The second opinion exists for UI work (desktop clicks, web pages), where a check can pass
-        // without proving the goal. Shell, file, AutoCAD and knowledge results are exact data the core
-        // has just re-read itself, so the extra slow LLM call is skipped for them.
-        let ui_work = record.steps.iter().any(|s| {
-            s.status == StepStatus::Succeeded
-                && self.rt.catalog.get(&s.tool).is_some_and(|spec| matches!(spec.category.as_str(), "desktop" | "browser" | "vision"))
-        });
-        if failures.is_empty() && self.rt.config.agent.verify_completion_with_llm && !direct_answer && ui_work {
-            if let Err(rejection) = self.llm_verdict(record, &summary, &check_results).await? {
+        let direct_answer = completion::is_direct_answer(&record.steps, &action.args);
+        let ui_work = completion::has_ui_work(&record.steps, &self.rt.catalog);
+        if completion::needs_second_opinion(&failures, self.rt.config.agent.verify_completion_with_llm, direct_answer, ui_work) {
+            if let Err(rejection) = self.llm_verdict(record, &summary, &assessment.check_results).await? {
                 failures.push(format!("independent verifier rejected the completion: {rejection}"));
             }
         }
@@ -1221,42 +1144,76 @@ impl<'a> TaskRunner<'a> {
             kind: "completion_check",
             tool: Some("task.complete".into()),
             verification_result: Some(if failures.is_empty() { "passed".into() } else { "failed".into() }),
-            detail: json!({"summary": summary, "evidence": evidence, "failures": failures}),
+            detail: json!({"summary": summary, "evidence": assessment.evidence, "failures": failures}),
             ..Default::default()
         })?;
         let did_work = record.steps.iter().any(|s| s.status == StepStatus::Succeeded);
-        let accept_anyway = !failures.is_empty() && did_work && self.completion_rejections >= MAX_COMPLETION_REJECTIONS;
-        if failures.is_empty() || accept_anyway {
-            let summary = if accept_anyway {
-                let note = if self.rt.config.agent.language.starts_with("vi") {
-                    "Lưu ý: chưa kiểm chứng được đầy đủ kết quả"
+        match completion::decide(&failures, direct_answer, did_work, self.completion_rejections, MAX_COMPLETION_REJECTIONS) {
+            completion::Verdict::Accept(basis) => {
+                let unverified = basis == completion::Basis::Unverified;
+                let summary = if unverified {
+                    let note = if self.rt.config.agent.language.starts_with("vi") {
+                        "Lưu ý: chưa kiểm chứng được đầy đủ kết quả"
+                    } else {
+                        "Note: the result could not be fully verified"
+                    };
+                    // The warning leads: the model's own claim ("I drew it") must not be what the person reads first.
+                    format!("⚠ {note} ({}).\n\n{summary}", clip_text(&failures.join("; "), 400))
                 } else {
-                    "Note: the result could not be fully verified"
+                    summary
                 };
-                // The warning leads: the model's own claim ("I drew it") must not be what the person reads first.
-                format!("⚠ {note} ({}).\n\n{summary}", clip_text(&failures.join("; "), 400))
-            } else {
-                summary
-            };
-            record.final_summary = Some(summary);
-            if let Some(artifacts) = action.args.get("artifacts").and_then(Value::as_array) {
-                record.artifacts.extend(artifacts.iter().filter_map(Value::as_str).map(String::from));
+                record.final_summary = Some(summary);
+                record.completion_basis = Some(basis.as_str().to_string());
+                record.unverified_checks = if unverified { failures.clone() } else { Vec::new() };
+                if let Some(artifacts) = action.args.get("artifacts").and_then(Value::as_array) {
+                    record.artifacts.extend(artifacts.iter().filter_map(Value::as_str).map(String::from));
+                }
+                let procedure: Vec<String> = record.steps.iter().filter(|s| s.status == StepStatus::Succeeded).map(|s| s.tool.clone()).collect();
+                self.rt.memory.record_procedure(&record.goal, &procedure.join(" -> "))?;
+                let reason = if unverified { "completed; some completion checks could not be confirmed" } else { "all completion checks passed" };
+                self.finish(record, TaskStatus::Completed, reason)?;
+                Ok(true)
             }
-            let procedure: Vec<String> = record.steps.iter().filter(|s| s.status == StepStatus::Succeeded).map(|s| s.tool.clone()).collect();
-            self.rt.memory.record_procedure(&record.goal, &procedure.join(" -> "))?;
-            let reason = if accept_anyway { "completed; some completion checks could not be confirmed" } else { "all completion checks passed" };
-            self.finish(record, TaskStatus::Completed, reason)?;
-            return Ok(true);
+            completion::Verdict::Reject => {
+                // Rejections are bounded by MAX_COMPLETION_REJECTIONS, not by the consecutive-failure limit, so
+                // finished work is not thrown away because its checks were phrased badly.
+                self.completion_rejections += 1;
+                self.notices.push(format!(
+                    "task.complete was REJECTED because these checks failed: {}. The task is not done; fix it or adjust the checks to what the user actually asked.",
+                    failures.join(" | ")
+                ));
+                self.set_status(record, TaskStatus::Planning, Some("completion checks failed"))?;
+                Ok(false)
+            }
         }
-        // Rejections are bounded by MAX_COMPLETION_REJECTIONS, not by the consecutive-failure limit, so
-        // finished work is not thrown away because its checks were phrased badly.
-        self.completion_rejections += 1;
-        self.notices.push(format!(
-            "task.complete was REJECTED because these checks failed: {}. The task is not done; fix it or adjust the checks to what the user actually asked.",
-            failures.join(" | ")
-        ));
-        self.set_status(record, TaskStatus::Planning, Some("completion checks failed"))?;
-        Ok(false)
+    }
+}
+
+/// Runs completion checks through the policy and the worker (the loop's side of `completion::CheckExecutor`).
+struct WorkerChecks<'x> {
+    rt: &'x mut Runtime,
+    task_id: String,
+}
+
+#[async_trait::async_trait]
+impl completion::CheckExecutor for WorkerChecks<'_> {
+    fn catalog(&self) -> &ToolCatalog {
+        &self.rt.catalog
+    }
+
+    async fn run(&mut self, spec: &ToolSpec, args: Value) -> Result<completion::CheckOutcome> {
+        use completion::CheckOutcome;
+        let decision = self.rt.policy.evaluate(spec, &args);
+        if decision.verdict == Verdict::Deny {
+            return Ok(CheckOutcome::Denied);
+        }
+        let worker = self.rt.worker().await?;
+        let call = ToolCall::new(&self.task_id, "verify", &spec.name, decision.args, Duration::from_millis(spec.timeout_ms));
+        Ok(match worker.call(&call).await {
+            Ok(response) if response.is_ok() => CheckOutcome::Data(response.result.map(|r| r.data).unwrap_or(Value::Null)),
+            Ok(response) => CheckOutcome::ToolError(response.error.map(|e| e.to_string()).unwrap_or_default()),
+            Err(err) => CheckOutcome::NotRun(err.to_string()),
+        })
     }
 }
 
