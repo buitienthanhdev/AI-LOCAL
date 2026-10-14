@@ -12,7 +12,7 @@ set "LOG=logs\cap-nhat-tri-thuc.log"
 
 tasklist /FI "IMAGENAME eq agent-desktop.exe" 2>nul | find /i "agent-desktop.exe" >nul
 if not errorlevel 1 (
-  echo Tro ly dang chay san. De nap ban moi nhat hay chay "Tắt Trợ lý.bat" roi chay lai file nay.
+  echo Tro ly dang chay san. De nap ban moi nhat hay chay "Tat Tro ly.bat" roi chay lai file nay.
   goto :end
 )
 

@@ -3,7 +3,7 @@ chcp 65001 >nul
 rem Tat Tro ly may tinh: (1) dong het cua so chat, viec dang chay, gateway, worker;
 rem (2) cap nhat kho tri thuc moi nhat (quet + danh chi muc, chay o muc uu tien thap);
 rem (3) tat Qdrant va giai phong GPU cua Ollama. Khong dong cac chuong trinh khac cua ban.
-rem Muon bo qua buoc cap nhat tri thuc: chay  "Tắt Trợ lý.bat" nhanh
+rem Muon bo qua buoc cap nhat tri thuc: chay  "Tat Tro ly.bat" nhanh
 cd /d "%~dp0.."
 
 echo [1/3] Dang tat Tro ly...
