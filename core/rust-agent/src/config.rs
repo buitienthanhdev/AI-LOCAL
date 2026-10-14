@@ -49,6 +49,9 @@ pub struct AgentCfg {
     pub task_timeout_ms: u64,
     pub history_images: usize,
     pub history_steps: usize,
+    /// Upper bound (estimated tokens) for one planner prompt: system rules + tools + turn + images.
+    #[serde(default = "default_max_context_tokens")]
+    pub max_context_tokens: usize,
     pub language: String,
     pub verify_completion_with_llm: bool,
 }
@@ -333,4 +336,8 @@ mod tests {
         assert!(config.agent.max_steps > 0);
         assert!(config.llm.gateway_url.starts_with("http://127.0.0.1"));
     }
+}
+
+fn default_max_context_tokens() -> usize {
+    16_384
 }
