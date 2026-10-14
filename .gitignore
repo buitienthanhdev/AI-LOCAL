@@ -65,3 +65,7 @@ configs/config.toml.bak*
 # Fetched reference pictures (third-party images, licence per file in references.json)
 memory/art/references/
 *.bak_*
+
+# Runtime state (never track)
+memory/activity/
+memory/art/references.json
