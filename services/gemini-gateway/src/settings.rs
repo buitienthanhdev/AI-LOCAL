@@ -30,6 +30,10 @@ pub struct GatewaySettings {
     pub cloud: CloudCfg,
     #[serde(default)]
     pub api: ApiCfg,
+    /// Gemini web app through the gemini_webapi library (services/gemini-webapi): works anonymously, uses cookies
+    /// when a cookies file exists.
+    #[serde(default)]
+    pub webapi: WebApiCfg,
     /// Gemini Web through a dedicated Chrome profile (services/chrome-gemini). Off unless enabled.
     #[serde(default)]
     pub chrome_gemini: ChromeGeminiCfg,
@@ -80,6 +84,37 @@ impl Default for ChromeGeminiCfg {
             attempt_timeout_ms: 150_000,
             shutdown_grace_ms: 10_000,
             require_model: "Gemini Flash-Lite".into(),
+        }
+    }
+}
+
+/// Gemini web app via `gemini_webapi` (services/gemini-webapi/server.py), served as a local OpenAI-style server.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct WebApiCfg {
+    pub enabled: bool,
+    pub base_url: String,
+    pub manage_process: bool,
+    /// Python of the venv that has gemini-webapi and aiohttp (scripts/setup-webapi.ps1).
+    pub python: String,
+    pub script: String,
+    /// Optional JSON file {"__Secure-1PSID": "...", "__Secure-1PSIDTS": "..."}; anonymous when absent.
+    pub cookies_file: String,
+    pub startup_timeout_ms: u64,
+    pub attempt_timeout_ms: u64,
+}
+
+impl Default for WebApiCfg {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: "http://127.0.0.1:8084".into(),
+            manage_process: true,
+            python: "runtime/gateway/gemini-webapi/venv/Scripts/python.exe".into(),
+            script: "services/gemini-webapi/server.py".into(),
+            cookies_file: "runtime/gateway/gemini-webapi/cookies.json".into(),
+            startup_timeout_ms: 90_000,
+            attempt_timeout_ms: 160_000,
         }
     }
 }

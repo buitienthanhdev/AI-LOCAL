@@ -104,6 +104,27 @@ const DEGRADED_STREAK: u32 = 2;
 /// tried after the other brains for this long.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(600);
 
+/// The generic apologies Gemini Web gives instead of an answer when the account/session is throttled or blocked.
+/// Only short replies count: a real answer that happens to mention an error is long or specific.
+fn is_canned_web_failure(content: &str) -> bool {
+    let text = content.trim().to_lowercase();
+    if text.chars().count() > 160 {
+        return false;
+    }
+    const MARKERS: [&str; 9] = [
+        "something went wrong",
+        "encountering an error",
+        "can i try something else",
+        "having a hard time fulfilling your request",
+        "please try your request again",
+        "try again later",
+        "unable to process your request",
+        "có lỗi xảy ra",
+        "đã xảy ra lỗi",
+    ];
+    MARKERS.iter().any(|m| text.contains(m))
+}
+
 impl Default for Generation {
     fn default() -> Self {
         Self { native_tools: false, vision: true, thinking: false, temperature: None, top_p: None, top_k: None }
@@ -692,6 +713,14 @@ impl Backend {
         if content.trim().is_empty() {
             return Err(BackendError::new(ErrorKind::Transient, format!("{}: empty reply from the model", self.name)));
         }
+        // Gemini Web answers 200 with a canned apology when Google throttles or blocks the session. That is a
+        // backend failure, not an answer: fail over to the API / Ollama instead of handing it to the planner.
+        if matches!(self.kind, Kind::Web2ApiGo { .. } | Kind::WebAiToApi { .. }) && is_canned_web_failure(&content) {
+            return Err(BackendError::new(
+                ErrorKind::BackendDown,
+                format!("{}: Gemini Web returned its generic error reply ({})", self.name, truncate(content.trim())),
+            ));
+        }
         let usage = match self.kind {
             Kind::Ollama { .. } => Some(json!({"prompt_tokens": data.get("prompt_eval_count"), "completion_tokens": data.get("eval_count")})),
             _ => data.get("usage").cloned().filter(|u| !u.is_null()),
@@ -997,7 +1026,17 @@ pub fn best_flash_model<'a>(ids: impl Iterator<Item = &'a str>) -> Option<String
 
 #[cfg(test)]
 mod tests {
-    use super::best_flash_model;
+    use super::{best_flash_model, is_canned_web_failure};
+
+    #[test]
+    fn gemini_web_apologies_are_failures_but_real_answers_are_not() {
+        assert!(is_canned_web_failure("Sorry, something went wrong. Please try your request again."));
+        assert!(is_canned_web_failure("I'm having a hard time fulfilling your request. Can I help you with something else instead?"));
+        assert!(is_canned_web_failure("I seem to be encountering an error. Can I try something else for you?"));
+        assert!(!is_canned_web_failure("{\"thought\": \"ok\", \"actions\": []}"));
+        let long = format!("Here is the report. {} Note: something went wrong in step 3 of the old pipeline.", "Details. ".repeat(40));
+        assert!(!is_canned_web_failure(&long));
+    }
 
     #[test]
     fn picks_newest_stable_flash() {

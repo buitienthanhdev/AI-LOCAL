@@ -135,6 +135,9 @@ pub struct KnowledgeCfg {
     pub collection: String,
     pub ollama_url: String,
     pub embed_model: String,
+    /// Ollama model that re-scores the best hits ("" = off). A small model such as qwen2.5:3b is enough.
+    pub rerank_model: String,
+    pub rerank_top: usize,
     pub search_limit: usize,
     pub request_timeout_ms: u64,
     pub python: String,
@@ -149,6 +152,8 @@ impl Default for KnowledgeCfg {
             collection: "chunks".into(),
             ollama_url: "http://127.0.0.1:11434".into(),
             embed_model: "qwen3-embedding:0.6b".into(),
+            rerank_model: String::new(),
+            rerank_top: 8,
             search_limit: 10,
             request_timeout_ms: 30_000,
             python: "python".into(),

@@ -167,6 +167,34 @@ pub fn assemble(config: &Config, redactor: Arc<Redactor>) -> Result<Assembly> {
             routes.push(Route::new(api, CircuitBreaker::new(breaker), None, ms(0)).with_attempt_timeout(ms(s.api.attempt_timeout_ms)));
         }
     }
+    // Gemini web app through gemini_webapi (anonymous works; cookies optional).
+    if s.webapi.enabled {
+        let w = &s.webapi;
+        let port = loopback_port(&w.base_url)?;
+        let mut process = None;
+        if w.manage_process {
+            let mut argv = vec![text(config.path(&w.python)), text(config.path(&w.script)), "--port".into(), port];
+            let cookies = config.path(&w.cookies_file);
+            if cookies.is_file() {
+                argv.push("--cookies".into());
+                argv.push(text(cookies));
+            }
+            process = Some(ManagedProcess::new(
+                ProcessSpec {
+                    name: "webapi".into(),
+                    argv,
+                    cwd: config.root.clone(),
+                    env: HashMap::from([("PYTHONIOENCODING".into(), "utf-8".into())]),
+                    log_path: Some(logs.join("webapi.log")),
+                },
+                Arc::clone(&job),
+                Arc::clone(&redactor),
+            ));
+        }
+        let mut backend = Backend::openai_server("webapi", &w.base_url, "gemini-web", Arc::clone(&store), connect);
+        backend.generation.vision = false;
+        routes.push(Route::new(backend, CircuitBreaker::new(breaker), process, ms(w.startup_timeout_ms)).with_attempt_timeout(ms(w.attempt_timeout_ms)));
+    }
     routes.extend([
         Route::new(primary, CircuitBreaker::new(breaker), primary_process, ms(p.startup_timeout_ms)).with_attempt_timeout(ms(p.attempt_timeout_ms)),
         Route::new(fallback, CircuitBreaker::new(breaker), fallback_process, ms(f.startup_timeout_ms)).with_attempt_timeout(ms(f.attempt_timeout_ms)),

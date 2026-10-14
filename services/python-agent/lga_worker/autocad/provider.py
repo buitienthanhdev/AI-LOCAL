@@ -952,8 +952,22 @@ class AutoCadProvider:
             _, doc = self._writable_document(deadline)
             current = str(self._idempotent("read drawing path", lambda: doc.FullName, deadline))
             self._prepare_output(path, overwrite, allow_same_as=current)
-            self._idempotent("save drawing", lambda: doc.call("SaveAs", str(path), self.settings.dwg_save_type),
-                             deadline)
+            # The configured format may be newer than this AutoCAD (0x80210063 "error saving the document"): fall
+            # back through older DWG formats (2018, native, 2013, 2010, 2007, 2004) before giving up.
+            tried: list[int] = []
+            last_error: Exception | None = None
+            for save_type in dict.fromkeys([self.settings.dwg_save_type, 64, 12, 60, 48, 36, 24]):
+                tried.append(save_type)
+                try:
+                    self._idempotent("save drawing", lambda t=save_type: doc.call("SaveAs", str(path), t), deadline)
+                    last_error = None
+                    break
+                except ToolError as error:
+                    if error.code not in (ErrorCode.EXECUTION_FAILED, ErrorCode.INTERNAL):
+                        raise
+                    last_error = error
+            if last_error is not None:
+                raise last_error
             full_name = str(self._idempotent("read drawing path", lambda: doc.FullName, deadline))
             return SaveResult(path=path, full_name=full_name)
 

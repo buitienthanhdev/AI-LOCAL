@@ -62,6 +62,8 @@ MAX_TEXT_CHARS = 300_000   # cắt text quá dài (vd. file log/json khổng l�
 
 # Chỉ loại tài liệu người viết. .json/.log phần lớn là file máy sinh ra => bỏ để đỡ tốn tài nguyên.
 SUPPORTED_EXT = {".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".md", ".csv",
+                 # định dạng đọc qua MarkItDown (extract.py): Excel cũ (.xls), EPUB
+                 ".xls", ".epub",
                  # ảnh / audio / video: đọc bằng Gemma 4 (tốn GPU => chỉ xử lý khi máy rảnh)
                  ".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff",
                  ".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac", ".wma", ".opus",

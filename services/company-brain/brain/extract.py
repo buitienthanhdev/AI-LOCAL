@@ -57,7 +57,7 @@ def _md_sections(text: str) -> list[tuple[str, str]]:
     return out
 
 
-def extract_segments(path: Path, meta_only: bool = False) -> tuple[list[tuple[str, str]], dict]:
+def _extract_native(path: Path, meta_only: bool = False) -> tuple[list[tuple[str, str]], dict]:
     """(segments [(loc, text)], metadata). Lỗi sẽ được raise để nơi gọi ghi nhận.
     meta_only=True: chỉ lấy metadata nhanh, không dựng văn bản/không gọi model (dùng khi quét)."""
     ext = path.suffix.lower()
@@ -176,6 +176,45 @@ def extract_segments(path: Path, meta_only: bool = False) -> tuple[list[tuple[st
         except ValueError:
             pass
     return _line_blocks(raw), {}
+
+
+# Định dạng không có bộ đọc riêng: đọc bằng MarkItDown (Microsoft, chạy cục bộ). Các định dạng chính (docx/pptx/xlsx/pdf)
+# vẫn dùng bộ đọc riêng ở trên; MarkItDown chỉ là phương án dự phòng khi bộ đọc riêng lỗi hoặc không ra chữ.
+MARKITDOWN_EXT = {".xls", ".epub"}
+_MARKITDOWN_FALLBACK_EXT = {".docx", ".pptx", ".xlsx", ".pdf"}
+
+
+def _markitdown_segments(path: Path) -> list[tuple[str, str]]:
+    from markitdown import MarkItDown  # cài bằng: pip install markitdown
+    text = (MarkItDown().convert_local(str(path)).text_content or "").strip()
+    return _md_sections(text) if text else []
+
+
+def extract_segments(path: Path, meta_only: bool = False) -> tuple[list[tuple[str, str]], dict]:
+    """Như _extract_native, thêm MarkItDown cho định dạng phụ và làm dự phòng khi bộ đọc riêng lỗi/không ra chữ."""
+    ext = path.suffix.lower()
+    if ext in MARKITDOWN_EXT:
+        if meta_only:
+            return [], {}
+        return _markitdown_segments(path), {}
+    try:
+        segs, meta = _extract_native(path, meta_only)
+    except Exception:
+        if meta_only or ext not in _MARKITDOWN_FALLBACK_EXT:
+            raise
+        try:
+            segs = _markitdown_segments(path)
+        except Exception:
+            segs = []
+        if not segs:
+            raise
+        return segs, {}
+    if not segs and not meta_only and ext in _MARKITDOWN_FALLBACK_EXT:
+        try:
+            segs = _markitdown_segments(path)
+        except Exception:
+            segs = []
+    return segs, meta
 
 
 def extract(path: Path, light: bool = False) -> tuple[str, dict]:

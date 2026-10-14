@@ -895,7 +895,7 @@ async function refreshHealth() {
 }
 
 /* ---------- Brain settings ---------- */
-const BRAIN_NAMES = { api: "Gemini API", primary: "Gemini Web", fallback: "Gemini Web (dự phòng)", local: "AI trên máy (Ollama)" };
+const BRAIN_NAMES = { api: "Gemini API", primary: "Gemini Web", fallback: "Gemini Web (dự phòng)", cloud: "Ollama cloud (gemma4:31b)", local: "AI trên máy (Ollama)" };
 let lastBrains = [];
 function brainState(b) {
   if (b.state === "ready" && b.breaker !== "open") return ["ok", "sẵn sàng"];
