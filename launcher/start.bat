@@ -63,8 +63,8 @@ if "%SKIP_KB%"=="1" (
   echo Dang cap nhat tri thuc ^(muc uu tien thap^)...
   pushd "services\company-brain"
   echo ===== %date% %time% =====>> "..\..\%LOG%"
-  start "" /b /wait /belownormal python -m brain scan --all >> "..\..\%LOG%" 2>&1
-  start "" /b /wait /belownormal python -m brain index >> "..\..\%LOG%" 2>&1
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run-low.ps1" -Log "%~dp0..\logs\cap-nhat-tri-thuc.log" python -m brain scan --all
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run-low.ps1" -Log "%~dp0..\logs\cap-nhat-tri-thuc.log" python -m brain index
   popd
 )
 

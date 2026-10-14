@@ -20,9 +20,9 @@ echo [2/3] Dang cap nhat kho tri thuc (quet tai lieu moi/doi, danh chi muc)...
 if not exist "logs" mkdir "logs"
 pushd "services\company-brain"
 echo ===== %date% %time% =====>> "..\..\logs\cap-nhat-tri-thuc.log"
-start "" /b /wait /belownormal python -m brain scan --all >> "..\..\logs\cap-nhat-tri-thuc.log" 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run-low.ps1" -Log "%~dp0..\logs\cap-nhat-tri-thuc.log" python -m brain scan --all
 if errorlevel 1 echo Quet tri thuc co loi, xem logs\cap-nhat-tri-thuc.log
-start "" /b /wait /belownormal python -m brain index >> "..\..\logs\cap-nhat-tri-thuc.log" 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run-low.ps1" -Log "%~dp0..\logs\cap-nhat-tri-thuc.log" python -m brain index
 if errorlevel 1 echo Danh chi muc tri thuc co loi, xem logs\cap-nhat-tri-thuc.log
 popd
 
@@ -35,3 +35,4 @@ ollama stop qwen3-embedding:0.6b >nul 2>&1
 
 echo Đã tắt Trợ lý máy tính.
 timeout /t 2 >nul
+exit /b 0
