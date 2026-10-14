@@ -245,6 +245,9 @@ impl Api {
             .filter_map(|p| Some((fs::metadata(&p).ok()?.modified().ok()?, p)))
             .collect();
         entries.sort_by_key(|e| std::cmp::Reverse(e.0));
+        for (_, path) in &entries {
+            reap_interrupted(path);
+        }
         let tasks: Vec<Value> = entries
             .iter()
             .filter_map(|(_, p)| read_json(p))
@@ -520,6 +523,24 @@ fn interrupted(task: &Value) -> bool {
     let status = task["status"].as_str().unwrap_or("");
     let unfinished = !matches!(status, "completed" | "failed" | "cancelled" | "needs_user");
     unfinished && task["runner_pid"].as_u64().is_some_and(|pid| !process_alive(pid as u32))
+}
+
+/// A task whose runner process is gone while it was still planning/executing will never move on: mark it failed
+/// with a plain reason instead of leaving it "planning" forever.
+fn reap_interrupted(path: &Path) {
+    let Some(mut task) = read_json(path) else { return };
+    let status = task["status"].as_str().unwrap_or("");
+    if !matches!(status, "planning" | "executing") || !interrupted(&task) {
+        return;
+    }
+    task["status"] = json!("failed");
+    task["failure_reason"] = json!("The task was interrupted: its runner process ended before it finished (crash, shutdown or no brain available).");
+    if let Ok(text) = serde_json::to_string_pretty(&task) {
+        let tmp = path.with_extension("json.tmp");
+        if fs::write(&tmp, text).is_ok() {
+            let _ = fs::rename(&tmp, path);
+        }
+    }
 }
 
 fn process_alive(pid: u32) -> bool {

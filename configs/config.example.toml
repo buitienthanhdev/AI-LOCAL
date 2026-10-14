@@ -128,6 +128,13 @@ default_model = ""
 startup_timeout_ms = 60_000
 attempt_timeout_ms = 75_000
 
+[gateway.webapi]
+# Gemini web app through the gemini_webapi library (services/gemini-webapi). Works anonymously; with a cookies file
+# (runtime/gateway/gemini-webapi/cookies.json) it signs in and refreshes cookies itself. Set up: scripts/setup-webapi.ps1.
+enabled = false
+base_url = "http://127.0.0.1:8084"
+manage_process = true
+
 [gateway.api]
 # Official Gemini API (optional, recommended): paste a free key from https://aistudio.google.com/apikey in the
 # chat window's settings (stored as LGA_GEMINI_API_KEY in .env, git-ignored). When a key exists this is
@@ -271,6 +278,10 @@ collection = "chunks"
 # Query embeddings: the same model Company Brain indexed with (Ollama).
 ollama_url = "http://127.0.0.1:11434"
 embed_model = "qwen3-embedding:0.6b"
+# Optional re-scoring of the best hits by a small Ollama model (e.g. "qwen2.5:3b"); "" = off. Costs one short
+# call per hit (parallel, ~2-4 s) and a few GB of VRAM while loaded.
+rerank_model = ""
+rerank_top = 8
 search_limit = 10
 request_timeout_ms = 30_000
 # Python used only by "Cập nhật tri thức" (one-shot `python -m brain scan` + `index`), never at query time.

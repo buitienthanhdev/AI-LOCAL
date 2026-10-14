@@ -180,6 +180,48 @@ pub struct TaskRunner<'a> {
     approvals: crate::guard::Ledger,
 }
 
+/// Phrases in an error that mean the environment forbids the action: more variations of the same idea will not help.
+const BLOCKED_MARKERS: [&str; 9] = [
+    "trust access", "access is denied", "permission denied", "not authorized", "requires elevation",
+    "administrator", "is disabled by", "blocked by", "programmatic access",
+];
+
+/// A step that repeats an earlier step (same tool, same arguments) and got the same observation again: after the
+/// third identical result the planner is told the answer will not change and to finish or do something else.
+fn repeated_check_notice(previous: &[StepRecord], step: &StepRecord) -> Option<String> {
+    if step.status != StepStatus::Succeeded || step.observation.is_empty() {
+        return None;
+    }
+    let same = previous
+        .iter()
+        .filter(|p| p.tool == step.tool && p.input_hash == step.input_hash && p.observation == step.observation)
+        .count()
+        + 1;
+    if same == 3 || same == 6 {
+        return Some(format!(
+            "You have made this exact {} call {same} times and got the same result each time; it will not change. If what you have              verified already satisfies the request, call task.complete now with the result. Otherwise do something different; do not              check again.",
+            step.tool));
+    }
+    None
+}
+
+/// What to tell the planner after a failed step so it changes approach instead of repeating itself: a block
+/// imposed by the machine (security setting, permission) is reported to the user at once; a second failure in a
+/// row asks for a different method with the cause named. None when the failure needs no coaching.
+fn failure_coaching(consecutive: u32, step: &StepRecord) -> Option<String> {
+    let detail = format!("{} {}", step.error.as_ref().map(|e| e.message.as_str()).unwrap_or(""), step.observation).to_lowercase();
+    if BLOCKED_MARKERS.iter().any(|m| detail.contains(m)) {
+        return Some(format!(
+            "Step {} failed because the machine blocks it (a security setting or permission), not because of your arguments. Do NOT              try another way round the block and do not change security settings. Tell the user in one short message what is blocked,              what they can switch on, and what you can do instead (task.ask_user), or finish what is possible and say what is left.",
+            step.step_id));
+    }
+    if consecutive == 2 || consecutive == 3 {
+        return Some(format!(
+            "{consecutive} steps failed in a row. Before the next call, write in your thought: (1) the actual cause of the last error,              (2) why the previous attempt could not work, (3) a DIFFERENT method (another tool or a simpler script). Repeating the same              call with small changes is not allowed; if nothing different is possible, ask the user one short question or use task.fail."));
+    }
+    None
+}
+
 /// Steps that operate applications directly: the person should keep their hands off meanwhile.
 /// After this many lookups (knowledge.*, web.*, document.read) in a row the planner is told to stop and answer.
 const LOOKUP_STREAK_WARN: usize = 6;
@@ -1018,6 +1060,10 @@ impl<'a> TaskRunner<'a> {
                  (one script instead of many calls, a different tool)? If the request cannot be done, say so with task.fail or ask the \
                  user one short question; do not keep trying variations."));
         }
+        // The same check with the same answer again and again is a model that cannot decide it is finished.
+        if let Some(notice) = repeated_check_notice(&record.steps, &step) {
+            self.notices.push(notice);
+        }
         // A long run of lookups with nothing produced is a loop, not research: say so, in the planner's own terms.
         let is_lookup = |t: &str| t.starts_with("knowledge.") || t.starts_with("web.") || t == "document.read";
         if is_lookup(&step.tool) {
@@ -1040,6 +1086,9 @@ impl<'a> TaskRunner<'a> {
             StepStatus::Cancelled => {}
             _ => {
                 record.consecutive_failures += 1;
+                if let Some(notice) = failure_coaching(record.consecutive_failures, &step) {
+                    self.notices.push(notice);
+                }
                 if let Some(error) = &step.error {
                     let context: String = format!("{} | {}", record.goal, error.message).chars().take(200).collect();
                     self.rt.memory.record_failure(&step.tool, error.code.as_str(), &context, None)?;
@@ -1219,6 +1268,46 @@ impl completion::CheckExecutor for WorkerChecks<'_> {
 
 #[cfg(test)]
 mod tests {
+    fn failed_step(observation: &str) -> crate::state::StepRecord {
+        let mut s: crate::state::StepRecord = serde_json::from_value(serde_json::json!({
+            "step_id": "s003", "index": 3, "started_at": "2026-10-14T00:00:00Z", "finished_at": null, "thought": "",
+            "tool": "python.exec", "args": {}, "input_hash": "", "status": "failed", "verification": null,
+            "observation": observation, "error": null, "retry_count": 0, "duration_ms": 1, "backend": "", "provider": "",
+            "artifacts": []
+        })).expect("step record");
+        s.observation = observation.to_string();
+        s
+    }
+
+    #[test]
+    fn identical_checks_are_called_out_on_the_third_and_sixth_repeat() {
+        let mut step = failed_step("file exists (10 bytes)");
+        step.status = crate::state::StepStatus::Succeeded;
+        step.tool = "filesystem.stat".into();
+        step.input_hash = "h1".into();
+        let mut history = Vec::new();
+        for n in 1..=6 {
+            let notice = super::repeated_check_notice(&history, &step);
+            assert_eq!(notice.is_some(), n == 3 || n == 6, "repeat {n}: {notice:?}");
+            history.push(step.clone());
+        }
+        let mut other = step.clone();
+        other.input_hash = "h2".into();
+        assert!(super::repeated_check_notice(&history, &other).is_none());
+    }
+
+    #[test]
+    fn failures_are_coached_to_change_approach_or_report_a_block() {
+        let blocked = failed_step("Programmatic access to the VBA project is not trusted. Trust access to the VBA project object model");
+        let n = super::failure_coaching(1, &blocked).expect("block notice");
+        assert!(n.contains("blocks it") && n.contains("task.ask_user"), "{n}");
+        let plain = failed_step("KeyError: 'x'");
+        assert!(super::failure_coaching(1, &plain).is_none());
+        let n = super::failure_coaching(2, &plain).expect("second failure");
+        assert!(n.contains("DIFFERENT"), "{n}");
+        assert!(super::failure_coaching(4, &plain).is_none());
+    }
+
     #[test]
     fn requests_load_the_tool_groups_they_mention() {
         let g = super::groups_for("Vẽ mặt bằng nhà cấp 4 trong AutoCAD");

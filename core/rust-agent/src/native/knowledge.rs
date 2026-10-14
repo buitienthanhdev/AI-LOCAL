@@ -141,6 +141,26 @@ fn chunk_rows(conn: &Connection, ids: &[i64]) -> rusqlite::Result<HashMap<i64, R
 }
 
 /// Reciprocal rank fusion of the two branches, light re-ranking, at most `PER_FILE` passages per file.
+/// First integer 0-10 in a model reply.
+fn parse_rating(reply: &str) -> Option<u8> {
+    let digits: String = reply.trim().chars().skip_while(|c| !c.is_ascii_digit()).take_while(char::is_ascii_digit).collect();
+    digits.parse::<u8>().ok().filter(|n| *n <= 10)
+}
+
+/// Stable reorder of the first `ratings.len()` hits by rating (best first); unrated hits count as 0 and keep the
+/// fusion order among equals. Hits beyond the rated window stay behind.
+fn reorder_by_ratings(hits: &mut Vec<Hit>, ratings: &[Option<u8>]) {
+    let n = ratings.len().min(hits.len());
+    let mut head: Vec<(u8, Hit)> = hits.drain(..n).zip(ratings.iter()).map(|(h, r)| (r.unwrap_or(0), h)).collect();
+    head.sort_by(|a, b| b.0.cmp(&a.0));
+    for (rating, hit) in &mut head {
+        hit.why = if hit.why.is_empty() { format!("rerank {rating}/10") } else { format!("{}; rerank {rating}/10", hit.why) };
+    }
+    let rest: Vec<Hit> = std::mem::take(hits);
+    hits.extend(head.into_iter().map(|(_, h)| h));
+    hits.extend(rest);
+}
+
 fn fuse(query: &str, vector: &[i64], fts: &[i64], rows: &HashMap<i64, Row>, limit: usize) -> Vec<Hit> {
     let mut ranks: HashMap<i64, (Option<usize>, Option<usize>)> = HashMap::new();
     for (i, id) in vector.iter().enumerate() {
@@ -424,7 +444,47 @@ impl Knowledge {
             Ok((fts, chunk_rows(&conn, &ids)?))
         })
         .await??;
-        Ok((fuse(query, &vector, &fts, &rows, limit), notes))
+        let mut hits = fuse(query, &vector, &fts, &rows, limit);
+        if !self.cfg.rerank_model.trim().is_empty() && hits.len() > 1 {
+            match self.rerank(query, &mut hits).await {
+                Ok(()) => {}
+                Err(e) => notes.push(format!("rerank unavailable ({e}); fusion order kept")),
+            }
+        }
+        Ok((hits, notes))
+    }
+
+    /// Re-score the best hits with a small Ollama model (0-10 relevance) and reorder them; the fusion order breaks
+    /// ties. Any failure leaves the order untouched.
+    async fn rerank(&self, query: &str, hits: &mut Vec<Hit>) -> anyhow::Result<()> {
+        let top = self.cfg.rerank_top.clamp(2, 20).min(hits.len());
+        let url = format!("{}/api/chat", self.cfg.ollama_url);
+        let calls = hits.iter().take(top).map(|hit| {
+            let passage: String = hit.text.chars().take(700).collect();
+            let body = json!({
+                "model": self.cfg.rerank_model, "stream": false, "think": false, "keep_alive": "5m",
+                "options": {"temperature": 0, "num_ctx": 2048, "num_predict": 4},
+                "messages": [{"role": "user", "content": format!(
+                    "Query: {query}
+
+Passage:
+{passage}
+
+How well does the passage answer the query? Reply with one integer from 0 (irrelevant) to 10 (answers it fully), nothing else.")}],
+            });
+            let client = self.client.clone();
+            let url = url.clone();
+            async move {
+                let reply: Value = client.post(url).json(&body).send().await.ok()?.json().await.ok()?;
+                parse_rating(reply.pointer("/message/content")?.as_str()?)
+            }
+        });
+        let ratings = tokio::time::timeout(Duration::from_secs(25), futures::future::join_all(calls)).await?;
+        if ratings.iter().all(Option::is_none) {
+            anyhow::bail!("the rerank model gave no usable scores");
+        }
+        reorder_by_ratings(hits, &ratings);
+        Ok(())
     }
 
     /// Text of ANY file on the PC (not only indexed ones), with Company Brain's own extractors run one-shot:
@@ -689,6 +749,21 @@ mod tests {
     fn fts_query_drops_stop_words_and_quotes_tokens() {
         assert_eq!(fts_query("tỷ lệ rắn của sơn OneCoat Pro là bao nhiêu?").as_deref(), Some(r#""tỷ" OR "lệ" OR "rắn" OR "sơn" OR "OneCoat" OR "Pro""#));
         assert_eq!(fts_query("là của ?"), None);
+    }
+
+    #[test]
+    fn rerank_ratings_parse_and_reorder_stably() {
+        assert_eq!(parse_rating(" 8
+"), Some(8));
+        assert_eq!(parse_rating("Score: 10."), Some(10));
+        assert_eq!(parse_rating("no idea"), None);
+        assert_eq!(parse_rating("42"), None);
+        let mk = |n: &str| Hit { score: 0.0, file_id: 0, name: n.into(), path: String::new(), loc: String::new(), text: String::new(), why: String::new(), author: String::new(), modified_at: String::new() };
+        let mut hits = vec![mk("a"), mk("b"), mk("c"), mk("d")];
+        reorder_by_ratings(&mut hits, &[Some(2), Some(9), None]);
+        let order: Vec<&str> = hits.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(order, ["b", "a", "c", "d"]);
+        assert!(hits[0].why.contains("rerank 9/10"));
     }
 
     #[test]

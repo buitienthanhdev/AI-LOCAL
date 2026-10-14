@@ -28,3 +28,6 @@ All are locked in `services/*/uv.lock` and `Cargo.lock`. Notable ones:
 | aiohttp, jsonschema, Pillow, psutil | Apache-2.0 / MIT / HPND / BSD | worker |
 | fuzzywuzzy | GPL-2.0 | **transitive runtime dependency of Windows-Use only** (imported by `windows_use.agent.desktop.service`); installed from PyPI, not redistributed, and not imported by this project's own code |
 | tokio, reqwest, serde, jsonschema (Rust), rusqlite (bundled SQLite), clap, regex | MIT / Apache-2.0 / public domain (SQLite) | Rust core and CLI |
+| markitdown (Microsoft) | MIT | Company Brain (`extract.py`: .xls/.epub and fallback when the native Office/PDF reader fails) |
+| gemini-webapi (HanaokaYuzu/Gemini-API) | AGPL-3.0 | `services/gemini-webapi/server.py` (installed from PyPI into its own venv, not modified or redistributed; our server runs as a separate local process) |
+| aiohttp | Apache-2.0 | same server |
