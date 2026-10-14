@@ -27,6 +27,8 @@ task_timeout_ms = 1_800_000
 history_images = 2
 # Number of most recent step records kept verbatim in the model context.
 history_steps = 12
+# Upper bound (estimated tokens) for one planner prompt; older steps and long observations are trimmed to fit.
+max_context_tokens = 16384
 # Language for messages to the user.
 language = "vi"
 # After the completion checks pass, ask an independent verifier (a separate LLM call) whether the evidence

@@ -629,21 +629,42 @@ impl<'a> TaskRunner<'a> {
             }
         }
         for attempt in 0..=agent_cfg.max_parse_retries {
-            let turn = user_turn(&TurnContext {
-                playbooks: &playbooks,
-                goal: &record.goal,
-                plan: &record.plan,
-                steps: &record.steps,
-                history_steps: agent_cfg.history_steps,
-                max_steps: agent_cfg.max_steps,
-                consecutive_failures: record.consecutive_failures,
-                recall: &recall,
-                latest_observation: self.latest_observation.as_deref(),
-                notices: &self.notices,
-                now: &now,
-                conversation: &record.conversation,
-                attachments: &record.attachments,
-            });
+            let tool_decls = self.tool_declarations(&offered);
+            // Context budget: whole prompt (system + tools + turn + images) must fit max_context_tokens. Older step
+            // records are dropped first (they stay listed by name), then the latest observation is clipped.
+            let fixed_chars = system.chars().count() + serde_json::to_string(&tool_decls).map_or(0, |t| t.chars().count());
+            let image_tokens = attachments.len() * 800;
+            let budget_chars = agent_cfg.max_context_tokens.saturating_sub(image_tokens + 1500) * 3;
+            let mut history = agent_cfg.history_steps;
+            let mut observation_cap = usize::MAX;
+            let turn = loop {
+                let observation = self.latest_observation.as_deref().map(|o| o.chars().take(observation_cap).collect::<String>());
+                let turn = user_turn(&TurnContext {
+                    playbooks: &playbooks,
+                    goal: &record.goal,
+                    plan: &record.plan,
+                    steps: &record.steps,
+                    history_steps: history,
+                    max_steps: agent_cfg.max_steps,
+                    consecutive_failures: record.consecutive_failures,
+                    recall: &recall,
+                    latest_observation: observation.as_deref(),
+                    notices: &self.notices,
+                    now: &now,
+                    conversation: &record.conversation,
+                    attachments: &record.attachments,
+                });
+                if fixed_chars + turn.chars().count() <= budget_chars {
+                    break turn;
+                }
+                if history > 2 {
+                    history -= 1;
+                } else if observation_cap > 1500 {
+                    observation_cap = if observation_cap == usize::MAX { 4000 } else { observation_cap / 2 };
+                } else {
+                    break turn;
+                }
+            };
             let mut user = ChatMessage::text("user", turn);
             user.content.extend(attachments.iter().map(|id| Part::Image { attachment_id: id.clone() }));
             let request = ChatRequest {
@@ -653,7 +674,7 @@ impl<'a> TaskRunner<'a> {
                 metadata: HashMap::from([("task_id".into(), record.task_id.clone())]),
                 json: true,
                 schema: Some(planner_reply_schema(&offered)),
-                tools: Some(self.tool_declarations(&offered)),
+                tools: Some(tool_decls),
             };
             let reply = self.chat_with_retry(record, request).await?;
             match parse_reply(&reply) {
