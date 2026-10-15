@@ -65,6 +65,9 @@ pub struct ChatReply {
     pub latency_ms: u64,
     #[serde(default)]
     pub attempts: Vec<Value>,
+    /// Token counts when the backend reports them ({prompt_tokens, completion_tokens, ...}).
+    #[serde(default)]
+    pub usage: Option<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -235,6 +235,70 @@ fn group_of(ext: &str) -> usize {
 }
 
 impl Knowledge {
+    /// The detail behind the learning tree: where the learned files are (folders), what was learned last, what could
+    /// not be read and why, what waits, the biggest sources and the size of the knowledge itself.
+    pub fn detail(&self) -> anyhow::Result<Value> {
+        let conn = open_db(&self.db)?;
+        let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0) };
+        let mut stmt = conn.prepare(
+            "SELECT path, COALESCE(size, 0), COALESCE(ext, ''), extract_error,
+                    CASE WHEN indexed_sha256 IS NOT NULL AND indexed_sha256 = sha256 THEN 1 ELSE 0 END, COALESCE(last_seen_at, '')
+             FROM files WHERE status = 'active' AND COALESCE(tier, 3) < 3",
+        )?;
+        struct Folder { files: i64, learned: i64, failed: i64, bytes: i64 }
+        let mut folders: HashMap<String, Folder> = HashMap::new();
+        let mut learned_rows: Vec<(String, i64, String)> = Vec::new();
+        let mut failures: Vec<(String, String)> = Vec::new();
+        let mut waiting: Vec<(String, i64)> = Vec::new();
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, i64>(4)?, r.get::<_, String>(5)?))
+        })?;
+        for row in rows {
+            let (path, size, _ext, error, learned, seen) = row?;
+            let parts: Vec<&str> = path.split(['\\', '/']).filter(|p| !p.is_empty()).collect();
+            let key = parts.iter().take(parts.len().saturating_sub(1).min(4)).copied().collect::<Vec<_>>().join("\\");
+            let f = folders.entry(key).or_insert(Folder { files: 0, learned: 0, failed: 0, bytes: 0 });
+            f.files += 1;
+            f.bytes += size;
+            if error.is_some() {
+                f.failed += 1;
+                failures.push((path.clone(), error.unwrap_or_default()));
+            } else if learned == 1 {
+                f.learned += 1;
+                learned_rows.push((path, size, seen));
+            } else {
+                waiting.push((path, size));
+            }
+        }
+        let mut folder_list: Vec<(String, Folder)> = folders.into_iter().collect();
+        folder_list.sort_by_key(|(_, f)| std::cmp::Reverse(f.files));
+        learned_rows.sort_by(|a, b| b.2.cmp(&a.2));
+        let recent: Vec<Value> = learned_rows.iter().take(15).map(|(p, s, at)| json!({"path": p, "bytes": s, "at": at})).collect();
+        let mut biggest = learned_rows.clone();
+        biggest.sort_by_key(|r| std::cmp::Reverse(r.1));
+        let biggest: Vec<Value> = biggest.iter().take(10).map(|(p, s, _)| json!({"path": p, "bytes": s})).collect();
+        let last_scan: String = conn.query_row("SELECT COALESCE(MAX(last_seen_at), '') FROM files", [], |r| r.get(0)).unwrap_or_default();
+        Ok(json!({
+            "folders": folder_list.iter().take(25).map(|(k, f)| json!({"path": k, "files": f.files, "learned": f.learned, "failed": f.failed, "bytes": f.bytes})).collect::<Vec<_>>(),
+            "recent": recent,
+            "biggest": biggest,
+            "failures": failures.iter().take(40).map(|(p, e)| json!({"path": p, "error": e.chars().take(200).collect::<String>()})).collect::<Vec<_>>(),
+            "failures_total": failures.len(),
+            "waiting": waiting.iter().take(40).map(|(p, s)| json!({"path": p, "bytes": s})).collect::<Vec<_>>(),
+            "waiting_total": waiting.len(),
+            "counts": {
+                "chunks": count("SELECT COUNT(*) FROM chunks"),
+                "facts": count("SELECT COUNT(*) FROM facts"),
+                "entities": count("SELECT COUNT(*) FROM entities"),
+                "people": count("SELECT COUNT(*) FROM people"),
+                "versions": count("SELECT COUNT(*) FROM file_versions"),
+                "questions_answered": count("SELECT COUNT(*) FROM qa_log"),
+                "deleted_files": count("SELECT COUNT(*) FROM files WHERE status = 'deleted'"),
+            },
+            "last_scan": last_scan,
+        }))
+    }
+
     /// How much of the machine's data the assistant has learned, and what that data is made of, as ONE tree that
     /// adds up to 100 % of the active files in the catalog (by count and by bytes):
     ///

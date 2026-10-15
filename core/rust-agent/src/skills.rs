@@ -61,13 +61,17 @@ pub fn load(dir: &Path) -> Vec<Playbook> {
 /// The playbooks that apply to `goal` (already accent-free and lower case), best first.
 pub fn matching<'a>(playbooks: &'a [Playbook], goal_normalized: &str) -> Vec<&'a Playbook> {
     let padded = format!(" {goal_normalized} ");
+    // A playbook whose trigger is "*" always applies (the person's standing style/working instructions) and does not
+    // take a place among the matched ones.
+    let always = playbooks.iter().filter(|p| p.triggers.iter().any(|t| t == "*"));
     let mut scored: Vec<(usize, &Playbook)> = playbooks
         .iter()
+        .filter(|p| !p.triggers.iter().any(|t| t == "*"))
         .map(|p| (p.triggers.iter().filter(|t| padded.contains(&format!(" {t} ")) || (t.contains(' ') && padded.contains(t.as_str()))).count(), p))
         .filter(|(n, _)| *n > 0)
         .collect();
     scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.cmp(&b.1.name)));
-    scored.into_iter().take(LIMIT).map(|(_, p)| p).collect()
+    always.chain(scored.into_iter().take(LIMIT).map(|(_, p)| p)).collect()
 }
 
 /// Text for the planner prompt ("" when nothing applies).
@@ -94,6 +98,20 @@ mod tests {
         assert_eq!(matching(&books, "mo file word va doi chu abc").len(), 1);
         assert!(matching(&books, "keyword search").is_empty(), "'word' inside 'keyword' is not a match");
         assert!(parse("no front matter").is_none());
+    }
+
+    #[test]
+    fn a_star_trigger_always_applies_without_using_a_slot() {
+        let always = parse("---
+name: style
+triggers: *
+---
+Answer briefly.
+").unwrap();
+        let word = parse(SAMPLE).unwrap();
+        let books = vec![always, word];
+        assert_eq!(matching(&books, "gui email").len(), 1);
+        assert_eq!(matching(&books, "mo file word").len(), 2);
     }
 
     #[test]
