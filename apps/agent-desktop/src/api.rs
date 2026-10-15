@@ -154,6 +154,12 @@ impl Api {
                 let paths: Vec<String> = body["paths"].as_array().map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect()).unwrap_or_default();
                 knowledge.start_update(&paths, false).map(|v| json_reply(StatusCode::OK, v))
             }
+            (&Method::GET, ["api", "memory"]) => extras::memory_list(&self.config, &query_param(request.uri(), "q").unwrap_or_default()).map(|v| json_reply(StatusCode::OK, v)),
+            (&Method::POST, ["api", "memory"]) => extras::memory_add(&self.config, &body).map(|v| json_reply(StatusCode::OK, v)),
+            (&Method::POST, ["api", "memory", id, "update"]) => extras::memory_update(&self.config, id, &body).map(|v| json_reply(StatusCode::OK, v)),
+            (&Method::POST, ["api", "memory", id, "delete"]) => extras::memory_delete(&self.config, id).map(|v| json_reply(StatusCode::OK, v)),
+            (&Method::POST, ["api", "feedback"]) => extras::feedback(&self.config, &body).map(|v| json_reply(StatusCode::OK, v)),
+            (&Method::POST, ["api", "open"]) => Ok(json_reply(StatusCode::OK, crate::openlink::handle(&self.config, &body))),
             (&Method::GET, ["api", "skills"]) => Ok(json_reply(StatusCode::OK, extras::list_skills(&self.config))),
             (&Method::POST, ["api", "skills"]) => extras::save_skill(&self.config, &body).map(|v| json_reply(StatusCode::OK, v)),
             (&Method::POST, ["api", "skills", id, "delete"]) => extras::delete_skill(&self.config, id).map(|v| json_reply(StatusCode::OK, v)),
@@ -750,6 +756,27 @@ mod live {
         assert_eq!(code, StatusCode::OK);
         let (_, list) = call(&api, Method::GET, "/api/skills", Value::Null);
         assert!(!list["skills"].as_array().unwrap().iter().any(|s| s["id"] == id.as_str()));
+    }
+
+    #[test]
+    fn memory_api_adds_lists_switches_off_and_deletes() {
+        let api = api();
+        let marker = format!("quytacthu{}", uuid::Uuid::new_v4().simple());
+        let (code, added) = call(&api, Method::POST, "/api/memory", json!({"text": format!("Luôn kiểm tra {marker} trước khi gửi báo cáo"), "scope": "project"}));
+        assert_eq!(code, StatusCode::OK, "{added}");
+        let id = added["id"].as_str().unwrap().to_string();
+        let (_, list) = call(&api, Method::GET, &format!("/api/memory?q={marker}"), Value::Null);
+        assert_eq!(list["items"].as_array().unwrap().len(), 1, "{list}");
+        let (code, _) = call(&api, Method::POST, "/api/memory", json!({"text": "mật khẩu của tôi: hunter2 12345"}));
+        assert_eq!(code, StatusCode::BAD_REQUEST, "a secret is refused");
+        let (code, _) = call(&api, Method::POST, &format!("/api/memory/{id}/update"), json!({"status": "disabled"}));
+        assert_eq!(code, StatusCode::OK);
+        let (_, list) = call(&api, Method::GET, &format!("/api/memory?q={marker}"), Value::Null);
+        assert_eq!(list["items"][0]["status"], "disabled");
+        let (code, _) = call(&api, Method::POST, &format!("/api/memory/{id}/delete"), json!({}));
+        assert_eq!(code, StatusCode::OK);
+        let (_, list) = call(&api, Method::GET, &format!("/api/memory?q={marker}"), Value::Null);
+        assert!(list["items"].as_array().unwrap().is_empty());
     }
 
     #[test]

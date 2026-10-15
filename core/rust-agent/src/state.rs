@@ -242,6 +242,11 @@ pub struct TaskRecord {
     pub artifacts: Vec<String>,
     pub escalation: Option<Value>,
     pub pending_question: Option<String>,
+    /// Choices offered with the open question (empty: free text only) and whether several may be picked.
+    #[serde(default)]
+    pub pending_options: Vec<String>,
+    #[serde(default)]
+    pub pending_multi: bool,
     pub runner_pid: Option<u32>,
     /// What the user and the agent said outside tool calls: the earlier request this one follows up on,
     /// questions the agent asked and the user's answers. Shown to the planner on every turn.
@@ -281,6 +286,8 @@ impl TaskRecord {
             artifacts: Vec::new(),
             escalation: None,
             pending_question: None,
+            pending_options: Vec::new(),
+            pending_multi: false,
             runner_pid: None,
             conversation: Vec::new(),
             attachments: Vec::new(),

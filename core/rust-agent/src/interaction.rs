@@ -103,6 +103,38 @@ mod tests {
     }
 
     #[test]
+    fn a_choice_question_carries_its_options_to_the_ui_and_returns_the_answer() {
+        let dir = tempfile::tempdir().unwrap();
+        let tasks = dir.path().to_path_buf();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Value::Null));
+        let answerer = {
+            let (tasks, seen) = (tasks.clone(), seen.clone());
+            std::thread::spawn(move || {
+                let req = request_path(&tasks, "t1");
+                for _ in 0..300 {
+                    if let Ok(bytes) = std::fs::read(&req) {
+                        let v = serde_json::from_slice::<Value>(&bytes).unwrap();
+                        *seen.lock().unwrap() = v.clone();
+                        std::fs::write(response_path(&tasks, "t1"), json!({"id": v["id"], "answer": "- Word
+- PDF"}).to_string()).unwrap();
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            })
+        };
+        let ui = FileInteraction::new(&tasks, "t1", Quiet).with_timeout(Duration::from_secs(5));
+        let answer = ui.ask_choice("Định dạng nào?", &["Word".into(), "PDF".into()], true);
+        answerer.join().unwrap();
+        assert_eq!(answer.as_deref(), Some("- Word
+- PDF"));
+        let v = seen.lock().unwrap().clone();
+        assert_eq!(v["kind"], "ask");
+        assert_eq!(v["options"], json!(["Word", "PDF"]));
+        assert_eq!(v["multi"], true);
+    }
+
+    #[test]
     fn only_an_answer_to_this_request_counts() {
         let dir = tempfile::tempdir().unwrap();
         let tasks = dir.path().to_path_buf();
@@ -181,6 +213,12 @@ impl<I: Interaction> Interaction for FileInteraction<I> {
 
     fn ask(&self, question: &str) -> Option<String> {
         self.exchange(json!({"kind": "ask", "question": question}))
+            .and_then(|r| r.get("answer").and_then(Value::as_str).map(String::from))
+            .filter(|a| !a.trim().is_empty())
+    }
+
+    fn ask_choice(&self, question: &str, options: &[String], multi: bool) -> Option<String> {
+        self.exchange(json!({"kind": "ask", "question": question, "options": options, "multi": multi}))
             .and_then(|r| r.get("answer").and_then(Value::as_str).map(String::from))
             .filter(|a| !a.trim().is_empty())
     }

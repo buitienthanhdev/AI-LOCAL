@@ -62,6 +62,15 @@ pub trait Interaction: Send + Sync {
     }
     /// Ask the user a question; None when nobody can answer (non-interactive).
     fn ask(&self, question: &str) -> Option<String>;
+    /// Ask with choices (`multi`: several may be picked). The default shows the choices as text and takes a typed
+    /// answer; the chat window overrides it with a real dialog whose last choice is always "Khác".
+    fn ask_choice(&self, question: &str, options: &[String], _multi: bool) -> Option<String> {
+        if options.is_empty() {
+            return self.ask(question);
+        }
+        let listed: Vec<String> = options.iter().enumerate().map(|(i, o)| format!("{}. {o}", i + 1)).collect();
+        self.ask(&format!("{question}\n{}", listed.join("\n")))
+    }
 }
 
 pub enum RunEvent<'a> {
@@ -220,6 +229,27 @@ fn failure_coaching(consecutive: u32, step: &StepRecord) -> Option<String> {
             "{consecutive} steps failed in a row. Before the next call, write in your thought: (1) the actual cause of the last error,              (2) why the previous attempt could not work, (3) a DIFFERENT method (another tool or a simpler script). Repeating the same              call with small changes is not allowed; if nothing different is possible, ask the user one short question or use task.fail."));
     }
     None
+}
+
+/// Choices of a clarification question: trimmed, de-duplicated, without any "other" entry of the model's own (the chat
+/// adds the one "Khác" at the end), at most 8. A reply that gives no usable list falls back to free text.
+fn clarification_options(args: &Value) -> (Vec<String>, bool) {
+    let mut options: Vec<String> = Vec::new();
+    for item in args.get("options").and_then(Value::as_array).into_iter().flatten() {
+        let Some(text) = item.as_str() else { continue };
+        let text: String = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(160).collect();
+        let folded = text.to_lowercase();
+        let is_other = matches!(folded.trim_matches(|c: char| !c.is_alphanumeric()), "khác" | "khac" | "other" | "others" | "something else" | "khác nhập yêu cầu riêng");
+        if text.is_empty() || is_other || options.iter().any(|o| o.to_lowercase() == folded) {
+            continue;
+        }
+        options.push(text);
+        if options.len() == 8 {
+            break;
+        }
+    }
+    let multi = args.get("multi").and_then(Value::as_bool).unwrap_or(false) && options.len() > 1;
+    (options, multi)
 }
 
 /// Steps that operate applications directly: the person should keep their hands off meanwhile.
@@ -411,6 +441,21 @@ impl<'a> TaskRunner<'a> {
         }
         self.set_status(record, status, Some(reason))?;
         self.rt.memory.record_task(&record.task_id, &record.goal, status.as_str(), record.final_summary.as_deref().or(Some(reason)))?;
+        // Learning after the task: one episodic line built from the record (no model call, one SQLite write). A
+        // memory problem must never fail the task, so it is only logged.
+        let mut tools: Vec<String> = Vec::new();
+        for step in &record.steps {
+            if step.status == StepStatus::Succeeded && !step.tool.starts_with("task.") && !tools.contains(&step.tool) {
+                tools.push(step.tool.clone());
+            }
+        }
+        let verified = record.completion_basis.as_deref() == Some("verified");
+        if let Err(e) = self.rt.memory.record_episode(
+            &record.task_id, &record.goal, status.as_str(), record.final_summary.as_deref(), record.failure_reason.as_deref().or(Some(reason)).filter(|_| status != TaskStatus::Completed),
+            &tools, record.steps.len(), verified,
+        ) {
+            let _ = self.audit.record(AuditEvent { kind: "memory_error", error: Some(json!(e.to_string())), ..Default::default() });
+        }
         Ok(())
     }
 
@@ -540,13 +585,18 @@ impl<'a> TaskRunner<'a> {
                     "task.ask_user" => {
                         self.banner = None; // the person has to answer: hands back on
                         let question = action.args.get("question").and_then(Value::as_str).unwrap_or_default().to_string();
+                        let (options, multi) = clarification_options(&action.args);
                         record.pending_question = Some(question.clone());
+                        record.pending_options = options.clone();
+                        record.pending_multi = multi;
                         self.set_status(record, TaskStatus::NeedsUser, Some(&question))?;
-                        match self.ui.ask(&question) {
+                        match self.ui.ask_choice(&question, &options, multi) {
                             Some(answer) => {
                                 record.conversation.push(format!("You asked the user: {question}"));
                                 record.conversation.push(format!("The user answered: {answer}"));
                                 record.pending_question = None;
+                                record.pending_options.clear();
+                                record.pending_multi = false;
                                 self.set_status(record, TaskStatus::Planning, None)?;
                                 break;
                             }
@@ -1294,6 +1344,18 @@ mod tests {
         let mut other = step.clone();
         other.input_hash = "h2".into();
         assert!(super::repeated_check_notice(&history, &other).is_none());
+    }
+
+    #[test]
+    fn clarification_options_are_cleaned_and_never_contain_the_models_own_other() {
+        let args = serde_json::json!({"question": "q", "options": ["Báo cáo tuần", "  Báo   cáo tuần ", "Khác", "Báo cáo tháng", "", 7], "multi": true});
+        let (options, multi) = super::clarification_options(&args);
+        assert_eq!(options, vec!["Báo cáo tuần", "Báo cáo tháng"]);
+        assert!(multi);
+        let (options, multi) = super::clarification_options(&serde_json::json!({"question": "q", "options": "not a list", "multi": true}));
+        assert!(options.is_empty() && !multi, "no usable list: free text only");
+        let many: Vec<String> = (0..20).map(|i| format!("o{i}")).collect();
+        assert_eq!(super::clarification_options(&serde_json::json!({"options": many})).0.len(), 8);
     }
 
     #[test]
