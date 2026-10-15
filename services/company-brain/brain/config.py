@@ -47,6 +47,7 @@ LIB_MARKERS = (
     # đầu ra do chính Trợ lý sinh ra (ảnh chụp, tác phẩm, log, bản tham chiếu): tìm được theo tên, không đọc/embed
     "/local-gemini-agent/artifacts/", "/local-gemini-agent/references/", "/local-gemini-agent/runtime/",
     "/local-gemini-agent/logs/", "/local-gemini-agent/memory/", "/local-gemini-agent/third_party/",
+    "/go/pkg/mod/", "/go/pkg/sumdb/",   # bộ nhớ đệm module Go: thư viện, không phải tài liệu của người dùng
 )
 CODE_EXT = {".py", ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".php", ".java", ".cs", ".cpp", ".c", ".h",
             ".go", ".rs", ".sql", ".sh", ".ps1", ".bat", ".yaml", ".yml", ".xml", ".ini", ".toml", ".ipynb"}

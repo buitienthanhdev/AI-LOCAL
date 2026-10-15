@@ -69,3 +69,6 @@ memory/art/references/
 # Runtime state (never track)
 memory/activity/
 memory/art/references.json
+
+# Playbooks written from the settings page (personal style, lessons)
+skills/u-*.md

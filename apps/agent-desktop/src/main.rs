@@ -9,6 +9,7 @@
 
 mod activity;
 mod api;
+mod extras;
 mod services;
 mod vendor;
 

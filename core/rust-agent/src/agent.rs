@@ -729,7 +729,7 @@ impl<'a> TaskRunner<'a> {
                         provider: Some(format!("{}:{}", self.rt.llm.name(), reply.backend)),
                         duration_ms: Some(now_ms(started)),
                         retry_count: Some(attempt - 1),
-                        detail: json!({"model": reply.model, "attempts": reply.attempts}),
+                        detail: json!({"model": reply.model, "attempts": reply.attempts, "usage": reply.usage}),
                         ..Default::default()
                     })?;
                     return Ok(reply.content);

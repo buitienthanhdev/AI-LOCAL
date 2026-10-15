@@ -24,7 +24,7 @@ use lga_core::interaction::{request_path, response_path};
 use lga_core::state::{attachments_dir, new_task_id, safe_file_name};
 use serde_json::{json, Value};
 
-use crate::services;
+use crate::{extras, services};
 
 const INDEX_HTML: &str = include_str!("../ui/index.html");
 const MAX_TASK_CHARS: usize = 4000;
@@ -142,6 +142,25 @@ impl Api {
                 };
             }
             (&Method::GET, ["api", "learning"]) => Ok(self.learning()),
+            (&Method::GET, ["api", "knowledge", "detail"]) => {
+                let knowledge = lga_core::native::knowledge::Knowledge::new(&self.config);
+                Ok(match knowledge.detail() {
+                    Ok(v) => json_reply(StatusCode::OK, v),
+                    Err(e) => error(StatusCode::SERVICE_UNAVAILABLE, format!("chưa đọc được chi tiết tri thức: {e}")),
+                })
+            }
+            (&Method::POST, ["api", "knowledge", "update"]) => {
+                let knowledge = lga_core::native::knowledge::Knowledge::new(&self.config);
+                let paths: Vec<String> = body["paths"].as_array().map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect()).unwrap_or_default();
+                knowledge.start_update(&paths, false).map(|v| json_reply(StatusCode::OK, v))
+            }
+            (&Method::GET, ["api", "skills"]) => Ok(json_reply(StatusCode::OK, extras::list_skills(&self.config))),
+            (&Method::POST, ["api", "skills"]) => extras::save_skill(&self.config, &body).map(|v| json_reply(StatusCode::OK, v)),
+            (&Method::POST, ["api", "skills", id, "delete"]) => extras::delete_skill(&self.config, id).map(|v| json_reply(StatusCode::OK, v)),
+            (&Method::GET, ["api", "usage"]) => {
+                let days = query_param(request.uri(), "days").and_then(|v| v.parse().ok()).unwrap_or(7).clamp(1, 60);
+                Ok(json_reply(StatusCode::OK, extras::usage(&self.config, days)))
+            }
             (&Method::GET, ["api", "activity"]) => {
                 let period = query_param(request.uri(), "period").unwrap_or_else(|| "today".into());
                 Ok(json_reply(StatusCode::OK, crate::activity::summary(&self.config, &period)))
@@ -701,6 +720,44 @@ mod live {
             assert!(sum <= active + 1.0);
         }
         std::fs::write(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../logs/dev/activity.json"), v.to_string()).unwrap();
+    }
+
+    #[test]
+    #[ignore]
+    fn knowledge_detail_lists_folders_and_counts() {
+        let api = api();
+        let (code, v) = call(&api, Method::GET, "/api/knowledge/detail", Value::Null);
+        assert_eq!(code, StatusCode::OK, "{v}");
+        assert!(v["folders"].as_array().is_some_and(|f| !f.is_empty()), "{v}");
+        assert!(v["counts"]["chunks"].as_i64().unwrap_or(0) > 0);
+        std::fs::write(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../logs/dev/knowledge_detail.json"), v.to_string()).unwrap();
+    }
+
+    #[test]
+    fn user_skills_round_trip_through_the_api() {
+        let api = api();
+        let (code, saved) = call(&api, Method::POST, "/api/skills",
+            json!({"name": "Thử nghiệm", "kind": "lesson", "triggers": ["bao cao", "excel"], "body": "Luôn ghi rõ đơn vị tiền."}));
+        assert_eq!(code, StatusCode::OK, "{saved}");
+        let id = saved["id"].as_str().unwrap().to_string();
+        let (_, list) = call(&api, Method::GET, "/api/skills", Value::Null);
+        let found = list["skills"].as_array().unwrap().iter().find(|s| s["id"] == id.as_str()).expect("listed");
+        assert_eq!(found["kind"], "lesson");
+        assert_eq!(found["triggers"], json!(["bao cao", "excel"]));
+        let (code, _) = call(&api, Method::POST, "/api/skills", json!({"name": "x", "body": "y", "triggers": []}));
+        assert_eq!(code, StatusCode::BAD_REQUEST, "a skill without triggers is refused");
+        let (code, _) = call(&api, Method::POST, &format!("/api/skills/{id}/delete"), json!({}));
+        assert_eq!(code, StatusCode::OK);
+        let (_, list) = call(&api, Method::GET, "/api/skills", Value::Null);
+        assert!(!list["skills"].as_array().unwrap().iter().any(|s| s["id"] == id.as_str()));
+    }
+
+    #[test]
+    fn usage_reads_the_audit_logs() {
+        let api = api();
+        let (code, v) = call(&api, Method::GET, "/api/usage?days=7", Value::Null);
+        assert_eq!(code, StatusCode::OK, "{v}");
+        assert!(v["backends"].is_array());
     }
 
     #[test]
