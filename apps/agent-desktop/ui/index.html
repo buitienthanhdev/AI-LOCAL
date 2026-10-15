@@ -280,13 +280,132 @@
   .seg2 { display: inline-flex; background: var(--code); border-radius: 9px; padding: 2px; }
   .seg2 button { padding: 4px 12px; border-radius: 7px; font-size: 12.5px; color: var(--muted); }
   .seg2 button.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow); font-weight: 600; }
+
+  /* ===== ChatGPT-style shell (3 columns: history | work | AI activity) ===== */
+  :root { --bg:#ffffff; --panel:#ffffff; --side:#f9f9f9; --text:#0d0d0d; --muted:#6b6b6b; --border:#e5e5e5;
+          --accent:#2f6fed; --accent-2:#2f6fed; --accent-soft:#eaf1ff; --code:#f4f4f4; --user:#f4f4f4; --shadow:none; --hover:#ececec; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg:#212121; --panel:#2f2f2f; --side:#171717; --text:#ececec; --muted:#a0a0a0; --border:#3a3a3a;
+          --accent:#6b9bff; --accent-2:#6b9bff; --accent-soft:#26334f; --code:#2a2a2a; --user:#303030; --hover:#2a2a2a; }
+  }
+  html, body { background: var(--bg); }
+  .grow { flex: 1; }
+  .icon-btn { width: 34px; height: 34px; border-radius: 8px; display: inline-grid; place-items: center; color: var(--muted); flex: none; }
+  .icon-btn:hover { background: var(--hover); color: var(--text); }
+  #side { width: 260px; flex: none; background: var(--side); border-right: none; transition: width .18s ease, margin .18s ease; overflow: hidden; }
+  #side > * { min-width: 260px; }
+  body.side-off #side { width: 0; }
+  .side-top { display: flex; align-items: center; gap: 2px; padding: 10px 10px 4px 14px; }
+  .side-top .brand { flex: 1; padding: 0; font-size: 17px; font-weight: 650; letter-spacing: 0; gap: 8px; }
+  .brand .logo, .avatar { box-shadow: none; width: 24px; height: 24px; }
+  .navbtn { margin: 6px 8px 2px; padding: 8px 10px; border-radius: 10px; display: flex; gap: 10px; align-items: center; width: calc(100% - 16px); font-size: 14px; background: var(--hover); }
+  .navbtn:hover { background: var(--border); }
+  .searchrow { display: none; padding: 4px 8px; }
+  .searchrow.open { display: block; }
+  .search { width: 100%; margin: 0; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); }
+  .hist-title { font-size: 12px; color: var(--muted); padding: 14px 18px 4px; font-weight: 600; }
+  #history { padding: 0 8px; }
+  .group { padding: 10px 10px 4px; }
+  .item { padding: 7px 10px; border-radius: 10px; align-items: center; }
+  .item:hover { background: var(--hover); }
+  .item.sel { background: var(--hover); }
+  .item .g { -webkit-line-clamp: 1; font-size: 14px; }
+  .item .t { font-size: 11px; }
+  .item .dot { margin-top: 0; width: 7px; height: 7px; }
+  .clearall { border: none; text-align: left; margin: 0 8px; }
+  .health { border-top: none; }
+
+  main { background: var(--bg); }
+  .top { display: flex; align-items: center; gap: 6px; padding: 8px 12px; flex: none; }
+  #menuBtn { display: none; }
+  body.side-off #menuBtn { display: inline-grid; }
+  .modelwrap { position: relative; }
+  .modelbtn { display: flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 10px; font-size: 17px; font-weight: 600; }
+  .modelbtn:hover { background: var(--hover); }
+  .modelbtn .caret { color: var(--muted); font-size: 13px; }
+  .pop { position: absolute; top: 44px; left: 0; z-index: 30; min-width: 300px; background: var(--panel); border: 1px solid var(--border);
+         border-radius: 14px; padding: 6px; box-shadow: 0 8px 30px rgba(0,0,0,.14); display: none; }
+  .pop.open { display: block; }
+  .pop .opt { display: flex; gap: 10px; align-items: center; width: 100%; text-align: left; padding: 9px 10px; border-radius: 10px; }
+  .pop .opt:hover { background: var(--hover); }
+  .pop .opt .dot { margin-top: 0; }
+  .pop .opt .sub { display: block; font-size: 12px; color: var(--muted); }
+  .pop .opt .tick { margin-left: auto; color: var(--accent); }
+
+  #scroll { background: var(--bg); }
+  .wrap { max-width: 760px; }
+  .avatar { display: none; }
+  .msg { gap: 0; }
+  .user .bubble { background: var(--user); border-radius: 22px; padding: 10px 18px; }
+  .card { box-shadow: none; border-radius: 14px; }
+  .composer { background: var(--bg); padding: 6px 20px 8px; }
+  .box { max-width: 760px; border-radius: 28px; border: 1px solid var(--border); background: var(--panel);
+         box-shadow: 0 2px 10px rgba(0,0,0,.06); padding: 10px 14px 8px; }
+  .box:focus-within { border-color: var(--border); box-shadow: 0 2px 12px rgba(0,0,0,.10); }
+  .bar { flex-wrap: nowrap; }
+  .bar .seg { margin-left: 4px; }
+  .bar .hint { display: none; }
+  .bar::after { content: ""; flex: 1; order: 5; }
+  .mic { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-size: 16px; color: var(--muted); flex: none; order: 6; }
+  .mic:hover { background: var(--hover); color: var(--text); }
+  .mic.rec { background: var(--bad); color: #fff; animation: pulse 1s infinite; }
+  .send { order: 7; background: var(--accent); box-shadow: none; }
+  .send:disabled { background: var(--border); }
+  .seg { background: var(--hover); }
+  .seg button.on { color: var(--text); }
+  .btn.primary { background: var(--accent); }
+  .answer.ok .status { display: none; }
+  .md { font-size: 15.5px; }
+
+  main { position: relative; }
+  body.empty main { justify-content: center; }
+  body.empty .top { position: absolute; top: 0; left: 0; right: 0; }
+  body.empty #scroll { flex: none; overflow: visible; }
+  body.empty .composer { padding-top: 14px; }
+  .welcome-title { text-align: center; font-size: 28px; font-weight: 600; padding: 0 0 6px; }
+  #suggest { display: none; max-width: 760px; width: 100%; margin: 0 auto; padding: 4px 28px 0; }
+  body.empty #suggest { display: block; }
+  #suggest .sug { display: flex; gap: 12px; align-items: center; width: 100%; text-align: left; padding: 12px 6px; color: var(--muted); border-radius: 10px; }
+  #suggest .sug:hover { background: var(--hover); color: var(--text); }
+
+  /* right panel: what the AI is doing */
+  #steps { width: 340px; flex: none; background: var(--bg); border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+  body.steps-off #steps { display: none; }
+  .steps-head { display: flex; align-items: center; gap: 8px; padding: 12px 12px 10px 16px; border-bottom: 1px solid var(--border); }
+  #stepsBody { flex: 1; overflow-y: auto; padding: 12px 16px 24px; font-size: 13.5px; }
+  .as-empty { color: var(--muted); text-align: center; margin-top: 30vh; }
+  .as-goal { font-weight: 600; margin-bottom: 10px; }
+  .as { border-left: 2px solid var(--border); padding: 0 0 14px 14px; margin-left: 6px; position: relative; }
+  .as::before { content: ""; position: absolute; left: -6px; top: 3px; width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
+  .as.ok::before { background: var(--ok); } .as.bad::before { background: var(--bad); }
+  .as.live::before { background: var(--accent); animation: pulse 1s infinite; }
+  .as-h { display: flex; gap: 6px; align-items: center; font-weight: 600; margin-top: 2px; }
+  .as-h.think { color: var(--muted); font-weight: 500; font-style: italic; }
+  .as-t { color: var(--muted); margin: 3px 0 6px; white-space: pre-wrap; word-break: break-word; }
+  .as pre { margin-top: 4px; max-height: 150px; }
+  .as-r { font-size: 12px; margin-top: 4px; } .as-r.ok { color: var(--ok); } .as-r.bad { color: var(--bad); }
+  .as details summary { font-size: 12px; }
+  .as-think-live { display: flex; gap: 8px; align-items: center; color: var(--muted); font-style: italic; padding: 4px 0 4px 2px; }
+  @media (max-width: 1100px) { body:not(.steps-on) #steps { display: none; } }
+  @media (max-width: 760px) {
+    #side { position: fixed; inset: 0 auto 0 0; z-index: 5; width: 280px; transform: translateX(-100%); transition: transform .2s; }
+    body.menu #side { transform: none; }
+    body.side-off #side { width: 280px; }
+    #menuBtn { display: inline-grid; }
+    #steps { position: fixed; inset: 0 0 0 auto; z-index: 6; width: min(340px, 92vw); }
+  }
 </style>
 </head>
 <body>
-<aside>
-  <div class="brand"><div class="logo"></div>Illuminati</div>
-  <button class="new" id="newBtn">＋ Việc mới</button>
-  <input class="search" id="search" placeholder="Tìm trong lịch sử…">
+<aside id="side">
+  <div class="side-top">
+    <div class="brand"><div class="logo"></div><span>Illuminati</span></div>
+    <button class="icon-btn" id="searchBtn" title="Tìm trong lịch sử (Ctrl+K)"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg></button>
+    <button class="icon-btn" id="collapseBtn" title="Thu gọn thanh bên"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+  </div>
+  <button class="navbtn" id="newBtn"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg><span>Trò chuyện mới</span></button>
+  <div class="searchrow" id="searchRow"><input class="search" id="search" placeholder="Tìm trong lịch sử…"></div>
+  <div class="hist-title">Gần đây</div>
   <div id="history"></div>
   <button class="clearall" id="clearAll" title="Xóa toàn bộ lịch sử chat">🗑 Xóa tất cả lịch sử</button>
   <div class="health" id="health" title="Bấm để kiểm tra lại">
@@ -303,7 +422,15 @@
   </div>
 </aside>
 <main>
-  <div class="topbar"><button class="btn" id="menuBtn">☰</button><b>Illuminati</b></div>
+  <header class="top">
+    <button class="icon-btn" id="menuBtn" title="Mở thanh bên"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg></button>
+    <div class="modelwrap">
+      <button class="modelbtn" id="modelBtn" title="Chọn bộ não AI cho việc tiếp theo"><span id="modelLabel">Tự động</span><span class="caret">▾</span></button>
+      <div class="pop" id="modelMenu"></div>
+    </div>
+    <span class="grow"></span>
+    <button class="icon-btn" id="stepsBtn" title="Hiện/ẩn hoạt động của AI"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></svg></button>
+  </header>
   <div id="scroll"><div class="wrap" id="view"></div></div>
   <div class="composer">
     <div class="box">
@@ -318,12 +445,17 @@
           <button data-mode="trusted" title="Tự làm các việc thường gặp, chỉ hỏi khi có rủi ro cao">Tin cậy</button>
           <button data-mode="full_access" class="full" title="Tự làm mọi việc không cần hỏi (vẫn không vượt UAC/Administrator)">Toàn quyền</button>
         </div>
-        <span class="hint">Enter để gửi · Shift+Enter xuống dòng · kéo thả tệp để đính kèm</span>
+        <button class="mic" id="micBtn" title="Nhập bằng giọng nói">🎤</button>
         <button class="send" id="sendBtn" title="Gửi">➤</button>
       </div>
     </div>
   </div>
+  <div id="suggest"></div>
 </main>
+<aside id="steps">
+  <div class="steps-head"><b>Hoạt động của AI</b><span class="muted small" id="stepsInfo"></span><span class="grow"></span><button class="icon-btn" id="stepsClose" title="Ẩn">✕</button></div>
+  <div id="stepsBody"></div>
+</aside>
 <div id="toast"></div>
 <div id="settings" class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
   <div class="card sheet">
@@ -886,7 +1018,7 @@ async function refreshHealth() {
     $("h-gateway").className = `dot ${!s.gateway ? "bad" : gemini ? "ok" : usable.length ? "warn" : "bad"}`;
     $("h-brains").lastChild.textContent = !s.gateway ? "Bộ não AI: chưa chạy" : gemini ? `Bộ não AI: ${BRAIN_NAMES[gemini.name] || gemini.name}`
       : usable.length ? "Bộ não AI: chỉ còn AI trên máy (chậm)" : "Bộ não AI: không dùng được";
-    drawBrains();
+    drawBrains(); drawModelMenu();
     $("h-knowledge").className = `dot ${s.knowledge ? "ok" : "bad"}`;
     $("h-vision").className = `dot ${s.vision ? "ok" : ""}`;
     if (!refreshHealth.modeSet) { refreshHealth.modeSet = true; let saved = null; try { saved = localStorage.getItem("lga.mode.v2"); } catch {} setMode(saved || s.default_mode || "normal", false); }
@@ -994,6 +1126,7 @@ const queue = [];
 let draining = false;
 async function startRequest(text, out, shown, useMode) {
   const body = { task: text, mode: useMode, context: conversationContext(), attachments: out };
+  if (pinnedBrain) body.brain = pinnedBrain;
   if (conv) body.conversation_id = conv.id;
   const { task_id, conversation_id } = await api("/api/tasks", body);
   startTurn(task_id, conversation_id, text || "(tệp đính kèm)", shown);
@@ -1055,12 +1188,11 @@ function updateComposer(data) {
 /* ---------- Views ---------- */
 function showWelcome() {
   conv = null; selected = null; currentData = null; updateComposer(null); drawHistory();
-  $("view").replaceChildren(el("div", { class: "hello" },
-    el("div", { class: "sun" }, el("div", { class: "logo" })), el("h1", {}, "Illuminati"),
-    el("div", { class: "tagline" }, "Soi sáng mọi việc trên máy tính của bạn"),
-    el("p", {}, "Tôi điều khiển Windows, Chrome, AutoCAD, Paint, tệp tin, PowerShell và tra cứu tài liệu công ty. Mỗi bước đều được kiểm tra lại. Đính kèm ảnh hay tài liệu bằng 📎, kéo thả hoặc dán ảnh."),
-    el("div", { class: "ideas" }, IDEAS.map(([ic, title, text]) => el("button", { class: "idea", onclick: () => { $("input").value = text; grow(); $("input").focus(); } },
-      el("div", { class: "ic" }, ic), el("div", {}, el("b", {}, title), el("span", {}, text)))))));
+  document.body.classList.add("empty");
+  $("view").replaceChildren(el("div", { class: "hello" }, el("div", { class: "welcome-title" }, "Hôm nay bạn dự định làm gì?")));
+  $("suggest").replaceChildren(...IDEAS.map(([ic, title, text]) => el("button", { class: "sug", onclick: () => { $("input").value = text; grow(); $("input").focus(); } },
+    el("span", {}, ic), el("span", {}, `${title}: ${text}`))));
+  drawSteps(null);
   $("scroll").scrollTop = 0;
   $("input").focus({ preventScroll: true });
 }
@@ -1083,7 +1215,7 @@ function openConversation(id) {
   if (!items.length) return;
   conv = { id, turns: items.map(t => newTurn(t.task_id, t.goal)) };
   selected = lastTurn().id; currentData = null;
-  document.body.classList.remove("menu");
+  document.body.classList.remove("menu", "empty"); $("suggest").replaceChildren();
   drawHistory();
   $("view").replaceChildren(...conv.turns.map(turnNode));
   for (const t of conv.turns) $(`${t.id}-live`).replaceChildren(el("div", { class: "card live" }, el("div", { class: "spin" }), el("span", { class: "what" }, "Đang tải…")));
@@ -1097,7 +1229,7 @@ function startTurn(taskId, conversationId, goal, shown) {
   const turn = newTurn(taskId, goal, shown);
   conv.turns.push(turn);
   selected = taskId; currentData = null;
-  document.body.classList.remove("menu");
+  document.body.classList.remove("menu", "empty"); $("suggest").replaceChildren();
   $("view").append(turnNode(turn));
   $(`${taskId}-live`).replaceChildren(el("div", { class: "card live" }, el("div", { class: "spin" }), el("span", { class: "what" }, "Đang khởi động…")));
   drawHistory();
@@ -1256,6 +1388,7 @@ function render(turn) {
         s.error ? el("div", { style: "color:var(--bad)" }, `${s.error.code}: ${s.error.message}`) : null,
         s.observation ? el("pre", {}, short(s.observation, 1500)) : null)),
       checks.length ? [el("div", { class: "group", style: "padding-left:0" }, "Kiểm tra hoàn thành"), checks.map(v => el("pre", {}, `${v.kind} → ${v.verification_result}\n${short(v.detail, 1500)}`))] : null))) : null);
+  if (turn === lastTurn()) drawSteps(turn);
 }
 const modeName = m => ({ normal: "An toàn", trusted: "Tin cậy", full_access: "Toàn quyền" }[m] || m);
 
@@ -1423,13 +1556,131 @@ for (const b of $("actPeriod").children) b.onclick = () => {
 
 /* ---------- Wiring ---------- */
 $("newBtn").onclick = showWelcome;
-$("menuBtn").onclick = () => document.body.classList.toggle("menu");
 $("search").oninput = drawHistory;
 $("health").onclick = refreshHealth;
 $("sendBtn").onclick = () => send();
 $("attachBtn").onclick = () => $("fileInput").click();
 $("fileInput").onchange = () => { addFiles($("fileInput").files); $("fileInput").value = ""; };
 $("input").addEventListener("paste", e => { const files = [...((e.clipboardData && e.clipboardData.files) || [])]; if (files.length) { e.preventDefault(); addFiles(files); } });
+
+/* ---------- Model picker (which brain serves the next request) ---------- */
+let pinnedBrain = "";
+try { pinnedBrain = localStorage.getItem("lga.brain") || ""; } catch {}
+const BRAIN_HINT = { api: "Nhanh, có hạn mức miễn phí", cloud: "Model lớn trên Ollama cloud", local: "Chạy trên máy bạn, riêng tư",
+  webapi: "Gemini web (thử nghiệm)", primary: "Gemini web", fallback: "Gemini web dự phòng" };
+function drawModelMenu() {
+  const items = [{ name: "", label: "Tự động", sub: "Thử lần lượt các bộ não theo thứ tự ưu tiên", cls: "ok" }]
+    .concat(lastBrains.map(b => { const [cls, text] = brainState(b); return { name: b.name, label: BRAIN_NAMES[b.name] || b.name, sub: `${BRAIN_HINT[b.name] || ""}${BRAIN_HINT[b.name] ? " · " : ""}${text}`, cls }; }));
+  if (!items.some(i => i.name === pinnedBrain)) pinnedBrain = "";
+  const cur = items.find(i => i.name === pinnedBrain) || items[0];
+  $("modelLabel").textContent = cur.label;
+  $("modelMenu").replaceChildren(...items.map(i => el("button", { class: "opt", onclick: () => {
+      pinnedBrain = i.name; try { localStorage.setItem("lga.brain", pinnedBrain); } catch {}
+      $("modelMenu").classList.remove("open"); drawModelMenu(); toast(i.name ? `Việc tiếp theo dùng: ${i.label}` : "Tự động chọn bộ não"); } },
+    el("span", { class: `dot ${i.cls}` }), el("span", {}, i.label, el("span", { class: "sub" }, i.sub)),
+    i.name === pinnedBrain ? el("span", { class: "tick" }, "✓") : null)));
+}
+
+/* ---------- Right panel: what the AI is thinking and running ---------- */
+function stepArgs(tool, args) {
+  if (!args || typeof args !== "object") return short(args, 300);
+  if (typeof args.command === "string") return args.command;
+  if (typeof args.code === "string") return args.code;
+  if (typeof args.path === "string" && Object.keys(args).length <= 2) return Object.entries(args).map(([k, v]) => `${k}: ${v}`).join("\n");
+  return short(args, 300);
+}
+let stepsSig = "";
+function drawSteps(turn) {
+  const body = $("stepsBody");
+  const data = turn && turn.data;
+  if (!data) { stepsSig = ""; $("stepsInfo").textContent = ""; body.replaceChildren(el("div", { class: "as-empty" }, "Khi AI làm việc, từng bước suy nghĩ và lệnh đang chạy sẽ hiện ở đây.")); return; }
+  const task = data.task, events = turn.events, st = task.status, pendingReq = data.pending_request;
+  const done = TERMINAL.includes(st) || data.interrupted;
+  const started = events.filter(e => e.kind === "step_started");
+  const finished = new Set(task.steps.map(s => s.step_id));
+  const current = started.length && !finished.has(started[started.length - 1].step_id) ? started[started.length - 1] : null;
+  const sig = JSON.stringify([turn.id, task.steps.length, st, current && current.step_id, done, !!pendingReq, brainName(events)]);
+  if (sig === stepsSig) return;
+  stepsSig = sig;
+  const sc = body.scrollHeight - body.scrollTop - body.clientHeight < 80;
+  const nodes = [el("div", { class: "as-goal" }, task.goal)];
+  for (const s of task.steps) {
+    const ok = s.status === "succeeded";
+    nodes.push(el("div", { class: `as ${ok ? "ok" : "bad"}` },
+      s.thought ? el("div", { class: "as-h think" }, "💡 Suy nghĩ") : null,
+      s.thought ? el("div", { class: "as-t" }, short(s.thought, 700)) : null,
+      el("div", { class: "as-h" }, "⌨ ", friendly(s.tool), el("code", { class: "muted" }, s.tool)),
+      el("pre", {}, short(stepArgs(s.tool, s.args), 500)),
+      el("div", { class: `as-r ${ok ? "ok" : "bad"}` }, `${ok ? "✓ Thành công" : "✗ " + s.status} · ${(s.duration_ms / 1000).toFixed(1)}s${s.error ? ` · ${s.error.code}: ${short(s.error.message, 160)}` : ""}`),
+      s.observation ? el("details", {}, el("summary", {}, "Kết quả"), el("pre", {}, short(s.observation, 900))) : null));
+  }
+  if (!done) {
+    if (current) {
+      const th = current.detail && current.detail.thought;
+      nodes.push(el("div", { class: "as live" },
+        th ? el("div", { class: "as-h think" }, "💡 Suy nghĩ") : null, th ? el("div", { class: "as-t" }, short(th, 700)) : null,
+        el("div", { class: "as-h" }, el("div", { class: "spin" }), "Đang chạy: ", friendly(current.tool))));
+    } else {
+      nodes.push(el("div", { class: "as-think-live" }, el("div", { class: "spin" }),
+        pendingReq ? "Đang chờ bạn xác nhận…" : st === "needs_user" ? "Đang chờ bạn trả lời…" : "Đang suy nghĩ…"));
+    }
+  } else {
+    nodes.push(el("div", { class: `as-r ${st === "completed" ? "ok" : "bad"}`, style: "margin-left:6px" },
+      data.interrupted ? "⚠ Bị gián đoạn" : st === "completed" ? "✓ Hoàn thành" : st === "cancelled" ? "■ Đã dừng" : "✗ Chưa làm được"));
+  }
+  $("stepsInfo").textContent = `${task.steps.length} bước${brainName(events) ? " · " + brainName(events) : ""}`;
+  body.replaceChildren(...nodes);
+  if (sc || !done) body.scrollTop = body.scrollHeight;
+}
+
+/* ---------- Shell: collapse sidebar, search, panel toggles, voice ---------- */
+function stored(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } }
+function keep(k, v) { try { localStorage.setItem(k, v); } catch {} }
+if (stored("lga.side", "on") === "off") document.body.classList.add("side-off");
+if (stored("lga.steps", "on") === "off") document.body.classList.add("steps-off");
+if (window.innerWidth > 1100 || stored("lga.steps", "") === "on") document.body.classList.add("steps-on");
+$("collapseBtn").onclick = () => { document.body.classList.add("side-off"); keep("lga.side", "off"); };
+$("menuBtn").onclick = () => {
+  if (window.innerWidth <= 760) { document.body.classList.toggle("menu"); return; }
+  document.body.classList.remove("side-off"); keep("lga.side", "on");
+};
+$("stepsBtn").onclick = () => {
+  const off = document.body.classList.toggle("steps-off");
+  document.body.classList.toggle("steps-on", !off);
+  keep("lga.steps", off ? "off" : "on");
+};
+$("stepsClose").onclick = () => { document.body.classList.add("steps-off"); document.body.classList.remove("steps-on"); keep("lga.steps", "off"); };
+function openSearch(show) {
+  const row = $("searchRow");
+  const open = show === undefined ? !row.classList.contains("open") : show;
+  row.classList.toggle("open", open);
+  if (open) { document.body.classList.remove("side-off"); $("search").focus(); } else { $("search").value = ""; drawHistory(); }
+}
+$("searchBtn").onclick = () => openSearch();
+$("modelBtn").onclick = e => { e.stopPropagation(); $("modelMenu").classList.toggle("open"); };
+document.addEventListener("click", e => { if (!e.target.closest(".modelwrap")) $("modelMenu").classList.remove("open"); });
+document.addEventListener("keydown", e => { if (e.ctrlKey && e.key.toLowerCase() === "k") { e.preventDefault(); openSearch(true); } });
+
+// Voice input: the webview's speech recognition (Vietnamese). Where it is missing the button says so.
+(() => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null, base = "";
+  $("micBtn").onclick = () => {
+    if (!SR) { toast("Cửa sổ này chưa hỗ trợ nhận giọng nói. Có thể dùng Win+H (gõ bằng giọng nói của Windows)."); return; }
+    if (rec) { rec.stop(); return; }
+    rec = new SR(); rec.lang = "vi-VN"; rec.interimResults = true; rec.continuous = true;
+    base = $("input").value ? $("input").value.trimEnd() + " " : "";
+    rec.onresult = ev => {
+      let text = "";
+      for (const r of ev.results) text += r[0].transcript;
+      $("input").value = base + text; grow();
+    };
+    rec.onerror = ev => { toast(ev.error === "not-allowed" ? "Chưa cấp quyền micro cho cửa sổ này" : `Nhận giọng nói lỗi: ${ev.error}`); };
+    rec.onend = () => { rec = null; $("micBtn").classList.remove("rec"); $("input").focus(); };
+    try { rec.start(); $("micBtn").classList.add("rec"); toast("Đang nghe… bấm lại để dừng"); } catch (e) { rec = null; toast(e.message); }
+  };
+})();
+
 let dragDepth = 0;
 document.addEventListener("dragenter", e => { e.preventDefault(); dragDepth++; document.body.classList.add("dragging"); });
 document.addEventListener("dragover", e => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = "copy"; });

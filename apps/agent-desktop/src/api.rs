@@ -350,11 +350,17 @@ impl Api {
     }
 
     fn spawn_agent(&self, args: &[&str], log_name: &str) -> Result<()> {
+        self.spawn_agent_with(args, log_name, &[])
+    }
+
+    /// `envs` pins per-request knobs such as LGA_BRAIN (the brain picked in the chat window's model menu).
+    fn spawn_agent_with(&self, args: &[&str], log_name: &str, envs: &[(&str, &str)]) -> Result<()> {
         let log_dir = self.config.logs_dir().join("ui");
         fs::create_dir_all(&log_dir)?;
         let log = OpenOptions::new().create(true).append(true).open(log_dir.join(log_name))?;
         Command::new(&self.agent_exe)
             .args(args)
+            .envs(envs.iter().copied())
             .current_dir(&self.config.root)
             .stdin(Stdio::null())
             .stdout(log.try_clone()?)
@@ -434,7 +440,11 @@ impl Api {
         args.push("--".into());
         args.push(task.into());
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
-        self.spawn_agent(&args, &format!("{task_id}.out.log"))?;
+        // A brain chosen in the model menu ("" / "auto" = the gateway's own order). Names are route names only.
+        let brain = body["brain"].as_str().unwrap_or("").trim();
+        let brain = if !brain.is_empty() && brain != "auto" && brain.len() <= 24 && brain.chars().all(|c| c.is_ascii_lowercase() || c == '_') { brain } else { "" };
+        let envs: Vec<(&str, &str)> = if brain.is_empty() { Vec::new() } else { vec![("LGA_BRAIN", brain)] };
+        self.spawn_agent_with(&args, &format!("{task_id}.out.log"), &envs)?;
         Ok(json_reply(StatusCode::OK, json!({"task_id": task_id, "conversation_id": conversation, "attachments": files.len()})))
     }
 
