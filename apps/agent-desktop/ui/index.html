@@ -462,6 +462,47 @@
     .prefs-title, .prefs-nav .grow { display: none; }
     .prefs-body { padding: 16px; }
   }
+
+  /* links and paths found in any text of the chat */
+  a.lk { color: var(--accent); text-decoration: none; border-bottom: 1px dotted currentColor; cursor: pointer; word-break: break-all; }
+  a.lk:hover, a.lk:focus-visible { background: var(--accent-soft); outline: none; border-bottom-style: solid; }
+  a.lk.lk-path::before { content: "📄 "; font-size: .85em; }
+  a.lk.lk-dir::before { content: "📁 "; font-size: .85em; }
+  a.lk.lk-bad { color: var(--bad); border-bottom-color: var(--bad); }
+  #lkmenu { position: fixed; z-index: 40; min-width: 230px; max-width: 360px; background: var(--panel); border: 1px solid var(--border);
+            border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.18); padding: 6px; display: none; }
+  #lkmenu.open { display: block; }
+  #lkmenu .why { padding: 6px 10px 8px; font-size: 12.5px; color: var(--muted); word-break: break-all; }
+  #lkmenu button { display: block; width: 100%; text-align: left; padding: 7px 10px; border-radius: 8px; font-size: 13.5px; }
+  #lkmenu button:hover, #lkmenu button:focus-visible { background: var(--hover); outline: none; }
+
+  /* clarification dialog */
+  #clarify { position: fixed; inset: 0; z-index: 25; background: rgba(0,0,0,.42); display: none; place-items: center; padding: 16px; }
+  #clarify.open { display: grid; }
+  #clarify .dlg { width: min(640px, 100%); max-height: 90vh; overflow: auto; background: var(--panel); border: 1px solid var(--border);
+                  border-radius: 18px; padding: 20px 22px; box-shadow: 0 20px 60px rgba(0,0,0,.28); }
+  #clarify h3 { margin: 0 0 4px; font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  #clarify .q { font-size: 16.5px; font-weight: 600; margin: 4px 0 12px; }
+  #clarify .opts { display: grid; gap: 8px; }
+  #clarify .opt { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; cursor: pointer; }
+  #clarify .opt:hover { background: var(--hover); }
+  #clarify .opt.on { border-color: var(--accent); background: var(--accent-soft); }
+  #clarify .opt input { margin-top: 3px; flex: none; }
+  #clarify .opt .k { margin-left: auto; color: var(--muted); font-size: 12px; padding-left: 8px; }
+  #clarify textarea { width: 100%; margin-top: 8px; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; resize: vertical; }
+  #clarify .err { color: var(--bad); font-size: 13px; min-height: 18px; margin-top: 8px; }
+  #clarify .hint { color: var(--muted); font-size: 12.5px; margin-top: 2px; }
+  .ask-inline { border: 1px solid var(--accent); }
+
+  .mem { border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; display: grid; gap: 6px; }
+  .mem.off { opacity: .55; }
+  .mem.conflict { border-color: var(--warn); }
+  .mem .t { white-space: pre-wrap; word-break: break-word; }
+  .mem .meta { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 12px; color: var(--muted); }
+  .badge { padding: 1px 8px; border-radius: 999px; background: var(--code); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+  .badge.ok { background: var(--ok-soft); color: var(--ok); }
+  .mem .acts { display: flex; gap: 6px; justify-content: flex-end; }
 </style>
 </head>
 <body>
@@ -534,6 +575,7 @@
       <button data-tab="skill"><span class="ti">🧩</span><span data-t="Kỹ năng & phong cách">Kỹ năng & phong cách</span></button>
       <button data-tab="model"><span class="ti">⚡</span><span data-t="Mô hình & hạn mức">Mô hình & hạn mức</span></button>
       <button data-tab="teach"><span class="ti">🎓</span><span data-t="Dạy lại AI">Dạy lại AI</span></button>
+      <button data-tab="mem"><span class="ti">🗂</span><span data-t="Bộ nhớ của AI">Bộ nhớ của AI</span></button>
       <span class="grow"></span>
       <button class="prefs-close" id="prefsClose"><span class="ti">✕</span><span data-t="Đóng">Đóng</span></button>
     </nav>
@@ -601,6 +643,22 @@
           <div class="actions"><button class="btn primary" id="saveKey">Lưu</button><button class="btn danger" id="removeKey">Xóa khóa</button></div>
         </div>
       </section>
+      <section class="pane" id="paneMem" data-pane="mem">
+        <div class="pane-head"><h2 data-t="Bộ nhớ của AI">Bộ nhớ của AI</h2></div>
+        <div class="small muted" style="margin-bottom:10px">Những gì AI đã ghi nhớ từ các lần làm việc: việc đã làm (và kết quả), điều bạn đã sửa, quy tắc bạn dặn. Bạn có thể tắt, sửa hoặc xóa bất kỳ mục nào; mục đã tắt hoặc xóa sẽ không được dùng nữa. Mật khẩu, khóa API và token không bao giờ được ghi nhớ.</div>
+        <div class="grp"><h3>Dặn AI ghi nhớ</h3>
+          <textarea id="memText" rows="2" placeholder="Ví dụ: Báo cáo tuần luôn lưu vào D:\Bao cao và đặt tên theo ngày."></textarea>
+          <div class="actions"><select id="memScope"><option value="global">Dùng cho mọi việc</option><option value="project">Chỉ cho dự án/việc hiện tại</option></select>
+            <button class="btn primary" id="memAdd">Ghi nhớ</button><span class="small muted" id="memState"></span></div>
+        </div>
+        <div class="grp"><div class="row" style="border-top:none;padding:0 0 8px">
+            <input id="memSearch" type="text" class="wide" placeholder="Tìm trong bộ nhớ…">
+            <select id="memKind"><option value="">Tất cả</option><option value="semantic">Quy tắc / thông tin</option><option value="feedback">Điều bạn đã sửa</option>
+              <option value="episodic">Việc đã làm</option><option value="procedural">Quy trình đã chạy tốt</option><option value="failure">Lỗi đã gặp</option></select></div>
+          <div id="memConflict" class="small" style="color:var(--warn);margin-bottom:8px"></div>
+          <div id="memList" class="list"></div>
+        </div>
+      </section>
       <section class="pane" id="paneTeach" data-pane="teach">
         <div class="pane-head"><h2 data-t="Dạy lại AI">Dạy lại AI</h2></div>
         <div class="small muted" style="margin-bottom:10px">Sau khi AI làm xong một việc mà bạn chưa ưng, hãy chọn việc đó và dạy lại: lần sau gặp việc tương tự, AI sẽ nhớ và làm theo cách bạn muốn.</div>
@@ -611,6 +669,9 @@
         <div class="grp"><h3>2. Bạn muốn AI làm / trả lời thế nào?</h3>
           <div class="small muted">Những gì AI nên làm khác đi (cách làm việc)</div>
           <textarea id="teachHow" rows="4" placeholder="Ví dụ: Khi tính tổng tiền phải cộng cả cột phụ phí. Đừng tự lưu file ra Desktop khi tôi chưa nói."></textarea>
+          <div class="small muted">Lỗi thuộc loại nào?</div>
+          <select id="teachCategory" class="wide"><option value="">Không rõ</option><option value="kiến thức">Sai kiến thức / số liệu</option><option value="suy luận">Suy luận sai</option>
+            <option value="trí nhớ">Quên điều đã dặn</option><option value="công cụ">Dùng sai công cụ / thao tác</option><option value="giao diện">Giao diện / hiển thị</option></select>
           <div class="small muted">Một câu trả lời mẫu mà bạn thấy tốt (không bắt buộc)</div>
           <textarea id="teachAnswer" rows="4" placeholder="Ví dụ: Tổng chi tháng 10 là 12.500.000 đ (đã gồm phụ phí 500.000 đ)."></textarea>
           <div class="small muted">Từ khóa để AI nhận ra việc tương tự (tự gợi ý từ yêu cầu, sửa được)</div>
@@ -630,6 +691,21 @@
       <button class="btn" id="actClose">Đóng</button>
     </div>
     <div id="actBody" class="small muted">Đang đọc…</div>
+  </div>
+</div>
+<div id="clarify" role="dialog" aria-modal="true" aria-labelledby="clarifyTitle">
+  <div class="dlg">
+    <h3 id="clarifyTitle">Trợ lý cần bạn làm rõ</h3>
+    <div class="q" id="clarifyQ"></div>
+    <div class="hint" id="clarifyHint"></div>
+    <div class="opts" id="clarifyOpts"></div>
+    <div id="clarifyOtherWrap" style="display:none"><textarea id="clarifyOther" rows="3" placeholder="Nhập yêu cầu riêng của bạn…"></textarea></div>
+    <div class="err" id="clarifyErr" role="alert"></div>
+    <div class="actions">
+      <button class="btn primary" id="clarifySend">Gửi</button>
+      <button class="btn" id="clarifyLater">Để sau</button>
+      <span class="small muted" id="clarifyState"></span>
+    </div>
   </div>
 </div>
 <div id="lightbox"><img alt=""></div>
@@ -777,12 +853,13 @@ const MD = (() => {
     return el("div", { class: "code" },
       el("div", { class: "codehead" }, el("span", {}, lang || "mã"),
         el("button", { class: "copy", onclick: e => copyText(code, e.currentTarget) }, "Sao chép")),
-      el("pre", { class: "codeblock" }, el("code", {}, highlight(code, lang))));
+      el("pre", { class: "codeblock" }, el("code", {}, /^(|text|txt|log|logs|console|output|terminal|traceback|pytb|stacktrace|shell-session)$/i.test(lang || "") ? text(code) : highlight(code, lang))));
   }
 
   function link(href, children) {
+    if (/^https?:\/\//i.test(href)) return el("a", { class: "lk lk-url", href, role: "link", tabindex: "0", "data-target": href, "data-kind": "url", title: `Mở trong trình duyệt: ${href}` }, children);
     if (SAFE_URL.test(href)) return el("a", { href, target: "_blank", rel: "noopener" }, children);
-    if (LOCAL_PATH.test(href)) return el("a", { href: "#", title: "Mở thư mục chứa tệp", onclick: e => { e.preventDefault(); reveal(href); } }, children);
+    if (LOCAL_PATH.test(href) || /^\\\\/.test(href) || /^\.{1,2}[\\/]/.test(href)) return el("a", { class: "lk lk-path", href: "#", role: "link", tabindex: "0", "data-target": href, "data-kind": "path" }, children);
     return el("span", {}, children);
   }
 
@@ -808,6 +885,9 @@ const MD = (() => {
       const c = src[i];
       if (c === "\\") {
         const nx = src[i + 1];
+        // Windows paths keep their backslashes: "C:\Users\.config", "C:\a\_b" and \\server\share are not escapes
+        if (/(?:^|[\s(])[A-Za-z]:[\\/][^\s]*$/.test(buf)) { buf += c; i++; continue; }
+        if (nx === "\\" && /[\w$.-]/.test(src[i + 2] || "") && (!src[i - 1] || /[\s(]/.test(src[i - 1]))) { buf += "\\\\"; i += 2; continue; }
         if (nx === "(") { const j = src.indexOf("\\)", i + 2); if (j > 0) { flush(); out.push(math(src.slice(i + 2, j).trim(), false)); i = j + 2; continue; } }
         if (nx === "[") { const j = src.indexOf("\\]", i + 2); if (j > 0) { flush(); out.push(math(src.slice(i + 2, j).trim(), true)); i = j + 2; continue; } }
         if (nx && /[\\`*_{}\[\]()#+\-.!|~$<>]/.test(nx)) { buf += nx; i += 2; continue; }
@@ -840,7 +920,8 @@ const MD = (() => {
           const end = matching(src, close + 1, "(", ")");
           if (end > 0) {
             const label = src.slice(open + 1, close);
-            const href = src.slice(close + 2, end).trim().split(/\s+/)[0].replace(/^<|>$/g, "");
+            const dest = src.slice(close + 2, end).trim().replace(/^<|>$/g, "");
+            const href = (LOCAL_PATH.test(dest) || /^\\\\/.test(dest)) ? dest : dest.split(/\s+/)[0];
             flush();
             if (image) {
               if (SAFE_URL.test(href) || /^data:image\//i.test(href)) out.push(el("img", { class: "mdimg", src: href, alt: label, onclick: e => zoom(e.target.src) }));
@@ -1404,6 +1485,7 @@ function render(turn) {
   const data = turn.data, events = turn.events;
   const task = data.task, pending = data.pending_request, st = task.status;
   const done = TERMINAL.includes(st) || data.interrupted;
+  lkTask = task.task_id;
   notifyTransitions(turn, task, pending, done);
   region(turn, "goal", [task.goal, task.attachments], () => [task.goal, attachmentNodes(task.attachments)]);
 
@@ -1416,6 +1498,7 @@ function render(turn) {
     done && el("button", { class: "btn", onclick: () => { $("input").value = task.goal; grow(); $("input").focus(); } }, "✎ Sửa & gửi lại"),
   ]);
 
+  syncClarify(turn, data);
   region(turn, "ask", pending, () => {
     if (!pending) return null;
     if (pending.kind === "confirm") {
@@ -1435,10 +1518,8 @@ function render(turn) {
           el("button", { class: "btn primary", onclick: () => respond({ approve: true }) }, always ? "✓ Cho phép đúng hành động này" : "✓ Cho phép"),
           el("button", { class: "btn", onclick: () => respond({ approve: false }) }, "✗ Không cho phép")));
     }
-    const input = el("input", { type: "text", placeholder: "Nhập câu trả lời…", onkeydown: e => { if (e.key === "Enter") respond({ answer: input.value }); } });
-    setTimeout(() => input.focus(), 0);
-    return el("div", { class: "card ask" }, el("h3", {}, "💬 Trợ lý hỏi bạn"), el("div", { class: "md", style: "margin-bottom:8px" }, MD.render(pending.question)), input,
-      el("div", { class: "actions" }, el("button", { class: "btn primary", onclick: () => respond({ answer: input.value }) }, "Trả lời")));
+    return el("div", { class: "card ask ask-inline" }, el("h3", {}, "💬 Trợ lý cần bạn làm rõ"), el("div", { class: "md", style: "margin-bottom:8px" }, MD.render(pending.question)),
+      el("div", { class: "actions" }, el("button", { class: "btn primary", onclick: () => openClarify(turn, true) }, "Trả lời")));
   });
 
   const started = events.filter(e => e.kind === "step_started");
@@ -1451,7 +1532,7 @@ function render(turn) {
     const brain = brainName(events);
     return el("div", { class: "card" },
       el("div", { class: "live" }, ["paused", "needs_user"].includes(st) ? el("span", {}, "⏸") : el("div", { class: "spin" }),
-        el("span", { class: "what" }, st === "needs_user" && !pending ? "Đang chờ bạn trả lời (gõ vào ô bên dưới)" : what),
+        el("span", { class: "what" }, st === "needs_user" && !pending ? "Đang chờ bạn trả lời" : what),
         el("span", { class: "muted small" }, `· bước ${task.steps.length + (current ? 1 : 0)}${brain ? ` · ${brain}` : ""}`)),
       st === "needs_user" && task.pending_question && !pending ? el("div", { class: "md", style: "margin-top:6px" }, MD.render(task.pending_question)) : null,
       thought ? el("div", { class: "muted small", style: "margin-top:4px" }, thought) : null,
@@ -1480,9 +1561,10 @@ function render(turn) {
         unconfirmed.length ? el("details", {}, el("summary", {}, "Những điều kiện chưa xác nhận"),
           el("ul", { class: "plan" }, unconfirmed.map(c => el("li", {}, String(c))))) : null) : null,
       task.escalation ? el("div", { class: "txt", style: "margin-top:6px" }, "⚠ Việc này cần quyền Administrator. Trợ lý không tự vượt UAC — hãy tự chạy với quyền quản trị nếu bạn đồng ý.") : null,
-      files.length ? el("div", { class: "files" }, files.map(f => el("button", { class: "chip", title: `Mở thư mục chứa ${f}`, onclick: () => reveal(f) }, "📄", el("span", {}, fileName(f))))) : null,
+      files.length ? el("div", { class: "files" }, files.map(f => el("button", { class: "chip", title: `Mở ${f} (Shift+bấm: mở vị trí)`, onclick: e => { lkTask = task.task_id; openTarget(f, { action: e.shiftKey ? "reveal" : "open", rect: e.currentTarget.getBoundingClientRect() }); } }, "📄", el("span", {}, fileName(f))))) : null,
       answer ? el("div", { class: "answer-actions" }, el("button", { class: "ghost", title: "Chép câu trả lời", onclick: e => copyText(answer, e.currentTarget) }, "📋 Sao chép"),
-        el("button", { class: "ghost", title: "Chưa ưng? Dạy AI làm khác đi lần sau", onclick: () => openPrefs("teach", task.task_id) }, "🎓 Dạy lại")) : null);
+        el("button", { class: "ghost", title: "Cách làm này tốt: AI sẽ nhớ", onclick: () => rateTask(task.task_id, "up") }, "👍 Tốt"),
+        el("button", { class: "ghost", title: "Chưa ưng? Dạy AI làm khác đi lần sau", onclick: () => openPrefs("teach", task.task_id) }, "👎 Chưa tốt · dạy lại")) : null);
   });
 
   region(turn, "spec", [task.steps.length, task.updated_at], () => {
@@ -1871,7 +1953,7 @@ const EN = {
   "Ngôn ngữ ứng dụng hiện áp dụng cho khung giao diện chính và phần cài đặt; nội dung trả lời của AI theo ngôn ngữ bạn viết.":
     "The app language applies to the main shell and settings; the AI's answers follow the language you write in.",
   "Phong cách nói chuyện & cách làm việc (luôn áp dụng)": "Conversation style & way of working (always applied)",
-  "Kỹ năng của bạn": "Your skills",
+  "Kỹ năng của bạn": "Your skills", "Bộ nhớ của AI": "AI memory",
 };
 const T = vi => (opt("lang") === "en" && EN[vi]) || vi;
 function applyLang() {
@@ -1886,7 +1968,7 @@ function applyLang() {
 }
 
 /* ---------- Settings overlay ---------- */
-const TABS = ["know", "lang", "skill", "model", "teach"];
+const TABS = ["know", "lang", "skill", "model", "teach", "mem"];
 let prefsTab = "know";
 function closePrefs() { $("prefs").classList.remove("open"); }
 function openPrefs(tab, taskId) {
@@ -1903,6 +1985,7 @@ function showTab(tab, taskId) {
   if (tab === "skill") loadSkills();
   if (tab === "model") { drawBrains(); loadApiKeyState(); loadUsage(); }
   if (tab === "teach") { loadSkills().then(() => drawTeach(taskId)); }
+  if (tab === "mem") loadMemory();
 }
 for (const b of document.querySelectorAll(".prefs-nav [data-tab]")) b.onclick = () => showTab(b.dataset.tab);
 $("prefsClose").onclick = closePrefs;
@@ -2043,6 +2126,7 @@ $("teachSave").onclick = async () => {
     `(Bài học từ yêu cầu trước đây: "${goal.slice(0, 120)}")`].filter(Boolean).join("\n\n");
   try {
     await api("/api/skills", { name: `Dạy: ${goal.slice(0, 60)}`, kind: "lesson", triggers, body });
+    try { await api("/api/feedback", { task_id: $("teachTask").value, rating: "fix", comment: how || ans, category: $("teachCategory").value }); } catch (e) { toast(e.message); }
     $("teachState").textContent = "✓ AI đã ghi nhớ — áp dụng từ việc tiếp theo.";
     $("teachHow").value = $("teachAnswer").value = ""; loadSkills();
   } catch (e) { toast(e.message); }
@@ -2097,6 +2181,365 @@ function drawBrains() {
       note ? el("div", { class: "muted small", style: "margin-top:8px" }, note[0], note[1] ? [" ", el("a", { href: note[1], target: "_blank" }, note[2])] : null) : null);
   });
   $("brainList").replaceChildren(...(cards.length ? cards : [el("div", { class: "muted" }, "Gateway chưa chạy — đang khởi động…")]));
+}
+
+/* ---------- Links and paths: one detector + one click handler for every text in the app ---------- */
+const LGA_LINKS = (() => {
+  const TRAIL = /[.,;:!?)\]}>'"”’…]+$/;
+  const EXT_END = /\.[A-Za-z][A-Za-z0-9]{0,7}$/;
+  const CAPS_WORD = /^[\p{Lu}\d][\p{Lu}\d_.-]*$/u;
+  function balanceTrim(url) {
+    let u = url.replace(TRAIL, m => m);
+    for (;;) {
+      const t = u.replace(/[.,;:!?'"”’…]+$/, "");
+      if (t !== u) { u = t; continue; }
+      if (/[)\]}]$/.test(u)) {
+        const open = { ")": "(", "]": "[", "}": "{" }[u.slice(-1)];
+        const opens = u.split(open).length - 1, closes = u.split(u.slice(-1)).length - 1;
+        if (closes > opens) { u = u.slice(0, -1); continue; }
+      }
+      return u;
+    }
+  }
+  /** Where a drive/UNC path that may contain spaces ends inside the text that follows it. */
+  function cutPath(s) {
+    const parts = s.split(" ");
+    let out = parts[0];
+    for (let i = 1; i < parts.length; i++) {
+      const next = parts[i];
+      const last = out.split(/[\\/]/).pop();
+      if (EXT_END.test(last.replace(TRAIL, ""))) break;           // a file name ends the path
+      if (/[,;]$/.test(out) || !next) break;
+      if (/[\\/]/.test(next) || CAPS_WORD.test(next)) { out += " " + next; continue; }
+      // plain words that lead to a file name ("kết quả.xlsx"): join them when an extension follows within 3 words
+      let j = i, ok = false;
+      while (j < parts.length && j < i + 3) {
+        if (EXT_END.test(parts[j].replace(TRAIL, ""))) { ok = true; break; }
+        if (/[,;:]$/.test(parts[j])) break;
+        j++;
+      }
+      if (ok) { out += " " + parts.slice(i, j + 1).join(" "); i = j; } else break;
+    }
+    return out;
+  }
+  function find(text) {
+    const found = [];
+    const taken = (a, b) => found.some(f => a < f.end && b > f.start);
+    let m;
+    const urlRe = /https?:\/\/[^\s<>"'`]+/gi;
+    while ((m = urlRe.exec(text))) {
+      const v = balanceTrim(m[0]);
+      if (v.length > 10 && !taken(m.index, m.index + v.length)) found.push({ start: m.index, end: m.index + v.length, kind: "url", value: v });
+    }
+    const winRe = /(?:[A-Za-z]:[\\/]|\\\\[\w.$-]+\\)[^\r\n<>"|?*`]*/g;
+    while ((m = winRe.exec(text))) {
+      if (m.index > 0 && /[A-Za-z0-9]/.test(text[m.index - 1]) && !/^[A-Za-z]:/.test(m[0])) continue;
+      if (/^[A-Za-z]:/.test(m[0]) && m.index > 0 && /[A-Za-z0-9_]/.test(text[m.index - 1])) continue;   // "abc:\" is not a drive
+      let raw = cutPath(m[0]);
+      let v = raw.replace(TRAIL, "");
+      if (v.length < 4) continue;
+      const lineM = /:(\d+)(?::(\d+))?$/.exec(v);
+      let line = null;
+      if (lineM) { line = Number(lineM[1]); }
+      const end = m.index + v.length;
+      const after = text.slice(end, end + 24);
+      const py = /^["']?,\s*line\s+(\d+)/.exec(after);
+      if (py && line === null) line = Number(py[1]);
+      if (!taken(m.index, end)) found.push({ start: m.index, end, kind: "path", value: v, line, tail: text.slice(end, end + 80) });
+    }
+    const relRe = /(^|[\s("'`\[=:])((?:\.{1,2}[\\/]|[\w.\-]+[\\/])(?:[\w.\-\u00C0-\u1EF9]+[\\/])*[\w.\-\u00C0-\u1EF9]*\.[A-Za-z][A-Za-z0-9]{0,7}(?::\d+(?::\d+)?)?)/g;
+    while ((m = relRe.exec(text))) {
+      const v = m[2], start = m.index + m[1].length, end = start + v.length;
+      if (/^[\w-]+\.(com|vn|org|net|io|dev|app|ai|edu|gov)[\\/]/i.test(v)) continue;   // a web address without scheme
+      if (taken(start, end)) continue;
+      const lineM = /:(\d+)(?::(\d+))?$/.exec(v);
+      found.push({ start, end, kind: "path", value: v, line: lineM ? Number(lineM[1]) : null, rel: true, tail: "" });
+    }
+    return found.sort((a, b) => a.start - b.start);
+  }
+  const CODE = /\.(rs|py|js|ts|tsx|jsx|json|toml|ya?ml|md|html|css|c|h|cpp|cs|go|java|sql|sh|txt)(:\d+(:\d+)?)?$/i;
+  const SKIP = "a, button, textarea, input, select, script, style, .katex, [data-nolink]";
+  function enhance(root) {
+    if (!root || root.nodeType === 8) return;
+    const base = root.nodeType === 3 ? root.parentNode : root;
+    if (!base || (base.closest && base.closest(SKIP))) return;
+    const walker = document.createTreeWalker(root.nodeType === 3 ? root.parentNode : root, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      if (root.nodeType === 3 && n !== root) continue;
+      if (n.nodeValue.length > 8 && !n.parentNode.closest(SKIP)) nodes.push(n);
+    }
+    for (const node of nodes) {
+      const text = node.nodeValue;
+      const hits = find(text);
+      if (!hits.length) continue;
+      const frag = document.createDocumentFragment();
+      let at = 0;
+      for (const h of hits) {
+        if (h.start > at) frag.append(text.slice(at, h.start));
+        const a = document.createElement("a");
+        a.className = `lk lk-${h.kind}`;
+        a.textContent = text.slice(h.start, h.end);
+        a.href = h.kind === "url" ? h.value : "#";
+        a.tabIndex = 0;
+        a.setAttribute("role", "link");
+        a.dataset.target = h.value;
+        a.dataset.kind = h.kind;
+        if (h.tail) a.dataset.tail = h.tail;
+        if (h.line) a.dataset.line = String(h.line);
+        a.title = h.kind === "url" ? `Mở trong trình duyệt: ${h.value}` : "Bấm để mở · Shift+bấm: mở vị trí · chuột phải: thêm lựa chọn";
+        frag.append(a);
+        at = h.end;
+      }
+      if (at < text.length) frag.append(text.slice(at));
+      node.parentNode.replaceChild(frag, node);
+    }
+  }
+  return { find, enhance, isCode: v => CODE.test(v) };
+})();
+
+let lkTask = "";
+function linkMenu(anchorRect, why, items) {
+  const m = $("lkmenu");
+  m.replaceChildren(why ? el("div", { class: "why" }, why) : null, ...items.filter(Boolean).map(([label, fn]) => el("button", { onclick: () => { m.classList.remove("open"); fn(); } }, label)));
+  m.classList.add("open");
+  const w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = `${Math.max(8, Math.min(window.innerWidth - w - 8, anchorRect.left))}px`;
+  m.style.top = `${Math.max(8, Math.min(window.innerHeight - h - 8, anchorRect.bottom + 4))}px`;
+  const first = m.querySelector("button"); if (first) first.focus();
+}
+function copyPlain(text) {
+  const done = () => toast("Đã sao chép đường dẫn");
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => toast("Không sao chép được"));
+  else toast("Không sao chép được");
+}
+async function openTarget(target, opts = {}) {
+  const { tail = "", action = "open", rect = null, line = null } = opts;
+  let r;
+  try { r = await api("/api/open", { target, tail, action, task_id: lkTask, line }); }
+  catch (e) { toast(`Không mở được: ${e.message}`); return; }
+  if (r.ok) { toast(r.message || "Đã mở"); return; }
+  const where = rect || { left: window.innerWidth / 2 - 120, bottom: window.innerHeight / 2 };
+  const name = r.name || String(target).split(/[\\/]/).pop();
+  if (r.status === "not_found") {
+    linkMenu(where, r.message, [
+      ["Sao chép đường dẫn", () => copyPlain(target)],
+      r.parent ? ["Mở thư mục chứa nó", () => openTarget(r.parent, { rect })] : null,
+      ["Nhờ AI tìm tệp này", () => { $("input").value = `Tìm giúp tôi tệp có tên "${name}" trên máy`; grow(); $("input").focus(); closePrefs(); }],
+    ]);
+  } else if (r.status === "blocked_executable") {
+    linkMenu(where, r.message, [["Mở vị trí trong Explorer", () => openTarget(r.resolved || target, { action: "reveal", rect })], ["Sao chép đường dẫn", () => copyPlain(r.resolved || target)]]);
+  } else if (r.status === "ide_unavailable") {
+    toast(r.message);
+  } else {
+    linkMenu(where, r.message || "Không mở được", [["Sao chép đường dẫn", () => copyPlain(target)]]);
+  }
+}
+document.body.append(el("div", { id: "lkmenu", role: "menu" }));
+document.addEventListener("click", e => {
+  const a = e.target.closest && e.target.closest("a.lk");
+  const menu = $("lkmenu");
+  if (!a) { if (!e.target.closest("#lkmenu")) menu.classList.remove("open"); return; }
+  e.preventDefault(); e.stopPropagation();
+  const rect = a.getBoundingClientRect();
+  openTarget(a.dataset.target, { tail: a.dataset.tail || "", action: e.shiftKey && a.dataset.kind === "path" ? "reveal" : "open", rect, line: a.dataset.line ? Number(a.dataset.line) : null });
+}, true);
+document.addEventListener("keydown", e => {
+  const a = document.activeElement;
+  if (e.key === "Enter" && a && a.classList && a.classList.contains("lk")) { e.preventDefault(); a.click(); }
+  if (e.key === "Escape") $("lkmenu").classList.remove("open");
+});
+document.addEventListener("contextmenu", e => {
+  const a = e.target.closest && e.target.closest("a.lk");
+  if (!a) return;
+  e.preventDefault();
+  const target = a.dataset.target, tail = a.dataset.tail || "", rect = a.getBoundingClientRect();
+  if (a.dataset.kind === "url") {
+    linkMenu(rect, target, [["Mở trong trình duyệt", () => openTarget(target, { rect })], ["Sao chép liên kết", () => copyPlain(target)]]);
+  } else {
+    linkMenu(rect, target, [
+      ["Mở", () => openTarget(target, { tail, rect })],
+      ["Mở vị trí trong Explorer", () => openTarget(target, { tail, action: "reveal", rect })],
+      LGA_LINKS.isCode(target) ? ["Mở trong VS Code (đúng dòng)", () => openTarget(target, { tail, action: "ide", rect })] : null,
+      ["Sao chép đường dẫn", () => copyPlain(target)],
+    ]);
+  }
+});
+// every text that appears in the chat, the activity panel or the settings is scanned once when it is added
+(() => {
+  let queued = new Set(), timer = 0;
+  const flush = () => { timer = 0; const items = [...queued]; queued = new Set(); for (const n of items) if (n.isConnected) LGA_LINKS.enhance(n); };
+  const obs = new MutationObserver(list => {
+    for (const m of list) for (const n of m.addedNodes) if (n.nodeType === 1 || n.nodeType === 3) queued.add(n);
+    if (!timer) timer = setTimeout(flush, 40);
+  });
+  for (const id of ["view", "stepsBody", "prefs", "knowDetail"]) { const n = $(id); if (n) obs.observe(n, { childList: true, subtree: true }); }
+})();
+
+/* ---------- Clarification dialog: single / multiple choice, always ending with "Khác", free text ---------- */
+let clarify = null;     // {key, turn, options, multi, question, sending}
+const clarifyDismissed = new Set();
+function askOf(data) {
+  const task = data.task, pr = data.pending_request;
+  if (pr && pr.kind === "ask") {
+    const opts = Array.isArray(pr.options) ? pr.options : (task.pending_options || []);
+    return { id: pr.id || "", question: String(pr.question || task.pending_question || ""), options: opts.filter(o => typeof o === "string" && o.trim()), multi: !!(pr.multi ?? task.pending_multi) };
+  }
+  if (task.status === "needs_user" && task.pending_question) {
+    return { id: "", question: String(task.pending_question), options: (task.pending_options || []).filter(o => typeof o === "string" && o.trim()), multi: !!task.pending_multi };
+  }
+  return null;
+}
+function syncClarify(turn, data) {
+  const q = askOf(data);
+  if (!q) { if (clarify && clarify.turn === turn) closeClarify(); return; }
+  const key = `${turn.id}|${q.id}|${q.question}`;
+  if (clarify && clarify.key === key) return;                 // already showing this very question: never stack another
+  if (clarifyDismissed.has(key)) return;
+  if (clarify && clarify.turn !== turn) return;               // another task's question is open: wait for it
+  openClarify(turn, false, q, key);
+}
+function openClarify(turn, force, q, key) {
+  q = q || askOf(turn.data);
+  if (!q) return;
+  key = key || `${turn.id}|${q.id}|${q.question}`;
+  if (force) clarifyDismissed.delete(key);
+  clarify = { key, turn, options: q.options, multi: q.multi, question: q.question, sending: false };
+  $("clarifyQ").replaceChildren(el("div", { class: "md" }, MD.render(q.question)));
+  $("clarifyHint").textContent = q.options.length ? (q.multi ? "Chọn một hoặc nhiều lựa chọn" : "Chọn một lựa chọn") : "Nhập câu trả lời của bạn";
+  const box = $("clarifyOpts");
+  const rows = [];
+  const type = q.multi ? "checkbox" : "radio";
+  const mk = (value, label, isOther, i) => {
+    const input = el("input", { type, name: "clarify-opt", value: String(value), id: `co-${i}` });
+    const row = el("label", { class: "opt", for: `co-${i}` }, input, el("span", {}, label), i < 9 ? el("span", { class: "k" }, String(i + 1)) : null);
+    input.onchange = () => { refreshClarifyRows(); $("clarifyErr").textContent = ""; };
+    row.dataset.other = isOther ? "1" : "";
+    return row;
+  };
+  q.options.forEach((o, i) => rows.push(mk(o, o, false, i)));
+  // "Khác" is always the last row, whatever the model sent; with no options it is the only way to answer, so it is plain text
+  if (q.options.length) rows.push(mk("__other__", "Khác — nhập yêu cầu riêng", true, q.options.length));
+  box.replaceChildren(...rows);
+  $("clarifyOtherWrap").style.display = q.options.length ? "none" : "";
+  $("clarifyOther").value = "";
+  $("clarifyErr").textContent = ""; $("clarifyState").textContent = "";
+  $("clarifySend").disabled = false;
+  $("clarify").classList.add("open");
+  setTimeout(() => { const f = q.options.length ? box.querySelector("input") : $("clarifyOther"); if (f) f.focus(); }, 0);
+}
+function refreshClarifyRows() {
+  let otherOn = false;
+  for (const row of $("clarifyOpts").children) {
+    const input = row.querySelector("input");
+    row.classList.toggle("on", input.checked);
+    if (row.dataset.other && input.checked) otherOn = true;
+  }
+  $("clarifyOtherWrap").style.display = otherOn || !$("clarifyOpts").children.length ? "" : "none";
+  if (otherOn) $("clarifyOther").focus();
+}
+function closeClarify() { $("clarify").classList.remove("open"); clarify = null; }
+/** The answer text the agent receives, or an error message. */
+function buildClarifyAnswer(c, picked, otherText) {
+  const other = otherText.trim();
+  const choices = picked.filter(v => v !== "__other__");
+  const otherPicked = picked.includes("__other__");
+  if (!c.options.length) return other ? { answer: other } : { error: "Hãy nhập câu trả lời trước khi gửi." };
+  if (otherPicked && !other) return { error: "Bạn đã chọn \"Khác\" nhưng chưa nhập yêu cầu riêng." };
+  if (!choices.length && !otherPicked) return { error: c.multi ? "Hãy chọn ít nhất một lựa chọn." : "Hãy chọn một lựa chọn." };
+  if (!c.multi) return { answer: otherPicked ? other : choices[0] };
+  const lines = choices.map(v => `- ${v}`);
+  if (otherPicked) lines.push(`- Khác (yêu cầu riêng): ${other}`);
+  return { answer: `Tôi chọn:\n${lines.join("\n")}` };
+}
+async function sendClarify() {
+  const c = clarify;
+  if (!c || c.sending) return;
+  const picked = [...$("clarifyOpts").querySelectorAll("input:checked")].map(i => i.value);
+  const r = buildClarifyAnswer(c, picked, $("clarifyOther").value);
+  if (r.error) { $("clarifyErr").textContent = r.error; return; }
+  c.sending = true; $("clarifySend").disabled = true; $("clarifyState").textContent = "Đang gửi…";
+  const turn = c.turn, data = turn.data;
+  try {
+    if (data && data.pending_request && data.pending_request.kind === "ask") await api(`/api/tasks/${turn.id}/respond`, { answer: r.answer });
+    else await api(`/api/tasks/${turn.id}/resume`, { answer: r.answer, attachments: [] });
+    clarifyDismissed.add(c.key);
+    closeClarify();
+    turn.settled = false; turn.seen = 0;
+    poll(true);
+  } catch (e) {
+    c.sending = false; $("clarifySend").disabled = false; $("clarifyState").textContent = "";
+    $("clarifyErr").textContent = `Không gửi được: ${e.message}. Bạn thử lại nhé.`;
+  }
+}
+$("clarifySend").onclick = sendClarify;
+$("clarifyLater").onclick = () => { if (clarify) clarifyDismissed.add(clarify.key); closeClarify(); toast("Trợ lý đang chờ câu trả lời của bạn — bấm \"Trả lời\" trong khung chat khi sẵn sàng"); };
+document.addEventListener("keydown", e => {
+  if (!clarify || !$("clarify").classList.contains("open")) return;
+  if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); $("clarifyLater").click(); return; }
+  if (e.key === "Enter" && (e.ctrlKey || e.target.tagName !== "TEXTAREA")) { e.preventDefault(); sendClarify(); return; }
+  if (/^[1-9]$/.test(e.key) && e.target.tagName !== "TEXTAREA") {
+    const row = $("clarifyOpts").children[Number(e.key) - 1];
+    if (row) { const input = row.querySelector("input"); input.checked = clarify.multi ? !input.checked : true; refreshClarifyRows(); }
+  }
+}, true);
+
+/* ---------- Memory tab: what the AI remembers, with switch-off / edit / delete ---------- */
+const KIND_LABEL = { semantic: "Quy tắc / thông tin", feedback: "Điều bạn đã sửa", episodic: "Việc đã làm", procedural: "Quy trình", failure: "Lỗi đã gặp" };
+let memItems = [];
+async function loadMemory() {
+  try {
+    const r = await api(`/api/memory?q=${encodeURIComponent($("memSearch").value.trim())}`);
+    memItems = r.items || [];
+    $("memConflict").textContent = r.conflicts ? `⚠ ${r.conflicts} mục đang mâu thuẫn với nhau — hãy tắt hoặc sửa mục sai để AI không phải đoán.` : "";
+  } catch (e) { memItems = []; $("memList").replaceChildren(el("div", { class: "muted small" }, e.message)); return; }
+  drawMemory();
+}
+function drawMemory() {
+  const kind = $("memKind").value;
+  const list = memItems.filter(m => !kind || m.kind === kind);
+  if (!list.length) { $("memList").replaceChildren(el("div", { class: "muted small" }, "Chưa có gì được ghi nhớ.")); return; }
+  $("memList").replaceChildren(...list.slice(0, 200).map(m => {
+    const off = m.status === "disabled";
+    const body = el("div", { class: "t" }, m.text);
+    const meta = el("div", { class: "meta" },
+      el("span", { class: "badge" }, KIND_LABEL[m.kind] || m.kind),
+      m.status === "conflict" ? el("span", { class: "badge warn" }, "mâu thuẫn") : null,
+      el("span", { class: `badge ${m.evidence === "unverified" ? "" : "ok"}` }, m.evidence === "user" ? "bạn xác nhận" : m.evidence === "verified" ? "đã kiểm chứng" : "chưa kiểm chứng"),
+      el("span", {}, `nguồn: ${m.source === "user" ? "bạn" : m.source === "feedback" ? "góp ý của bạn" : "tự ghi"}`),
+      el("span", {}, `tin cậy ${Math.round((m.confidence || 0) * 100)}%`),
+      m.hits > 1 ? el("span", {}, `lặp lại ${m.hits} lần`) : null,
+      m.use_count ? el("span", {}, `đã dùng ${m.use_count} lần`) : null,
+      el("span", {}, when(m.updated_at)));
+    const act = (label, fn, cls = "") => el("button", { class: `btn mini ${cls}`, onclick: fn }, label);
+    const acts = el("div", { class: "acts" },
+      act(off ? "Bật lại" : "Tắt", async () => { try { await api(`/api/memory/${m.id}/update`, { status: off ? "active" : "disabled" }); loadMemory(); } catch (e) { toast(e.message); } }),
+      m.editable ? act("Sửa", () => {
+        const ta = el("textarea", { rows: 3 }, m.text); ta.value = m.text;
+        body.replaceChildren(ta);
+        acts.replaceChildren(
+          act("Lưu", async () => { try { await api(`/api/memory/${m.id}/update`, { text: ta.value }); loadMemory(); } catch (e) { toast(e.message); } }, "primary"),
+          act("Hủy", () => loadMemory()));
+      }) : null,
+      act("🗑", e => confirmTwice(e.currentTarget, "Xóa?", "🗑", async () => { try { await api(`/api/memory/${m.id}/delete`, {}); loadMemory(); } catch (err) { toast(err.message); } }), "danger"));
+    return el("div", { class: `mem ${off ? "off" : ""} ${m.status === "conflict" ? "conflict" : ""}` }, body, meta, acts);
+  }));
+}
+$("memSearch").oninput = () => { clearTimeout(loadMemory.h); loadMemory.h = setTimeout(loadMemory, 250); };
+$("memKind").onchange = drawMemory;
+$("memAdd").onclick = async () => {
+  const text = $("memText").value.trim();
+  if (!text) { $("memState").textContent = "Hãy viết điều cần ghi nhớ."; return; }
+  try {
+    const r = await api("/api/memory", { text, scope: $("memScope").value });
+    $("memText").value = "";
+    $("memState").textContent = r.conflict_with ? "⚠ Đã ghi nhớ, nhưng có vẻ mâu thuẫn với một mục cũ — xem danh sách bên dưới." : "✓ Đã ghi nhớ.";
+    loadMemory();
+  } catch (e) { $("memState").textContent = e.message; }
+};
+async function rateTask(taskId, rating) {
+  try { await api("/api/feedback", { task_id: taskId, rating }); toast("Cảm ơn! AI đã ghi nhận cách làm này là tốt."); }
+  catch (e) { toast(e.message); }
 }
 
 let dragDepth = 0;

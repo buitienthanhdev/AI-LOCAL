@@ -133,9 +133,14 @@ fn core_tools() -> Vec<ToolSpec> {
         ),
         base(
             "task.ask_user",
-            "Ask the user a question when the task is ambiguous or needs a decision only they can make.",
+            "Ask the user a question when the task is ambiguous or needs a decision only they can make. Give `options` (and `multi`) so the person can answer with one click; a free-text box is always offered too.",
             json!({"type": "object", "required": ["question"], "additionalProperties": false,
-                   "properties": {"question": {"type": "string", "minLength": 1}}}),
+                   "properties": {
+                       "question": {"type": "string", "minLength": 1},
+                       "options": {"type": "array", "maxItems": 8, "items": {"type": "string", "minLength": 1, "maxLength": 160},
+                                   "description": "2-6 concrete answers specific to THIS task for the user to pick from. Do not add an 'other' option: the chat always adds one."},
+                       "multi": {"type": "boolean", "description": "true when several options can be chosen together"}
+                   }}),
         ),
         base(
             "tools.enable",

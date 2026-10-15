@@ -187,3 +187,52 @@ pub fn usage(config: &Config, days: u64) -> Value {
         .collect();
     json!({"days": days, "backends": list})
 }
+
+// ---------------------------------------------------------------- long-term memory (settings "Bộ nhớ" tab)
+
+fn open_memory(config: &Config) -> Result<lga_core::memory::Memory> {
+    lga_core::memory::Memory::open(&config.path(&config.memory.persistent_db), lga_core::agent::build_redactor(config))
+}
+
+pub fn memory_list(config: &Config, query: &str) -> Result<Value> {
+    let memory = open_memory(config)?;
+    let items = memory.list_all(query)?;
+    let conflicts = items.iter().filter(|m| m["status"] == "conflict").count();
+    Ok(json!({"items": items, "conflicts": conflicts}))
+}
+
+pub fn memory_add(config: &Config, body: &Value) -> Result<Value> {
+    let memory = open_memory(config)?;
+    let (id, clash) = memory.add_semantic(body["text"].as_str().unwrap_or(""), body["scope"].as_str().unwrap_or("global"))?;
+    Ok(json!({"ok": true, "id": format!("m:{id}"), "conflict_with": clash.map(|c| format!("m:{c}"))}))
+}
+
+pub fn memory_update(config: &Config, id: &str, body: &Value) -> Result<Value> {
+    open_memory(config)?.update_memory(id, body["text"].as_str(), body["status"].as_str())?;
+    Ok(json!({"ok": true}))
+}
+
+pub fn memory_delete(config: &Config, id: &str) -> Result<Value> {
+    Ok(json!({"ok": open_memory(config)?.delete_memory(id)?}))
+}
+
+/// A rating or correction on a finished task: stored with that task's request so it only affects similar ones.
+pub fn feedback(config: &Config, body: &Value) -> Result<Value> {
+    let task_id = body["task_id"].as_str().unwrap_or("");
+    if task_id.is_empty() || !task_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err(anyhow!("thiếu mã việc"));
+    }
+    let record: Value = fs::read_to_string(config.path(&config.memory.tasks_dir).join(format!("{task_id}.json")))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .ok_or_else(|| anyhow!("không thấy việc này"))?;
+    let goal = record["goal"].as_str().unwrap_or("");
+    let id = open_memory(config)?.record_feedback(
+        task_id,
+        goal,
+        body["rating"].as_str().unwrap_or(""),
+        body["comment"].as_str().unwrap_or(""),
+        body["category"].as_str().unwrap_or(""),
+    )?;
+    Ok(json!({"ok": true, "id": format!("m:{id}")}))
+}

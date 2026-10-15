@@ -10,6 +10,7 @@
 mod activity;
 mod api;
 mod extras;
+mod openlink;
 mod services;
 mod vendor;
 
