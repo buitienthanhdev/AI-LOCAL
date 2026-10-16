@@ -231,6 +231,18 @@ fn failure_coaching(consecutive: u32, step: &StepRecord) -> Option<String> {
     None
 }
 
+/// A task may ask this many questions; after that the planner is told to decide with defaults.
+const MAX_QUESTIONS_PER_TASK: usize = 4;
+
+/// Questions that only end a turn politely ("bạn cần hỗ trợ gì thêm không?", "anything else?").
+fn is_closing_question(question: &str) -> bool {
+    let q = brain_core::text::norm(question);
+    const MARKERS: [&str; 8] = [
+        "ho tro gi them", "giup gi them", "gi them khong", "gi nua khong", "anything else", "further assistance", "any further", "need anything",
+    ];
+    MARKERS.iter().any(|m| q.contains(m))
+}
+
 /// Choices of a clarification question: trimmed, de-duplicated, without any "other" entry of the model's own (the chat
 /// adds the one "Khác" at the end), at most 8. A reply that gives no usable list falls back to free text.
 fn clarification_options(args: &Value) -> (Vec<String>, bool) {
@@ -586,6 +598,19 @@ impl<'a> TaskRunner<'a> {
                         self.banner = None; // the person has to answer: hands back on
                         let question = action.args.get("question").and_then(Value::as_str).unwrap_or_default().to_string();
                         let (options, multi) = clarification_options(&action.args);
+                        // "Do you need anything else?" is not a question the task depends on: it only parks the task
+                        // (and ends the process after the wait). A chat turn ends with task.complete instead.
+                        if options.is_empty() && is_closing_question(&question) {
+                            record.final_summary = Some(question.clone());
+                            record.completion_basis = Some("direct_answer".to_string());
+                            return self.finish(record, TaskStatus::Completed, "answered");
+                        }
+                        let asked = record.conversation.iter().filter(|c| c.starts_with("You asked the user:")).count();
+                        if asked >= MAX_QUESTIONS_PER_TASK {
+                            self.notices.push(format!(
+                                "You have already asked the user {asked} questions in this task. Do not ask again: choose the most sensible default, say which assumption you made, and continue or finish."));
+                            break;
+                        }
                         record.pending_question = Some(question.clone());
                         record.pending_options = options.clone();
                         record.pending_multi = multi;
@@ -1356,6 +1381,13 @@ mod tests {
         assert!(options.is_empty() && !multi, "no usable list: free text only");
         let many: Vec<String> = (0..20).map(|i| format!("o{i}")).collect();
         assert_eq!(super::clarification_options(&serde_json::json!({"options": many})).0.len(), 8);
+    }
+
+    #[test]
+    fn closing_pleasantries_are_not_questions() {
+        assert!(super::is_closing_question("Tôi đang mở file 'qr-code (1).png' cho bạn. Bạn có cần tôi hỗ trợ gì thêm với file này không?"));
+        assert!(super::is_closing_question("Do you need anything else?"));
+        assert!(!super::is_closing_question("Bạn muốn xóa những file nào trong Downloads?"));
     }
 
     #[test]
