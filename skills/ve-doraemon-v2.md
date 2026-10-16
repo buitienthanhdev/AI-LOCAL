@@ -1,6 +1,6 @@
 ---
 name: ve-doraemon-v2
-triggers: doraemon
+triggers: doraemon, ve doraemon, nhan vat hoat hinh
 ---
 Doraemon in Paint, V2, part 1: design (spec: docs/specs/NANG_CAP_LOGIC_VE_DORAEMON.txt).
 - "Ve Doraemon" is a known character: reference-based fidelity, never free_interpretation. Default: front, full body, upright, happy, flat colour, no perspective/shadow/props. Online: find a clean front reference (dora-world.com, tv-asahi, bandai) and save URL + time; offline: local template. reference_status = AVAILABLE or OFFLINE_TEMPLATE; never claim a match without a reference.

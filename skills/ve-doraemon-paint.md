@@ -1,6 +1,6 @@
 ---
 name: ve-doraemon-paint
-triggers: doraemon, paint
+triggers: doraemon, ve doraemon, nhan vat hoat hinh
 ---
 Doraemon in Paint, V2, part 2: driving Paint and judging the result.
 - No hard-coded screen_rect/zoom. Read the real canvas size, visible canvas rect, zoom and DPI; use ONE function: screen = canvas_screen_origin + canvas_xy * displayed_size / canvas_pixels; calibrate with safe points first and stop if the error is large. Before each stage check Paint is foreground, tool/colour/width are set and no dialog is open; never click blindly to close a dialog.

@@ -176,6 +176,24 @@ body
     }
 
     #[test]
+    fn the_office_and_paint_spec_playbooks_apply() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills");
+        let books = load(&dir);
+        let names = |goal: &str| matching(&books, goal).iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        let has = |v: &Vec<String>, n: &str| v.iter().any(|x| x == n);
+        let outlook = names("soan email nhap trong outlook va luu vao sharepoint");
+        assert!(has(&outlook, "office-microsoft-365"), "{outlook:?}");
+        let flow = names("lam bao cao tuan roi tao email nhap kem file");
+        assert!(has(&flow, "office-quy-trinh-lien-ung-dung"), "{flow:?}");
+        let paint = names("ve ngoi nha bang paint roi to mau");
+        assert!(has(&paint, "paint-ve-tu-dong") && has(&paint, "paint-to-mau-kiem-tra"), "{paint:?}");
+        for need in ["UNKNOWN", "PARTIAL", "WAITING_FOR_USER"] {
+            assert!(books.iter().any(|b| b.name.starts_with("office-") && b.body.contains(need)), "office playbooks lost {need}");
+        }
+        assert!(books.iter().any(|b| b.name == "paint-to-mau-kiem-tra" && b.body.contains("FillLeak")));
+    }
+
+    #[test]
     fn the_shipped_playbooks_load() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills");
         let books = load(&dir);
