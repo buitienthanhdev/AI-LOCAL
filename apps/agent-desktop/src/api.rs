@@ -123,7 +123,37 @@ impl Api {
         self.config.logs_dir().join("tasks").join(format!("{task_id}.jsonl"))
     }
 
+    /// Every call of the page is logged as one structured line (`logs/ui/api.jsonl`): time, correlation id (the page
+    /// sends `X-Corr-Id`: the task it concerns, else a random id), method, path without query, status, duration. Bodies,
+    /// queries and answers are never logged. Static assets and the 15 s status polls are skipped.
     pub fn handle(&self, request: Request<Vec<u8>>) -> Reply {
+        let started = std::time::Instant::now();
+        let method = request.method().to_string();
+        let path = request.uri().path().to_string();
+        let corr = request.headers().get("x-corr-id").and_then(|v| v.to_str().ok()).unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(48).collect::<String>();
+        let reply = self.handle_inner(request);
+        let noisy = path.starts_with("/vendor/") || path == "/" || (method == "GET" && (path == "/api/status" || path.ends_with("/events") || path == "/api/tasks"));
+        if !noisy {
+            self.log_api(&corr, &method, &path, reply.status().as_u16(), started.elapsed().as_millis() as u64);
+        }
+        reply
+    }
+
+    fn log_api(&self, corr: &str, method: &str, path: &str, status: u16, ms: u64) {
+        let dir = self.config.logs_dir().join("ui");
+        let _ = fs::create_dir_all(&dir);
+        let file = dir.join("api.jsonl");
+        if fs::metadata(&file).map(|m| m.len() > 5 * 1024 * 1024).unwrap_or(false) {
+            let _ = fs::rename(&file, dir.join("api.1.jsonl"));
+        }
+        let line = json!({"ts": chrono::Utc::now().to_rfc3339(), "corr": corr, "method": method, "path": path, "status": status, "ms": ms});
+        if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&file) {
+            use std::io::Write;
+            let _ = writeln!(f, "{line}");
+        }
+    }
+
+    fn handle_inner(&self, request: Request<Vec<u8>>) -> Reply {
         let path = request.uri().path().trim_end_matches('/').to_string();
         let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         let method = request.method().clone();

@@ -198,7 +198,16 @@ pub fn memory_list(config: &Config, query: &str) -> Result<Value> {
     let memory = open_memory(config)?;
     let items = memory.list_all(query)?;
     let conflicts = items.iter().filter(|m| m["status"] == "conflict").count();
-    Ok(json!({"items": items, "conflicts": conflicts}))
+    let count = |f: &dyn Fn(&Value) -> bool| items.iter().filter(|m| f(m)).count();
+    let stats = json!({
+        "total": items.len(),
+        "active": count(&|m| m["status"] != "disabled"),
+        "disabled": count(&|m| m["status"] == "disabled"),
+        "used": count(&|m| m["use_count"].as_i64().unwrap_or(0) > 0),
+        "verified": count(&|m| m["evidence"] != "unverified"),
+        "repeated_corrections": count(&|m| m["kind"] == "feedback" && m["hits"].as_i64().unwrap_or(0) > 1),
+    });
+    Ok(json!({"items": items, "conflicts": conflicts, "stats": stats}))
 }
 
 pub fn memory_add(config: &Config, body: &Value) -> Result<Value> {
