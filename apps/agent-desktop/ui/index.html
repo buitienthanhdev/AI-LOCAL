@@ -505,8 +505,12 @@
   .mem .acts { display: flex; gap: 6px; justify-content: flex-end; }
 
   /* the status block (brain, tracking, learned %, vision) is hidden: the same information lives in Settings */
-  .health > :not(#settingsBtn) { display: none; }
-  .health { padding-top: 6px; }
+  .side-foot { padding: 8px 10px 12px; }
+  .side-foot .btn { width: 100%; }
+  .navstatus { margin: 14px 0 8px; padding: 10px 6px 0; border-top: 1px solid var(--border); font-size: 12.5px; color: var(--muted); display: grid; gap: 6px; }
+  .navstatus button.learn-mini { padding: 4px 6px; border-radius: 8px; width: 100%; }
+  .navstatus button.learn-mini:hover { background: var(--hover); }
+  .navstatus .dot { margin-top: 0; }
 </style>
 </head>
 <body>
@@ -521,16 +525,7 @@
   <div class="hist-title">Gần đây</div>
   <div id="history"></div>
   <button class="clearall" id="clearAll" title="Xóa toàn bộ lịch sử chat">🗑 Xóa tất cả lịch sử</button>
-  <div class="health" id="health" title="Bấm để kiểm tra lại">
-    <div id="h-brains"><span class="dot" id="h-gateway"></span>Bộ não AI</div>
-    <button class="learn-mini" id="actBtn" title="Theo dõi công việc của bạn trên máy này (chỉ ghi chương trình và tên cửa sổ, lưu trên máy)">
-      <span class="dot" id="h-activity"></span><span id="actLabel">Theo dõi công việc: tắt</span>
-    </button>
-    <button class="learn-mini" id="learnBtn" title="Xem Illuminati đã học được bao nhiêu dữ liệu của máy">
-      <span class="dot" id="h-knowledge"></span><span id="learnLabel">Tri thức đã học</span>
-      <span class="bar"><i id="learnFill"></i></span>
-    </button>
-    <div><span class="dot" id="h-vision"></span>Thị giác cục bộ <span class="small">(tùy chọn)</span></div>
+  <div class="side-foot">
     <button class="btn" id="settingsBtn" style="margin-top:6px;font-size:12.5px"><span data-t="⚙ Cài đặt">⚙ Cài đặt</span></button>
   </div>
 </aside>
@@ -580,6 +575,17 @@
       <button data-tab="model"><span class="ti">⚡</span><span data-t="Mô hình & hạn mức">Mô hình & hạn mức</span></button>
       <button data-tab="teach"><span class="ti">🎓</span><span data-t="Dạy lại AI">Dạy lại AI</span></button>
       <button data-tab="mem"><span class="ti">🗂</span><span data-t="Bộ nhớ của AI">Bộ nhớ của AI</span></button>
+  <div class="health navstatus" id="health" title="Trạng thái hiện tại">
+    <div id="h-brains"><span class="dot" id="h-gateway"></span>Bộ não AI</div>
+    <button class="learn-mini" id="actBtn" title="Theo dõi công việc của bạn trên máy này (chỉ ghi chương trình và tên cửa sổ, lưu trên máy)">
+      <span class="dot" id="h-activity"></span><span id="actLabel">Theo dõi công việc: tắt</span>
+    </button>
+    <button class="learn-mini" id="learnBtn" title="Xem Illuminati đã học được bao nhiêu dữ liệu của máy">
+      <span class="dot" id="h-knowledge"></span><span id="learnLabel">Tri thức đã học</span>
+      <span class="bar"><i id="learnFill"></i></span>
+    </button>
+    <div><span class="dot" id="h-vision"></span>Thị giác cục bộ <span class="small">(tùy chọn)</span></div>
+  </div>
       <span class="grow"></span>
       <button class="prefs-close" id="prefsClose"><span class="ti">✕</span><span data-t="Đóng">Đóng</span></button>
     </nav>
