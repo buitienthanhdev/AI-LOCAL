@@ -215,6 +215,7 @@ impl Api {
             (&Method::POST, ["api", "reveal"]) => self.reveal(&body),
             (&Method::POST, ["api", "conversations", id, "delete"]) if valid_task_id(id) => Ok(self.delete_history(Some(id))),
             (&Method::POST, ["api", "history", "clear"]) => Ok(self.delete_history(None)),
+            (&Method::POST, ["api", "conversations", id, "meta"]) if valid_task_id(id) => self.set_conversation_meta(id, &body),
             (&Method::GET, ["api", "settings"]) => Ok(json_reply(StatusCode::OK, self.settings())),
             (&Method::POST, ["api", "settings"]) => self.save_settings(&body),
             (&Method::GET, ["api", "tasks", id]) if valid_task_id(id) => Ok(self.get_task(id)),
@@ -309,7 +310,9 @@ impl Api {
             .filter(|r| r.get("task_id").is_some())
             .take(MAX_TASKS_LISTED)
             .map(|r| {
+                let summary: String = r["final_summary"].as_str().unwrap_or("").chars().take(400).collect();
                 json!({
+                    "summary": summary,
                     "task_id": r["task_id"], "goal": r["goal"], "status": r["status"], "mode": r["mode"],
                     "updated_at": r["updated_at"], "created_at": r["created_at"],
                     "steps": r["steps"].as_array().map_or(0, Vec::len),
@@ -320,7 +323,38 @@ impl Api {
                 })
             })
             .collect();
-        json!({ "tasks": tasks })
+        json!({ "tasks": tasks, "meta": self.conversation_meta() })
+    }
+
+    fn meta_path(&self) -> PathBuf {
+        self.tasks_dir().join("_conversations.meta.json")
+    }
+
+    /// Titles and pins the person set on conversations: `{conversation id: {title, pinned}}`.
+    fn conversation_meta(&self) -> Value {
+        read_json(&self.meta_path()).filter(Value::is_object).unwrap_or_else(|| json!({}))
+    }
+
+    fn set_conversation_meta(&self, id: &str, body: &Value) -> Result<Reply> {
+        let mut meta = self.conversation_meta();
+        let entry = meta[id].take();
+        let mut entry = if entry.is_object() { entry } else { json!({}) };
+        if let Some(title) = body["title"].as_str() {
+            let title: String = title.trim().chars().take(120).collect();
+            if title.is_empty() { entry.as_object_mut().map(|o| o.remove("title")); } else { entry["title"] = json!(title); }
+        }
+        if let Some(pinned) = body["pinned"].as_bool() {
+            if pinned { entry["pinned"] = json!(true); } else { entry.as_object_mut().map(|o| o.remove("pinned")); }
+        }
+        if entry.as_object().is_some_and(|o| o.is_empty()) {
+            meta.as_object_mut().map(|o| o.remove(id));
+        } else {
+            meta[id] = entry;
+        }
+        let tmp = self.meta_path().with_extension("tmp");
+        fs::write(&tmp, serde_json::to_vec_pretty(&meta)?)?;
+        fs::rename(&tmp, self.meta_path())?;
+        Ok(json_reply(StatusCode::OK, json!({"ok": true})))
     }
 
     /// Delete a chat (`Some(conversation id)`) or the whole history (`None`): task records, audit logs, the
@@ -520,6 +554,22 @@ impl Api {
                 let args: Vec<&str> = args.iter().map(String::as_str).collect();
                 self.spawn_agent(&args, &format!("{id}.resume.log"))?;
                 Ok(json_reply(StatusCode::OK, json!({"ok": true, "output": "resuming"})))
+            }
+            "say" => {
+                let text = body["text"].as_str().unwrap_or("").trim();
+                if text.is_empty() || text.chars().count() > MAX_TASK_CHARS {
+                    return Err(anyhow!("Tin nhắn phải dài 1–{MAX_TASK_CHARS} ký tự"));
+                }
+                let record = read_json(&self.tasks_dir().join(format!("{id}.json"))).ok_or_else(|| anyhow!("không thấy việc này"))?;
+                let status = record["status"].as_str().unwrap_or("");
+                if matches!(status, "completed" | "failed" | "cancelled") || interrupted(&record) {
+                    return Err(anyhow!("việc này đã dừng; hãy gửi như một yêu cầu mới"));
+                }
+                let path = self.tasks_dir().join(format!("{id}.say.jsonl"));
+                let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+                use std::io::Write;
+                writeln!(file, "{}", json!({"text": text, "at": chrono::Utc::now().to_rfc3339()}))?;
+                Ok(json_reply(StatusCode::OK, json!({"ok": true})))
             }
             "cancel" | "pause" | "unpause" => {
                 let (code, output) = run_with_timeout(&self.agent_exe, &[action, id], &self.config.root, CONTROL_TIMEOUT)?;
@@ -807,6 +857,35 @@ mod live {
         assert_eq!(code, StatusCode::OK);
         let (_, list) = call(&api, Method::GET, &format!("/api/memory?q={marker}"), Value::Null);
         assert!(list["items"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn messages_sent_while_running_are_queued_for_the_task_and_conversations_can_be_renamed() {
+        let api = api();
+        let id = format!("t-say-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let dir = api.tasks_dir();
+        std::fs::write(dir.join(format!("{id}.json")), json!({"task_id": id, "goal": "x", "status": "executing", "runner_pid": std::process::id()}).to_string()).unwrap();
+        let (code, _) = call(&api, Method::POST, &format!("/api/tasks/{id}/say"), json!({"text": "dùng cột B nhé"}));
+        assert_eq!(code, StatusCode::OK);
+        let said = std::fs::read_to_string(dir.join(format!("{id}.say.jsonl"))).unwrap();
+        assert!(said.contains("dùng cột B nhé"), "{said}");
+        let (code, _) = call(&api, Method::POST, &format!("/api/tasks/{id}/say"), json!({"text": "  "}));
+        assert_eq!(code, StatusCode::BAD_REQUEST);
+        std::fs::write(dir.join(format!("{id}.json")), json!({"task_id": id, "goal": "x", "status": "completed"}).to_string()).unwrap();
+        let (code, _) = call(&api, Method::POST, &format!("/api/tasks/{id}/say"), json!({"text": "muộn rồi"}));
+        assert_eq!(code, StatusCode::BAD_REQUEST, "a finished task takes no more messages");
+        let (code, _) = call(&api, Method::POST, &format!("/api/conversations/{id}/meta"), json!({"title": "Báo cáo tuần", "pinned": true}));
+        assert_eq!(code, StatusCode::OK);
+        let (_, list) = call(&api, Method::GET, "/api/tasks", Value::Null);
+        assert_eq!(list["meta"][&id]["title"], "Báo cáo tuần");
+        assert_eq!(list["meta"][&id]["pinned"], true);
+        let (code, _) = call(&api, Method::POST, &format!("/api/conversations/{id}/meta"), json!({"title": "", "pinned": false}));
+        assert_eq!(code, StatusCode::OK);
+        let (_, list) = call(&api, Method::GET, "/api/tasks", Value::Null);
+        assert!(list["meta"].get(&id).is_none(), "an emptied entry is removed");
+        for ext in ["json", "say.jsonl"] {
+            let _ = std::fs::remove_file(dir.join(format!("{id}.{ext}")));
+        }
     }
 
     #[test]

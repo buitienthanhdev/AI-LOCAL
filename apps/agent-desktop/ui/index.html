@@ -512,6 +512,9 @@
   .navstatus button.learn-mini:hover { background: var(--hover); }
   .navstatus .dot { margin-top: 0; }
   .model-tag { font-size: 12px; color: var(--muted); padding: 3px 9px; border-radius: 999px; background: var(--code); margin-right: 6px; align-self: center; }
+  .hbtn { flex: none; align-self: center; font-size: 12px; padding: 3px 6px; border-radius: 6px; color: var(--muted); opacity: 0; }
+  .item:hover .hbtn, .item:focus-within .hbtn { opacity: 1; }
+  .hbtn:hover { background: var(--border); color: var(--text); }
 </style>
 </head>
 <body>
@@ -538,6 +541,7 @@
       <div class="pop" id="modelMenu"></div>
     </div>
     <span class="grow"></span>
+    <button class="icon-btn" id="copyConvBtn" title="Sao chép cuộc trò chuyện dạng Markdown">⧉</button>
     <button class="icon-btn" id="stepsBtn" title="Hiện/ẩn hoạt động của AI"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M15 4v16"/></svg></button>
   </header>
   <div id="scroll"><div class="wrap" id="view"></div></div>
@@ -769,6 +773,7 @@ const IDEAS = [
 ];
 
 let currentData = null;
+let convMeta = {};
 let selected = null, tasks = [], mode = "normal"; // selected: the task id of the last request in the chat on screen
 /** The chat on screen: one box holds every request typed in it ({id, turns: [{id, goal, shown, events, cursor, data, sig, ...}]}). */
 let conv = null;
@@ -1169,7 +1174,7 @@ function attachmentNodes(list) {
 
 /* ---------- History ---------- */
 async function refreshHistory() {
-  try { tasks = (await api("/api/tasks")).tasks; } catch { return; }
+  try { const r = await api("/api/tasks"); tasks = r.tasks; convMeta = r.meta || {}; } catch { return; }
   drawHistory();
 }
 /** Tasks grouped into chats: every request typed in the same box shares a conversation id. */
@@ -1192,23 +1197,47 @@ function conversations() {
 function drawHistory() {
   const q = $("search").value.trim().toLowerCase();
   const today = new Date().toDateString();
-  const groups = { "Hôm nay": [], "Trước đó": [] };
+  const groups = { "Đã ghim": [], "Hôm nay": [], "Trước đó": [] };
   for (const c of conversations()) {
-    if (q && !c.items.some(t => String(t.goal).toLowerCase().includes(q))) continue;
-    groups[new Date(c.first.created_at || c.first.updated_at).toDateString() === today ? "Hôm nay" : "Trước đó"].push(c);
+    const meta = convMeta[c.id] || {};
+    const hay = [meta.title || "", ...c.items.map(t => `${t.goal} ${t.summary || ""}`)].join("\n").toLowerCase();
+    if (q && !hay.includes(q)) continue;
+    const key = meta.pinned ? "Đã ghim" : new Date(c.first.created_at || c.first.updated_at).toDateString() === today ? "Hôm nay" : "Trước đó";
+    groups[key].push(c);
   }
   const out = [];
+  const setMeta = async (id, body) => { try { await api(`/api/conversations/${id}/meta`, body); await refreshHistory(); } catch (e) { toast(e.message); } };
   for (const [name, list] of Object.entries(groups)) {
     if (!list.length) continue;
     out.push(el("div", { class: "group" }, name));
     for (const c of list) {
       const t = c.last;
+      const meta = convMeta[c.id] || {};
       const more = c.items.length > 1 ? ` · ${c.items.length} yêu cầu` : "";
-      out.push(el("div", { class: `item ${conv && c.id === conv.id ? "sel" : ""}`, title: c.first.goal, role: "button", tabindex: "0",
+      const title = meta.title || c.first.goal;
+      // the part of an answer that matched the search is shown so the person sees why this chat was found
+      let hit = "";
+      if (q && !String(title).toLowerCase().includes(q)) {
+        const src = c.items.map(x => x.summary || "").find(x => x.toLowerCase().includes(q));
+        if (src) { const i = src.toLowerCase().indexOf(q); hit = "…" + src.slice(Math.max(0, i - 24), i + 60).replace(/\s+/g, " ") + "…"; }
+      }
+      out.push(el("div", { class: `item ${conv && c.id === conv.id ? "sel" : ""}`, title: title, role: "button", tabindex: "0",
         onclick: () => openConversation(c.id), onkeydown: e => { if (e.key === "Enter" && e.target === e.currentTarget) openConversation(c.id); } },
         el("span", { class: `dot ${t.interrupted ? "warn" : dotClass(t.status)}` }),
-        el("div", { style: "flex:1;min-width:0" }, el("div", { class: "g" }, c.first.goal),
-          el("div", { class: "t" }, `${when(c.updated)} · ${t.interrupted ? "Bị gián đoạn" : STATUS[t.status] || t.status}${more}`)),
+        el("div", { style: "flex:1;min-width:0" }, el("div", { class: "g" }, meta.pinned ? "📌 " : "", title),
+          el("div", { class: "t" }, hit || `${when(c.updated)} · ${t.interrupted ? "Bị gián đoạn" : STATUS[t.status] || t.status}${more}`)),
+        el("button", { class: "hbtn", title: meta.pinned ? "Bỏ ghim" : "Ghim lên đầu", onclick: e => { e.stopPropagation(); setMeta(c.id, { pinned: !meta.pinned }); } }, meta.pinned ? "📍" : "📌"),
+        el("button", { class: "hbtn", title: "Đổi tên cuộc trò chuyện", onclick: e => {
+          e.stopPropagation();
+          const input = el("input", { class: "search", value: title, style: "margin:0" });
+          const row = e.currentTarget.closest(".item");
+          const done = save => { if (save) setMeta(c.id, { title: input.value }); else drawHistory(); };
+          input.onkeydown = ev => { ev.stopPropagation(); if (ev.key === "Enter") done(true); if (ev.key === "Escape") done(false); };
+          input.onclick = ev => ev.stopPropagation();
+          input.onblur = () => done(true);
+          row.querySelector(".g").replaceChildren(input);
+          input.focus(); input.select();
+        } }, "✎"),
         el("button", { class: "del", title: "Xóa cuộc trò chuyện này", onclick: e => { e.stopPropagation(); confirmTwice(e.currentTarget, "Xóa?", "🗑", () => deleteConversation(c.id)); } }, "🗑")));
     }
   }
@@ -1330,10 +1359,26 @@ async function send(text) {
       await api(`/api/tasks/${last.id}/resume`, { answer: text, attachments: out }); clear(); last.settled = false; last.seen = 0;
       toast(out.length ? `Đã gửi câu trả lời và ${out.length} tệp` : "Đã gửi câu trả lời"); poll();
     } else if (data && !TERMINAL.includes(st) && !data.interrupted) {
-      const { out, shown } = await takePending();  // the next request waits in line and starts when this one ends
-      queue.push({ text, out, shown, mode });
-      clear(); drawQueue();
-      toast(`Đã xếp hàng (${queue.length}): sẽ chạy ngay khi việc hiện tại xong`);
+      if (pending.length) {
+        // files cannot be handed to a running task: that request waits in line and starts when this one ends
+        const { out, shown } = await takePending();
+        queue.push({ text, out, shown, mode });
+        clear(); drawQueue();
+        toast(`Đã xếp hàng (${queue.length}): sẽ chạy ngay khi việc hiện tại xong`);
+      } else {
+        // steering: the running task reads the message before its next planner turn
+        try {
+          await api(`/api/tasks/${last.id}/say`, { text });
+          last.said = (last.said || []).concat([text]);
+          clear();
+          toast("Đã gửi cho AI đang làm việc — AI sẽ tính tin này ở bước kế tiếp");
+        } catch (e) {
+          const { out, shown } = await takePending();
+          queue.push({ text, out, shown, mode });
+          clear(); drawQueue();
+          toast(`Việc vừa dừng, tin của bạn xếp hàng chạy tiếp (${e.message})`);
+        }
+      }
     } else {
       const { out, shown } = await takePending();
       await startRequest(text, out, shown, mode);
@@ -1379,13 +1424,17 @@ async function drainQueue() {
 function reasonText(reason) {
   if (!reason) return "";
   const r = String(reason);
+  const pinned = (typeof pinnedBrain === "string" && pinnedBrain) ? ` Bạn đang ghim bộ não "${BRAIN_NAMES[pinnedBrain] || pinnedBrain}": chọn "Tự động" ở góc trên bên trái để AI thử các bộ não khác.` : "";
+  if (/interrupted|runner process ended/i.test(r)) return "Việc bị gián đoạn vì tiến trình đang chạy nó đã dừng (tắt Trợ lý, tắt máy hoặc lỗi bất ngờ). Bấm \"Chạy lại\" để làm tiếp từ chỗ đã làm.";
   if (/planner unavailable|no LLM backend|no Gemini backend|LLM unavailable/i.test(r))
-    return "Bộ não AI không phản hồi: Gemini đang bị Google tạm chặn hoặc mất kết nối, và AI dự phòng trên máy cũng không trả lời được. Hãy thử lại sau ít phút.";
+    return "Bộ não AI không phản hồi: Gemini đang bị Google tạm chặn hoặc mất kết nối, và AI dự phòng trên máy cũng không trả lời được. Hãy thử lại sau ít phút." + pinned;
+  if (/quota|rate limit|usage limit|429/i.test(r)) return "Bộ não AI này đã hết hạn mức tạm thời. Hãy chọn bộ não khác hoặc thử lại sau." + pinned;
   if (/consecutive failed steps/i.test(r)) return "Đã thử nhiều cách liên tiếp nhưng đều không thành công (xem Chi tiết kỹ thuật).";
   if (/time budget/i.test(r)) return "Hết thời gian cho phép của một việc.";
   if (/step budget/i.test(r)) return "Việc này cần quá nhiều bước; hãy chia nhỏ yêu cầu.";
   if (/cancelled/i.test(r)) return "Bạn đã dừng việc này.";
   if (/worker failed/i.test(r)) return "Bộ phận điều khiển máy gặp lỗi nhiều lần; hãy thử lại.";
+  if (/^internal error/i.test(r)) return "Lỗi nội bộ của Trợ lý: " + r.replace(/^internal error:\s*/i, "") + " — bấm \"Chạy lại\" hoặc báo mình nếu lặp lại.";
   return r;
 }
 
@@ -1436,6 +1485,7 @@ function turnNode(turn) {
   const p = turn.id;
   return el("div", { class: "turn", id: `turn-${p}` },
     el("div", { class: "msg user" }, el("div", { class: "bubble", id: `${p}-goal` }, turn.goal, attachmentNodes(turn.shown))),
+    el("div", { id: `${p}-said` }),
     el("div", { class: "msg" }, el("div", { class: "logo avatar" }),
       el("div", { class: "agent-body" },
         el("div", { id: `${p}-ctl`, class: "ctl" }), el("div", { id: `${p}-ask` }), el("div", { id: `${p}-live` }),
@@ -1515,6 +1565,7 @@ function render(turn) {
   lkTask = task.task_id;
   notifyTransitions(turn, task, pending, done);
   region(turn, "goal", [task.goal, task.attachments], () => [task.goal, attachmentNodes(task.attachments)]);
+  region(turn, "said", turn.said || [], () => (turn.said || []).map(t => el("div", { class: "msg user" }, el("div", { class: "bubble" }, t, el("div", { class: "small", style: "opacity:.6" }, "gửi trong lúc AI đang làm")))));
 
   region(turn, "ctl", [st, data.pause_requested, data.interrupted], () => [
     el("span", { class: "muted small", style: "margin-right:auto" }, `${when(task.created_at)} · ${modeName(task.mode)}`),
@@ -1592,6 +1643,7 @@ function render(turn) {
       answer ? el("div", { class: "answer-actions" },
         modelLabel(answeringModel(events)) ? el("span", { class: "model-tag", title: "Model đã viết câu trả lời này" }, "🤖 " + modelLabel(answeringModel(events))) : null,
         el("button", { class: "ghost", title: "Chép câu trả lời", onclick: e => copyText(answer, e.currentTarget) }, "📋 Sao chép"),
+        el("button", { class: "ghost", title: "Làm lại yêu cầu này và so sánh", onclick: () => regenerate(task) }, "↻ Tạo lại"),
         el("button", { class: "ghost", title: "Cách làm này tốt: AI sẽ nhớ", onclick: () => rateTask(task.task_id, "up") }, "👍 Tốt"),
         el("button", { class: "ghost", title: "Chưa ưng? Dạy AI làm khác đi lần sau", onclick: () => openPrefs("teach", task.task_id) }, "👎 Chưa tốt · dạy lại")) : null);
   });
@@ -2576,6 +2628,32 @@ async function rateTask(taskId, rating) {
   try { await api("/api/feedback", { task_id: taskId, rating }); toast("Cảm ơn! AI đã ghi nhận cách làm này là tốt."); }
   catch (e) { toast(e.message); }
 }
+
+/* ---------- Regenerate / copy the conversation ---------- */
+async function regenerate(task) {
+  try { await startRequest(task.goal, [], [], mode); toast("Đang tạo lại câu trả lời — bản cũ vẫn ở phía trên để so sánh"); }
+  catch (e) { toast(e.message); }
+}
+function conversationMarkdown() {
+  if (!conv) return "";
+  const parts = [];
+  for (const t of conv.turns) {
+    const task = t.data && t.data.task;
+    parts.push(`**Bạn:** ${t.goal}`);
+    for (const said of t.said || []) parts.push(`**Bạn (bổ sung):** ${said}`);
+    if (task) {
+      const m = modelLabel(answeringModel(t.events || []));
+      parts.push(`**AI${m ? ` (${m})` : ""}:** ${task.final_summary || reasonText(task.failure_reason) || "(chưa có kết quả)"}`);
+    }
+  }
+  return parts.join("\n\n");
+}
+$("copyConvBtn").onclick = () => {
+  const md = conversationMarkdown();
+  if (!md) { toast("Chưa có cuộc trò chuyện nào để sao chép"); return; }
+  copyText(md, $("copyConvBtn"));
+  toast("Đã sao chép cuộc trò chuyện (Markdown)");
+};
 
 let dragDepth = 0;
 document.addEventListener("dragenter", e => { e.preventDefault(); dragDepth++; document.body.classList.add("dragging"); });
