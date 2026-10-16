@@ -1330,16 +1330,23 @@ function grow() { const t = $("input"); t.style.height = "auto"; t.style.height 
  */
 function conversationContext() {
   if (!conv || !conv.turns.length) return "";
-  const parts = [], files = [];
-  for (const t of conv.turns.slice(-6)) {
+  const files = [];
+  const turns = conv.turns.slice(-24);
+  // recent turns keep their result in detail; older ones shrink to the request and a short result, so a long chat
+  // still carries what was asked and decided without filling the planner's prompt
+  const parts = turns.map((t, i) => {
+    const recent = i >= turns.length - 6;
     const d = t.data;
-    if (!d) { parts.push(`Yêu cầu: ${t.goal}`); continue; }
+    if (!d) return `Yêu cầu: ${t.goal}`;
     const result = d.task.final_summary || reasonText(d.task.failure_reason) || STATUS[d.task.status];
-    parts.push(`Yêu cầu: ${d.task.goal}\nKết quả: ${String(result).slice(0, 700)}`);
     for (const a of d.task.attachments || []) if (a.path) files.push(a.path);
-  }
+    const said = (t.said || []).length ? `\nBổ sung của người dùng: ${t.said.join(" | ")}` : "";
+    return `Yêu cầu: ${d.task.goal}${said}\nKết quả: ${String(result).slice(0, recent ? 700 : 160)}`;
+  });
+  let body = parts.join("\n---\n");
+  if (body.length > 9000) body = "…\n" + body.slice(-9000);
   const earlier = files.length ? `\nTệp người dùng đã đính kèm trong cuộc trò chuyện này (vẫn đọc được): ${[...new Set(files)].join("; ")}` : "";
-  return `Cuộc trò chuyện từ đầu:\n${parts.join("\n---\n")}${earlier}`;
+  return `Cuộc trò chuyện từ đầu:\n${body}${earlier}`;
 }
 async function send(text) {
   text = (text ?? $("input").value).trim();
