@@ -1,0 +1,698 @@
+# SPECIFICATION: MICROSOFT OFFICE & MICROSOFT 365 UNIVERSAL AGENT
+Version: 1.0.0
+Target: Local AI Agent on Windows 11
+Objective: Enable the AI agent to understand, operate, automate, create, edit, validate, and coordinate across the Microsoft Office and Microsoft 365 ecosystem.
+
+## 1. MỤC TIÊU HỆ THỐNG
+
+AI phải hoạt động như một trợ lý văn phòng có khả năng thực thi công việc thực tế, không chỉ trả lời câu hỏi hoặc hướng dẫn người dùng thao tác thủ công.
+
+Các năng lực bắt buộc:
+
+1. Nhận yêu cầu bằng ngôn ngữ tự nhiên.
+2. Xác định ứng dụng, tệp, dữ liệu và công cụ phù hợp.
+3. Đọc, phân tích, tạo, chỉnh sửa và chuyển đổi tài liệu.
+4. Điều khiển ứng dụng desktop, ứng dụng web và dịch vụ Microsoft 365 trong phạm vi quyền được cấp.
+5. Thực hiện quy trình liên ứng dụng, chuyển dữ liệu chính xác giữa các ứng dụng.
+6. Kiểm tra kết quả sau mỗi thao tác quan trọng.
+7. Tự phát hiện lỗi, thử phương án phục hồi an toàn và báo cáo phần chưa hoàn thành.
+8. Học từ phản hồi và kết quả thực thi để cải thiện những lần sau.
+9. Làm việc offline đối với các tác vụ có thể thực hiện hoàn toàn trên máy.
+10. Không giả lập thành công, không tự bịa dữ liệu, không tuyên bố đã lưu hoặc gửi nếu chưa xác minh.
+
+Phạm vi bao gồm ứng dụng Office truyền thống, dịch vụ Microsoft 365, Power Platform và những sản phẩm liên quan có thể tích hợp thông qua giao diện, API hoặc bộ xử lý tệp chuyên dụng.
+
+## 2. NGUYÊN TẮC KIẾN TRÚC
+
+### 2.1. Thứ tự ưu tiên thực thi
+
+Với mỗi yêu cầu, AI phải lựa chọn phương thức phù hợp theo thứ tự:
+
+1. API chính thức hoặc connector được cấp quyền.
+2. Object Model hoặc automation interface chính thức của ứng dụng desktop.
+3. Thư viện xử lý định dạng tệp trực tiếp.
+4. UI Automation thông qua accessibility tree, control pattern và element selector.
+5. Computer Vision kết hợp chuột, bàn phím khi các phương án trên không khả dụng.
+
+Không mặc định dùng OCR hoặc tọa độ chuột nếu ứng dụng đã cung cấp API hoặc object model ổn định hơn.
+
+Ví dụ:
+
+- Excel desktop: ưu tiên Excel Object Model hoặc thư viện xử lý workbook phù hợp.
+- Word desktop: ưu tiên Word Object Model hoặc thư viện xử lý DOCX.
+- PowerPoint: ưu tiên PowerPoint Object Model hoặc thư viện xử lý PPTX.
+- Outlook và dịch vụ đám mây: sử dụng Microsoft Graph khi có endpoint và quyền phù hợp.
+- Ứng dụng web: ưu tiên API được hỗ trợ; sử dụng browser automation khi cần thao tác giao diện.
+
+### 2.2. Phân biệt các môi trường
+
+AI phải nhận biết chính xác:
+
+- Office desktop đã cài trên Windows.
+- Office trên trình duyệt.
+- Tệp Office được lưu cục bộ.
+- Tệp được lưu trên OneDrive hoặc SharePoint.
+- Dữ liệu nằm trong Exchange Online, Teams hoặc dịch vụ Microsoft 365.
+- Tài nguyên yêu cầu đăng nhập, giấy phép hoặc quyền quản trị.
+
+Không giả định mọi người dùng đều có cùng ứng dụng, subscription, quyền truy cập hoặc tính năng.
+
+## 3. DANH MỤC ỨNG DỤNG VÀ NĂNG LỰC
+
+### 3.1. Microsoft Word
+
+AI phải có khả năng:
+
+- Tạo, đọc, chỉnh sửa và định dạng DOCX.
+- Tạo tiêu đề, heading hierarchy, mục lục tự động và danh sách.
+- Xử lý bảng, hình ảnh, biểu đồ, chú thích và hyperlink.
+- Thiết lập lề, khổ giấy, hướng giấy, font, giãn dòng, tab và page break.
+- Tạo header, footer, số trang, watermark và section break.
+- Xử lý nhiều section có định dạng khác nhau.
+- Quản lý footnote, endnote, caption và cross-reference.
+- Tạo template, style và tài liệu theo mẫu.
+- Tìm kiếm, thay thế hàng loạt và chỉnh sửa nội dung có kiểm soát.
+- So sánh hai phiên bản tài liệu.
+- Hỗ trợ comments, Track Changes và quy trình rà soát khi API hoặc ứng dụng hỗ trợ.
+- Xuất PDF và kiểm tra bố cục sau khi xuất.
+- Tạo tài liệu chuyên nghiệp như báo cáo kỹ thuật, biên bản, đề xuất, hợp đồng và tài liệu hướng dẫn.
+
+Yêu cầu kiểm chứng:
+
+- Văn bản không bị thiếu hoặc trùng lặp ngoài ý muốn.
+- Bảng không bị vỡ cấu trúc.
+- Heading sử dụng đúng cấp.
+- Số trang, mục lục và tham chiếu nhất quán.
+- Nội dung sau khi lưu vẫn tồn tại.
+- PDF xuất ra có bố cục phù hợp với tài liệu nguồn.
+
+### 3.2. Microsoft Excel
+
+AI phải có khả năng:
+
+- Đọc và ghi XLSX, XLSM, XLS, CSV và TSV trong phạm vi bộ xử lý hỗ trợ.
+- Nhận biết workbook, worksheet, cell, range, table, named range và structured reference.
+- Đọc công thức, giá trị tính toán, kiểu dữ liệu và định dạng.
+- Tạo công thức, hàm, bảng dữ liệu và báo cáo.
+- Sử dụng các hàm thông dụng và nâng cao như XLOOKUP, INDEX/MATCH, SUMIFS, COUNTIFS, IF, LET và các hàm mảng động khi phiên bản Excel hỗ trợ.
+- Tạo PivotTable, PivotChart, biểu đồ và báo cáo tổng hợp.
+- Xử lý dữ liệu lớn theo batch, tránh đọc từng cell qua giao diện.
+- Làm sạch dữ liệu, chuẩn hóa kiểu dữ liệu và phát hiện giá trị bất thường.
+- Xử lý ngày tháng, số tiền, phần trăm, đơn vị đo và locale.
+- Tạo Data Validation, conditional formatting và bảo vệ sheet.
+- Tạo dashboard, báo cáo KPI, bảng dự toán và bảng đối chiếu.
+- Đọc và ghi macro VBA khi được yêu cầu; kiểm tra mã trước khi thực thi.
+- Làm việc với Power Query và Data Model trong phạm vi API khả dụng.
+- Giữ nguyên công thức, định dạng, liên kết và cấu trúc workbook không thuộc phạm vi chỉnh sửa.
+
+Yêu cầu kiểm chứng:
+
+- Kiểm tra công thức và kết quả tính toán bằng phương pháp độc lập khi phù hợp.
+- Phân biệt ô trống, số 0, chuỗi rỗng và lỗi công thức.
+- Phát hiện #REF!, #VALUE!, #DIV/0!, #NAME? và lỗi tương tự.
+- Không ghi đè công thức bằng giá trị tĩnh ngoài ý muốn.
+- Không tự tuyên bố workbook đã tính toán lại nếu công cụ xử lý không có calculation engine phù hợp.
+- Kiểm tra số dòng, số cột, khóa dữ liệu và tổng kiểm tra trước/sau khi chỉnh sửa.
+
+### 3.3. Microsoft PowerPoint
+
+AI phải có khả năng:
+
+- Tạo, đọc, chỉnh sửa và xuất PPTX.
+- Tạo slide theo bố cục, theme, master slide và template.
+- Xử lý text box, shape, bảng, biểu đồ, hình ảnh và sơ đồ.
+- Tạo SmartArt hoặc cấu trúc tương đương khi API hỗ trợ.
+- Căn chỉnh, phân phối khoảng cách và quản lý thứ tự lớp.
+- Tạo slide thuyết trình từ Word, Excel hoặc dữ liệu có cấu trúc.
+- Chuyển đổi bảng số liệu thành biểu đồ.
+- Tạo sơ đồ kiến trúc, quy trình, timeline, roadmap và org chart.
+- Quản lý speaker notes và hyperlink.
+- Kiểm tra tràn chữ, font không tương thích, hình ảnh thiếu và bố cục.
+- Xuất PDF hoặc hình ảnh để kiểm tra trực quan.
+
+Yêu cầu kiểm chứng:
+
+- Không để nội dung bị cắt hoặc chồng lấn.
+- Đảm bảo thứ tự slide đúng.
+- Giữ đúng đơn vị, tỷ lệ và định dạng số liệu.
+- Kiểm tra toàn bộ slide sau khi tạo, không chỉ slide đầu tiên.
+- Không thay đổi thông điệp hoặc dữ liệu gốc khi chỉ được yêu cầu đổi giao diện.
+
+### 3.4. Microsoft Outlook
+
+AI phải có khả năng:
+
+- Đọc, tìm kiếm và phân loại email trong phạm vi quyền được cấp.
+- Tạo bản nháp email.
+- Soạn nội dung, người nhận, CC, BCC, subject và attachments.
+- Trả lời, chuyển tiếp, đánh dấu, gắn cờ và phân loại email.
+- Quản lý thư mục và quy tắc khi API hoặc ứng dụng hỗ trợ.
+- Đọc tệp đính kèm, trích xuất dữ liệu và liên kết với tài liệu liên quan.
+- Tạo, xem và cập nhật sự kiện lịch.
+- Kiểm tra thời gian, múi giờ, người tham dự và xung đột lịch.
+- Xử lý contacts và thông tin người tham dự.
+- Tổng hợp email theo chủ đề, dự án, người gửi hoặc thời gian.
+- Theo dõi chuỗi hội thoại và giữ đúng ngữ cảnh trả lời.
+
+Ràng buộc an toàn:
+
+- Đọc email và tạo bản nháp không đồng nghĩa với quyền gửi email.
+- Không tự gửi email, chuyển tiếp dữ liệu nhạy cảm hoặc mời người tham dự nếu chưa có xác nhận thích hợp.
+- Trước khi gửi phải kiểm tra người nhận, nội dung, file đính kèm và hành động thực tế.
+- Không tự xóa email hàng loạt hoặc thay đổi quy tắc hộp thư nếu chưa được phê duyệt.
+
+### 3.5. Microsoft OneNote
+
+AI phải có khả năng:
+
+- Tìm kiếm và đọc notebook, section và page.
+- Tạo ghi chú, trang mới và cấu trúc nội dung.
+- Phân loại ghi chú theo dự án, chủ đề và thời gian.
+- Trích xuất văn bản từ ghi chú và hình ảnh trong phạm vi khả năng hỗ trợ.
+- Tạo biên bản họp, checklist, nhật ký công việc và tài liệu tham khảo.
+- Liên kết ghi chú với email, lịch và tài liệu liên quan.
+- Cập nhật nội dung mà không xóa thông tin cũ ngoài ý muốn.
+
+### 3.6. Microsoft Access
+
+AI phải có khả năng:
+
+- Nhận biết database, table, field, primary key, foreign key và relationship.
+- Đọc và phân tích cấu trúc MDB/ACCDB.
+- Truy vấn dữ liệu bằng SQL trong phạm vi engine và quyền truy cập.
+- Tạo hoặc cập nhật record theo schema đã xác minh.
+- Xây dựng truy vấn, báo cáo và biểu mẫu khi API hoặc automation interface hỗ trợ.
+- Phát hiện dữ liệu trùng, khóa ngoại không hợp lệ và vi phạm ràng buộc.
+- Xuất dữ liệu sang Excel, CSV hoặc các định dạng khác phù hợp.
+- Kiểm tra database trước khi thực hiện thay đổi hàng loạt.
+
+Không được giả định mọi tệp ACCDB có thể xử lý bằng thư viện Python thuần. Phải xác định driver, Access Database Engine hoặc môi trường thực thi tương thích.
+
+### 3.7. Microsoft Publisher
+
+AI phải hỗ trợ xử lý tài liệu xuất bản hiện có:
+
+- Nhận biết bố cục trang, text box, hình ảnh và thành phần đồ họa.
+- Chỉnh sửa tài liệu qua ứng dụng desktop khi khả dụng.
+- Tạo hoặc tái dựng brochure, flyer, catalogue, thiệp và tài liệu marketing.
+- Xuất PDF và kiểm tra bố cục in.
+- Chuyển đổi sang Word hoặc định dạng khác khi phù hợp, đồng thời thông báo phần có thể mất định dạng.
+
+Publisher phải được xem là ứng dụng phụ thuộc phiên bản và khả năng cài đặt. Không giả định mọi phiên bản Microsoft 365 đều có Publisher.
+
+### 3.8. Microsoft Visio
+
+AI phải có khả năng:
+
+- Đọc và chỉnh sửa sơ đồ khi có API hoặc automation interface phù hợp.
+- Tạo flowchart, network diagram, architecture diagram, BPMN hoặc sơ đồ tổ chức.
+- Quản lý shape, connector, text, layer, page và layout.
+- Giữ liên kết giữa các đối tượng khi di chuyển shape.
+- Xuất PDF, SVG hoặc hình ảnh khi được hỗ trợ.
+- Kiểm tra các connector bị đứt, nhãn bị che và đối tượng nằm ngoài trang.
+
+### 3.9. Microsoft Project
+
+AI phải có khả năng khi ứng dụng hoặc dịch vụ tương ứng được cấp quyền:
+
+- Tạo và cập nhật task, milestone, duration và dependency.
+- Quản lý resource, assignment và baseline.
+- Xử lý lịch làm việc, ngày bắt đầu, ngày kết thúc và tiến độ.
+- Phát hiện dependency vòng, task quá hạn và xung đột resource.
+- Tổng hợp tiến độ, critical path và báo cáo dự án.
+- Nhập/xuất dữ liệu qua các định dạng hoặc API được hỗ trợ.
+
+Không được mặc định Project desktop, Project Online và Planner có cùng mô hình dữ liệu hoặc API.
+
+## 4. CÁC ỨNG DỤNG VÀ DỊCH VỤ MICROSOFT 365 MỞ RỘNG
+
+AI phải có kiến trúc adapter cho những sản phẩm sau, tùy theo phiên bản, quyền và API thực tế.
+
+### 4.1. OneDrive và SharePoint
+
+- Tìm kiếm, đọc, tải xuống, tải lên, đổi tên và di chuyển tệp.
+- Duyệt thư mục, thư viện tài liệu và metadata.
+- Quản lý version history và phát hiện xung đột chỉnh sửa khi dịch vụ hỗ trợ.
+- Tìm kiếm nội dung trên nhiều tài liệu.
+- Tạo thư mục, chia sẻ tài liệu và cập nhật metadata.
+- Kiểm tra quyền truy cập trước khi chia sẻ.
+- Giữ nguyên quyền, version và trạng thái đồng bộ trong phạm vi có thể xác minh.
+
+### 4.2. Microsoft Teams
+
+- Tìm kiếm cuộc trò chuyện, tin nhắn, tệp và cuộc họp trong phạm vi quyền.
+- Tóm tắt nội dung cuộc họp từ transcript hoặc tài liệu được phép truy cập.
+- Soạn tin nhắn, thông báo và nội dung phản hồi.
+- Tạo bản nháp hoặc thực hiện gửi theo chính sách phê duyệt.
+- Liên kết nội dung Teams với Outlook, OneNote và tài liệu dự án.
+- Phân biệt tin nhắn cá nhân, group chat, channel và meeting.
+
+### 4.3. Microsoft Forms
+
+- Tạo cấu trúc câu hỏi và khảo sát khi API hoặc giao diện hỗ trợ.
+- Xác định loại câu hỏi, lựa chọn, câu trả lời bắt buộc và nhánh logic.
+- Phân tích kết quả phản hồi.
+- Tổng hợp kết quả vào Excel và tạo báo cáo.
+- Kiểm tra quyền truy cập và phạm vi người trả lời.
+
+### 4.4. Microsoft Lists và Planner
+
+- Tạo và cập nhật danh sách công việc.
+- Quản lý task, assignee, deadline, priority, status và checklist.
+- Theo dõi tiến độ và phát hiện nhiệm vụ quá hạn.
+- Đồng bộ dữ liệu với Excel và các nguồn phù hợp.
+- Kiểm tra xung đột khi cập nhật đồng thời.
+
+### 4.5. Power Automate
+
+- Phân tích flow hiện có.
+- Thiết kế quy trình tự động hóa có trigger, action, condition và error handling.
+- Tạo bản thiết kế hoặc flow mới khi môi trường hỗ trợ.
+- Kiểm tra quyền connector, credential và dependency.
+- Phân tích lịch sử chạy và lỗi.
+- Tránh tạo vòng lặp tự kích hoạt hoặc flow gửi thông báo liên tục.
+
+### 4.6. Power BI
+
+- Đọc báo cáo và dữ liệu được cấp quyền.
+- Phân tích measure, dimension, KPI và filter.
+- Tạo báo cáo hoặc dashboard khi API và giấy phép cho phép.
+- Hỗ trợ DAX và Power Query M.
+- Kiểm tra tính nhất quán giữa dữ liệu nguồn, measure và kết quả báo cáo.
+- Không tự tuyên bố đã publish hoặc refresh thành công nếu chưa xác minh.
+
+### 4.7. Power Apps
+
+- Đọc cấu trúc ứng dụng trong phạm vi công cụ hỗ trợ.
+- Phân tích data source, control, formula và workflow.
+- Đề xuất hoặc tạo ứng dụng khi có quyền và API phù hợp.
+- Kiểm tra validation, permission và các tình huống lỗi.
+- Không tự publish thay đổi ảnh hưởng người dùng thật nếu chưa được phê duyệt.
+
+### 4.8. Loop, To Do, Bookings, Whiteboard, Sway và các dịch vụ liên quan
+
+AI cần hỗ trợ khám phá khả năng thực tế của từng ứng dụng, xác định phương thức tích hợp và cung cấp các năng lực phù hợp như đọc, tạo, cập nhật, tìm kiếm, tổng hợp hoặc xuất dữ liệu.
+
+Không được khai báo một sản phẩm là đã hỗ trợ đầy đủ chỉ vì có thể mở ứng dụng đó.
+
+## 5. XỬ LÝ TẤT CẢ TỆP OFFICE
+
+AI phải có bộ định tuyến định dạng tệp độc lập với tên ứng dụng.
+
+Các nhóm cần nhận diện:
+
+- Văn bản: DOCX, DOC, RTF, TXT, ODT.
+- Bảng tính: XLSX, XLSM, XLS, CSV, TSV, ODS.
+- Trình chiếu: PPTX, PPT, PPSX, ODP.
+- Tài liệu cố định: PDF, XPS.
+- Email và lịch: EML, MSG, ICS, PST khi có parser phù hợp.
+- Ghi chú: OneNote và các định dạng xuất tương ứng.
+- Cơ sở dữ liệu: ACCDB, MDB.
+- Sơ đồ: VSDX, VSD.
+- Dự án: MPP và các định dạng trao đổi được hỗ trợ.
+- Định dạng văn bản có cấu trúc: XML, JSON, HTML.
+- Tệp nén chứa nhiều tài liệu và thư mục.
+
+Quy trình bắt buộc:
+
+1. Xác minh đường dẫn và quyền truy cập.
+2. Phát hiện định dạng thực tế, không chỉ dựa vào phần mở rộng.
+3. Kiểm tra dung lượng, tính toàn vẹn và khả năng giải mã.
+4. Xác định cấu trúc và phương thức xử lý phù hợp.
+5. Phân tích nội dung.
+6. Thực hiện thay đổi trong phạm vi được yêu cầu.
+7. Kiểm tra kết quả bằng cách đọc lại.
+8. Báo cáo nội dung đã thay đổi, giới hạn và lỗi còn tồn tại.
+
+Đối với PDF scan hoặc tài liệu chứa ảnh, phải có OCR hoặc xử lý thị giác khi cần. Đối với tệp mã hóa, có mật khẩu hoặc bị hỏng, phải báo rõ trạng thái thay vì giả lập kết quả.
+
+## 6. KIẾN TRÚC MODULE
+
+Tổ chức thành các module độc lập:
+
+- OfficeCapabilityRegistry: danh mục năng lực thực tế của từng ứng dụng.
+- OfficeIntentRouter: phân tích yêu cầu và chọn ứng dụng.
+- OfficeDesktopAdapter: điều khiển ứng dụng desktop.
+- OfficeWebAdapter: điều khiển ứng dụng web.
+- MicrosoftGraphAdapter: truy cập dịch vụ cloud được cấp quyền.
+- OfficeFileParser: phân tích định dạng tệp.
+- OfficeDocumentEngine: tạo và sửa tài liệu.
+- OfficeSpreadsheetEngine: xử lý bảng tính.
+- OfficePresentationEngine: xử lý trình chiếu.
+- OfficeMailCalendarEngine: email và lịch.
+- OfficeDatabaseEngine: xử lý cơ sở dữ liệu.
+- OfficeWorkflowEngine: điều phối công việc liên ứng dụng.
+- OfficeVerificationEngine: kiểm chứng kết quả.
+- OfficeRecoveryEngine: phục hồi lỗi và rollback khi khả thi.
+- OfficePermissionGuard: kiểm soát quyền và hành động nhạy cảm.
+- OfficeLearningEngine: lưu phản hồi và cải thiện quy trình.
+- OfficeAuditLog: nhật ký kiểm toán.
+
+Mỗi module phải có interface, schema đầu vào/đầu ra, mã lỗi và bộ kiểm thử riêng. Không xây một module khổng lồ chứa toàn bộ logic Office.
+
+## 7. CHUẨN HÓA NĂNG LỰC
+
+Mỗi ứng dụng phải khai báo các capability theo schema thống nhất:
+
+- application_id
+- application_version
+- execution_environment
+- installed
+- authenticated
+- available
+- supported_operations
+- unsupported_operations
+- required_permissions
+- required_dependencies
+- connectivity_requirement
+- verification_methods
+- known_limitations
+- last_health_check
+
+Mỗi operation phải khai báo:
+
+- operation_id
+- input_schema
+- output_schema
+- preconditions
+- side_effects
+- timeout_policy
+- retry_policy
+- idempotency
+- verification_strategy
+- rollback_strategy
+
+AI phải truy vấn registry trước khi thực thi. Nếu một operation chưa được triển khai hoặc chưa có bằng chứng khả năng hoạt động, phải thông báo rõ và không được tự nhận là đã hỗ trợ.
+
+## 8. ĐIỀU PHỐI CÔNG VIỆC LIÊN ỨNG DỤNG
+
+AI phải xử lý các workflow hoàn chỉnh, không chỉ thao tác từng ứng dụng riêng biệt.
+
+Ví dụ 1: Báo cáo tuần
+
+1. Thu thập dữ liệu từ các tài liệu nguồn.
+2. Đối chiếu thông tin và loại bỏ dữ liệu trùng.
+3. Tạo báo cáo DOCX theo template.
+4. Tạo bảng tổng hợp XLSX.
+5. Tạo PowerPoint tóm tắt nếu được yêu cầu.
+6. Xuất PDF.
+7. Kiểm tra nội dung và bố cục.
+8. Tạo email nháp đính kèm các tệp.
+9. Chờ xác nhận trước khi gửi.
+
+Ví dụ 2: Lập kế hoạch dự án
+
+1. Đọc yêu cầu và danh sách công việc.
+2. Chuẩn hóa task và dependency.
+3. Xây dựng kế hoạch trong Project hoặc Planner tùy môi trường.
+4. Tạo bảng theo dõi trong Excel.
+5. Tạo dashboard khi Power BI khả dụng.
+6. Kiểm tra tính nhất quán giữa các nguồn.
+
+Ví dụ 3: Phân tích email và tài liệu
+
+1. Tìm email liên quan.
+2. Đọc attachments được phép truy cập.
+3. Trích xuất dữ liệu và xác định nguồn gốc.
+4. Đối chiếu các phiên bản tài liệu.
+5. Tổng hợp vào Excel hoặc Word.
+6. Ghi rõ nội dung nào là dữ kiện, nội dung nào là suy luận.
+
+Mỗi workflow phải có dependency graph, trạng thái từng bước, checkpoint và khả năng tiếp tục từ bước đã hoàn thành.
+
+## 9. GIAO DIỆN TƯƠNG TÁC VÀ XỬ LÝ ĐƯỜNG DẪN
+
+AI phải hỗ trợ đầy đủ thao tác với các đường dẫn và tệp được hiển thị trong giao diện chat.
+
+Bắt buộc:
+
+- Đường dẫn Windows phải có khả năng mở trực tiếp khi người dùng yêu cầu.
+- Hyperlink phải được nhận diện và mở đúng URL.
+- Đường dẫn tới tệp đầu ra phải có hành động mở hoặc hiển thị vị trí.
+- Đường dẫn tới thư mục phải có hành động mở thư mục.
+- Đường dẫn trong nội dung phản hồi không được chỉ hiển thị như văn bản nếu giao diện có thể cung cấp hành động tương ứng.
+- Đường dẫn không tồn tại phải báo lỗi chính xác.
+- URL bên ngoài phải được xác minh và xử lý theo chính sách an toàn.
+- Không thực thi lệnh hoặc chương trình chỉ vì một tài liệu chứa đường dẫn đó.
+
+Nếu giao diện chat không hỗ trợ click trực tiếp, AI phải bổ sung cơ chế link/action tương ứng trong giao diện ứng dụng. Không chấp nhận giới hạn giao diện như lý do để bỏ hẳn chức năng này.
+
+## 10. CƠ CHẾ HỎI LẠI KHI THIẾU THÔNG TIN
+
+Khi yêu cầu có nhiều cách hiểu hoặc thiếu dữ liệu ảnh hưởng đến kết quả, AI phải dừng tại checkpoint và yêu cầu người dùng xác nhận.
+
+Ví dụ:
+
+- Chọn một trong nhiều tệp cùng tên.
+- Chọn template báo cáo.
+- Chọn phạm vi chỉnh sửa workbook.
+- Chọn người nhận email.
+- Chọn có ghi đè tệp hiện có hay tạo bản mới.
+- Chọn có cập nhật dữ liệu cloud hay chỉ sửa bản local.
+
+Giao diện hỏi lại cần hỗ trợ:
+
+- Câu hỏi ngắn và rõ ràng.
+- Danh sách lựa chọn.
+- Chọn nhiều đáp án khi phù hợp.
+- Đề xuất mặc định có giải thích.
+- Ô nhập phương án khác.
+- Xác nhận hoặc hủy thao tác.
+
+Không hỏi lại những thông tin đã được xác định chắc chắn từ ngữ cảnh hiện tại. Không tự đoán các thông tin quan trọng như người nhận, nội dung gửi đi hoặc tệp sẽ bị ghi đè.
+
+## 11. AN TOÀN VÀ QUẢN LÝ QUYỀN
+
+Phân loại thao tác:
+
+### Mức 1 — Đọc
+
+Đọc tài liệu, tìm kiếm, phân tích, kiểm tra metadata và tạo báo cáo phân tích nội bộ.
+
+Có thể thực hiện khi đã được cấp quyền truy cập phù hợp.
+
+### Mức 2 — Chỉnh sửa có thể phục hồi
+
+Sửa bản sao tài liệu, tạo bản mới, cập nhật dữ liệu trong vùng được xác định và lưu checkpoint.
+
+Ưu tiên tạo bản sao trước khi chỉnh sửa.
+
+### Mức 3 — Tác động bên ngoài
+
+Gửi email, gửi tin nhắn, chia sẻ tệp, cập nhật lịch người khác, publish dashboard hoặc thay đổi dữ liệu cloud có ảnh hưởng đến người khác.
+
+Phải có xác nhận trước khi thực hiện nếu chưa có chính sách ủy quyền rõ ràng.
+
+### Mức 4 — Nguy cơ cao
+
+Xóa hàng loạt, thay đổi quyền quản trị, xóa dữ liệu không thể phục hồi, chạy macro không đáng tin cậy hoặc thực thi nội dung có thể gây hại.
+
+Phải chặn hoặc yêu cầu phê duyệt đặc biệt theo chính sách. Không được tự vượt quyền.
+
+Các yêu cầu bổ sung:
+
+- Không lưu mật khẩu hoặc access token trong log.
+- Sử dụng OAuth và cơ chế xác thực phù hợp.
+- Áp dụng nguyên tắc least privilege.
+- Không vô hiệu hóa cảnh báo bảo mật để hoàn thành tác vụ.
+- Không chạy macro, script hay tệp đính kèm không đáng tin cậy một cách tự động.
+- Không gửi dữ liệu nội bộ lên cloud model khi chưa được phép.
+- Hỗ trợ audit trail và truy xuất nguồn gốc thao tác.
+
+## 12. XỬ LÝ LỖI VÀ PHỤC HỒI
+
+Mỗi thao tác phải có trạng thái rõ ràng:
+
+- PENDING
+- RUNNING
+- SUCCEEDED
+- FAILED
+- PARTIAL
+- WAITING_FOR_USER
+- CANCELLED
+- UNKNOWN
+
+UNKNOWN phải được sử dụng khi không đủ bằng chứng để xác định thao tác đã thành công hay thất bại.
+
+Quy tắc phục hồi:
+
+- Retry chỉ với lỗi tạm thời và thao tác có tính an toàn.
+- Không retry mù các thao tác gửi email hoặc tạo bản ghi có thể bị trùng.
+- Với timeout, phải kiểm tra trạng thái thực tế trước khi thử lại.
+- Nếu workbook đang bị khóa, phải chờ có giới hạn hoặc tạo bản sao phù hợp.
+- Nếu ứng dụng bị treo, ghi log, chụp trạng thái khi cần và phục hồi mà không làm mất dữ liệu.
+- Nếu lưu tệp thất bại, không báo thành công.
+- Nếu chỉ hoàn thành một phần workflow, phải báo chính xác các bước đã hoàn thành và các bước còn lại.
+
+## 13. HỌC TẬP SAU MỖI LẦN CHAT
+
+AI phải cải thiện qua kết quả thực thi, nhưng không được tự động biến mọi nội dung hội thoại thành tri thức đáng tin cậy.
+
+Quy trình:
+
+1. Ghi nhận yêu cầu ban đầu.
+2. Ghi nhận kế hoạch và phương thức thực thi.
+3. Ghi nhận lỗi, kết quả kiểm chứng và phản hồi người dùng.
+4. Xác định nguyên nhân lỗi.
+5. Lưu bài học dưới dạng có cấu trúc.
+6. Cập nhật workflow hoặc quy tắc đã được kiểm chứng.
+7. Chạy regression test trước khi áp dụng thay đổi có ảnh hưởng rộng.
+
+Mỗi bài học phải có:
+
+- task_type
+- application
+- environment
+- observed_failure
+- root_cause
+- corrective_action
+- verification_result
+- confidence
+- provenance
+- timestamp
+- regression_test_reference
+
+Không được:
+
+- Tự sửa system prompt hoặc mã nguồn production mà không qua kiểm soát.
+- Xem câu trả lời do AI tự tạo là bằng chứng thành công.
+- Học dữ liệu bí mật từ tài liệu mà không có chính sách lưu trữ phù hợp.
+- Ghi nhớ lỗi nhất thời như quy luật chung.
+- Lặp lại một chiến lược đã thất bại mà không có thay đổi có căn cứ.
+
+## 14. OFFLINE VÀ ONLINE
+
+Offline:
+
+- Đọc và phân tích tệp cục bộ bằng parser được cài đặt.
+- Tạo DOCX, XLSX, PPTX và PDF khi thư viện phù hợp khả dụng.
+- Thực hiện automation trên ứng dụng desktop đã cài đặt.
+- Xử lý dữ liệu cục bộ và chạy kiểm thử.
+- Sử dụng tri thức đã lưu và workflow đã xác minh.
+
+Online:
+
+- Truy cập dịch vụ Microsoft 365 khi được cấp quyền.
+- Tìm kiếm hoặc cập nhật dữ liệu cloud.
+- Sử dụng Microsoft Graph hoặc connector tương ứng.
+- Đồng bộ dữ liệu và thực hiện các tác vụ phụ thuộc Internet.
+
+Khi mất mạng, AI phải xác định chính xác bước nào tiếp tục được và bước nào phải chờ. Không được giả lập việc gửi email, đồng bộ hoặc cập nhật dữ liệu cloud khi offline.
+
+## 15. KIỂM THỬ VÀ TIÊU CHÍ NGHIỆM THU
+
+### 15.1. Functional tests
+
+Mỗi ứng dụng phải có test cho:
+
+- Khám phá ứng dụng.
+- Đọc dữ liệu.
+- Tạo dữ liệu.
+- Chỉnh sửa dữ liệu.
+- Lưu và đọc lại.
+- Xử lý lỗi.
+- Quyền truy cập.
+- Hủy thao tác.
+- Khôi phục sau lỗi.
+- Kiểm tra tính toàn vẹn.
+
+### 15.2. Integration tests
+
+Kiểm thử các quy trình:
+
+- Word → PDF.
+- Excel → Word.
+- Excel → PowerPoint.
+- Outlook attachment → Excel → Word.
+- Teams/SharePoint → tài liệu tổng hợp.
+- Planner hoặc Project → báo cáo tiến độ.
+- OneDrive → chỉnh sửa bản sao → lưu và xác minh.
+
+Mọi test phải phân biệt mock, sandbox và môi trường thật.
+
+### 15.3. Acceptance criteria
+
+Một chức năng chỉ được đánh dấu PASS khi:
+
+1. Thao tác được thực hiện trên môi trường được chỉ định.
+2. Kết quả đầu ra tồn tại và đọc được.
+3. Dữ liệu quan trọng được đối chiếu với nguồn.
+4. Các thay đổi ngoài phạm vi không xảy ra.
+5. Lỗi và giới hạn được ghi nhận.
+6. Có test tái lập được.
+7. Có bằng chứng thực thi phù hợp.
+
+Không đánh dấu PASS chỉ vì lệnh không trả về lỗi hoặc AI không nhận được thông báo thất bại.
+
+## 16. QUẢN LÝ TRIỂN KHAI
+
+Triển khai theo từng giai đoạn:
+
+Giai đoạn 1: Core file operations
+
+- File discovery.
+- DOCX, XLSX, PPTX, PDF.
+- Tạo, sửa, lưu và xác minh.
+- Link/path handling.
+- Audit log.
+
+Giai đoạn 2: Desktop automation
+
+- Word, Excel, PowerPoint.
+- Outlook desktop.
+- UI Automation.
+- Recovery và timeout management.
+
+Giai đoạn 3: Cloud integration
+
+- Microsoft Graph.
+- OneDrive, SharePoint, Outlook, Calendar, Teams.
+- OAuth và permission management.
+- Online/offline state.
+
+Giai đoạn 4: Advanced applications
+
+- Access, Visio, Project, Publisher.
+- OneNote, Forms, Lists, Planner.
+- Power BI, Power Apps, Power Automate.
+- Các connector bổ sung theo nhu cầu.
+
+Giai đoạn 5: Cross-application intelligence
+
+- Workflow planning.
+- Multi-step execution.
+- Checkpoint và resumability.
+- Learning engine.
+- Regression testing.
+- Đánh giá độ tin cậy toàn hệ thống.
+
+Không tuyên bố hoàn thành toàn bộ Microsoft Office khi mới hoàn thành một vài ứng dụng hoặc chỉ hỗ trợ đọc tệp.
+
+## 17. ĐẦU RA BẮT BUỘC CHO ĐỘI PHÁT TRIỂN
+
+Trước khi triển khai, phải khảo sát repository và môi trường thực tế.
+
+Đội phát triển phải cung cấp:
+
+1. Architecture document.
+2. Capability matrix cho từng ứng dụng và operation.
+3. Dependency matrix gồm thư viện, API, giấy phép và quyền.
+4. Implementation plan theo thứ tự ưu tiên.
+5. File schema và interface của từng adapter.
+6. Threat model và permission policy.
+7. Test plan và acceptance criteria.
+8. Danh sách test đã chạy kèm kết quả thực tế.
+9. Danh sách chức năng đã hoàn thành, chưa hoàn thành và bị chặn.
+10. Hướng dẫn vận hành, cấu hình và phục hồi lỗi.
+
+Không thay thế khảo sát mã nguồn bằng việc tạo mới toàn bộ kiến trúc. Phải tái sử dụng các module và công cụ hiện có nếu chúng đáp ứng yêu cầu.
+
+## 18. ĐỊNH NGHĨA HOÀN THÀNH
+
+Hệ thống chỉ đạt yêu cầu khi AI có thể tiếp nhận yêu cầu ngôn ngữ tự nhiên, xác định đúng ứng dụng, chọn phương thức thực thi phù hợp, thao tác trên dữ liệu thực tế, kiểm chứng kết quả, xử lý lỗi và báo cáo chính xác.
+
+Phạm vi được hỗ trợ phải được công bố theo từng ứng dụng, phiên bản, môi trường và operation.
+
+Mục tiêu cuối cùng không phải là AI biết tên tất cả ứng dụng Microsoft, mà là AI có thể thực hiện các công việc văn phòng thực tế một cách có kiểm soát, có thể kiểm chứng, có khả năng phục hồi và không đánh đổi tính toàn vẹn dữ liệu để lấy tốc độ.
+
+END OF SPECIFICATION

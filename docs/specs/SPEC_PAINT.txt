@@ -1,0 +1,512 @@
+# SPECIFICATION: AI PAINT AUTONOMOUS DRAWING ENGINE
+Version: 1.0.0
+Platform: Windows 11 + Microsoft Paint
+Target: Local AI Agent
+Objective: Xây dựng hệ thống AI có khả năng lập kế hoạch, điều khiển, vẽ, tô màu, kiểm tra và hoàn thiện hình ảnh trực tiếp trên Microsoft Paint.
+
+## 1. MỤC TIÊU
+
+AI phải có khả năng nhận yêu cầu như:
+
+- Vẽ một hình học đơn giản.
+- Vẽ Doraemon hoặc nhân vật hoạt hình.
+- Vẽ tranh phong cảnh, chân dung, kiến trúc và đồ vật.
+- Vẽ sơ đồ kỹ thuật.
+- Vẽ hình minh họa theo ảnh tham chiếu.
+- Tô màu, chỉnh sửa hoặc hoàn thiện một bản vẽ có sẵn.
+- Tiếp tục bản vẽ đang dang dở.
+
+AI không được vẽ bằng cách click ngẫu nhiên hoặc thực hiện một chuỗi tọa độ được tạo ra mà không có kế hoạch.
+
+Quy trình bắt buộc:
+
+Yêu cầu → Phân tích → Kế hoạch hình học → Lập kế hoạch thao tác Paint → Thực thi → Kiểm tra hình ảnh → Sửa lỗi → Lưu → Xác minh kết quả.
+
+## 2. KHẢO SÁT MÔI TRƯỜNG PAINT
+
+Trước khi vẽ, AI phải xác định trạng thái thực tế của ứng dụng.
+
+Thông tin cần thu thập:
+
+- Tên ứng dụng và phiên bản Paint.
+- Cửa sổ đang hoạt động.
+- Trạng thái maximize/full screen.
+- Kích thước canvas theo pixel.
+- Tọa độ góc trên bên trái của canvas trên màn hình.
+- Kích thước vùng canvas hiển thị.
+- Tỷ lệ zoom.
+- Vị trí con trỏ chuột hiện tại.
+- Trạng thái công cụ đang chọn.
+- Màu foreground và background.
+- Kích thước nét.
+- Công cụ vẽ hiện tại.
+- Trạng thái selection, clipboard và các hộp thoại.
+- Đường dẫn tệp đang mở và trạng thái chưa lưu.
+
+Ưu tiên lấy dữ liệu từ UI Automation, accessibility tree, trạng thái ứng dụng và giao diện điều khiển có sẵn. Chỉ dùng Computer Vision hoặc phân tích ảnh màn hình khi thông tin không thể truy xuất trực tiếp.
+
+Không được giả định canvas bắt đầu tại tọa độ cố định trên màn hình.
+
+## 3. HỆ TỌA ĐỘ VÀ CHUYỂN ĐỔI TỌA ĐỘ
+
+### 3.1. Hệ tọa độ chuẩn
+
+Sử dụng hệ tọa độ canvas làm hệ quy chiếu chính:
+
+- Origin: góc trên bên trái canvas.
+- X tăng từ trái sang phải.
+- Y tăng từ trên xuống dưới.
+- Đơn vị: pixel canvas.
+- Tọa độ canvas phải độc lập với vị trí cửa sổ trên màn hình.
+
+Quản lý riêng:
+
+- Canvas coordinates.
+- Screen coordinates.
+- Viewport coordinates.
+- Logical coordinates của bản vẽ.
+- Tọa độ tham chiếu từ ảnh nguồn nếu có.
+
+### 3.2. Chuyển đổi tọa độ
+
+Với canvas không bị xoay hoặc biến dạng:
+
+screen_x = canvas_origin_x + canvas_x × scale_x
+
+screen_y = canvas_origin_y + canvas_y × scale_y
+
+Trong đó scale_x và scale_y phải được xác định từ kích thước canvas thực tế và vùng hiển thị.
+
+Nếu Paint đang zoom, cuộn canvas hoặc thay đổi kích thước cửa sổ, phải tính lại phép biến đổi.
+
+Trước khi vẽ, kiểm tra một số điểm chuẩn để xác minh sai số tọa độ.
+
+Không được tiếp tục vẽ nếu canvas bị xác định sai hoặc sai số tọa độ vượt ngưỡng cấu hình.
+
+## 4. PHÂN TÍCH YÊU CẦU THÀNH MÔ HÌNH HÌNH HỌC
+
+AI phải chuyển đối tượng cần vẽ thành một mô hình hình học có cấu trúc trước khi thao tác.
+
+Các primitive cơ bản:
+
+- Point.
+- Line.
+- Polyline.
+- Polygon.
+- Rectangle.
+- Rounded rectangle.
+- Circle.
+- Ellipse.
+- Arc.
+- Bézier curve.
+- Closed contour.
+- Text.
+- Filled region.
+
+Mỗi đối tượng phải chứa tối thiểu:
+
+- object_id
+- semantic_label
+- geometry_type
+- geometry_parameters
+- bounding_box
+- position
+- dimensions
+- outline_color
+- fill_color
+- stroke_width
+- layer_or_group
+- draw_order
+- dependencies
+- confidence
+- validation_rules
+
+Đối với hình phức tạp, phải chia thành nhiều thành phần nhỏ có thể kiểm tra độc lập.
+
+Ví dụ, một nhân vật hoạt hình gồm:
+
+- Đầu.
+- Thân.
+- Mắt.
+- Đồng tử.
+- Mũi.
+- Miệng.
+- Râu.
+- Tay và chân.
+- Phụ kiện.
+- Vùng màu.
+
+Các thành phần phải có quan hệ hình học với nhau thay vì được đặt ngẫu nhiên trên canvas.
+
+## 5. LẬP KẾ HOẠCH BỐ CỤC
+
+Trước khi vẽ chi tiết, AI phải xác định:
+
+- Kích thước tổng thể.
+- Vùng chiếm dụng của đối tượng.
+- Tâm bố cục.
+- Tỷ lệ chiều rộng và chiều cao.
+- Vùng an toàn sát mép canvas.
+- Vị trí các thành phần chính.
+- Khoảng cách và tỷ lệ giữa các bộ phận.
+- Thứ tự trước sau.
+- Vùng cần tô màu.
+- Độ dày nét theo mức độ quan trọng.
+
+Sử dụng bounding box cho từng đối tượng và toàn bộ hình.
+
+Mỗi đối tượng con phải nằm trong vùng bố cục được chỉ định, trừ khi có chủ đích vượt ra ngoài.
+
+Khi kích thước canvas thay đổi, mô hình hình học phải được scale theo tỷ lệ; không chỉ kéo giãn tọa độ độc lập khiến hình bị méo.
+
+## 6. BỘ ĐIỀU KHIỂN CÔNG CỤ PAINT
+
+AI phải xây dựng một abstraction layer cho các thao tác Paint.
+
+Các thao tác cơ bản:
+
+- SelectTool.
+- SelectColor.
+- SelectStrokeWidth.
+- SetCanvasSize.
+- DrawLine.
+- DrawPolyline.
+- DrawRectangle.
+- DrawEllipse.
+- DrawPolygon.
+- DrawCurve.
+- FillRegion.
+- EraseRegion.
+- SelectRegion.
+- MoveSelection.
+- ResizeSelection.
+- Copy.
+- Paste.
+- Undo.
+- Redo.
+- Save.
+- SaveAs.
+- Export.
+
+Mỗi thao tác phải có:
+
+- Input đã được kiểm tra.
+- Điều kiện tiên quyết.
+- Thời gian chờ.
+- Trạng thái thực thi.
+- Phương pháp xác minh.
+- Chính sách retry.
+- Chiến lược phục hồi.
+
+Nếu phiên bản Paint không cung cấp API cho một thao tác, adapter có thể sử dụng UI Automation hoặc điều khiển chuột và bàn phím.
+
+Không được giả định tất cả công cụ đều có API hoặc phím tắt giống nhau trên mọi phiên bản Windows.
+
+## 7. THUẬT TOÁN VẼ
+
+### 7.1. Vẽ hình học
+
+Đối với đường thẳng, hình chữ nhật, hình tròn và đa giác, ưu tiên công cụ hình học gốc của Paint để tạo biên chính xác.
+
+Đối với đường cong, sử dụng công cụ curve hoặc chuỗi điểm đã được nội suy phù hợp.
+
+Đối với đường vẽ tự do, xác định:
+
+- Danh sách điểm.
+- Tốc độ di chuyển chuột.
+- Khoảng cách giữa các điểm.
+- Độ mượt của đường.
+- Độ dày nét.
+- Điểm bắt đầu và kết thúc.
+- Cách nối các đoạn.
+
+Không gửi quá nhiều sự kiện chuột không cần thiết. Phải cân bằng giữa độ chính xác, độ mượt và thời gian thực thi.
+
+### 7.2. Tính toán kích thước nét
+
+Độ dày nét phải được xác định theo kích thước canvas và độ chi tiết của hình.
+
+AI phải phân biệt:
+
+- Nét viền ngoài.
+- Nét cấu trúc.
+- Nét chi tiết.
+- Nét phụ.
+- Nét tô hoặc hiệu ứng.
+
+Không sử dụng một độ dày cố định cho toàn bộ hình khi điều đó làm mất thứ bậc thị giác.
+
+### 7.3. Màu sắc
+
+Màu phải được biểu diễn thống nhất bằng RGB hoặc HEX.
+
+AI phải quản lý:
+
+- Màu viền.
+- Màu tô.
+- Màu nền.
+- Bảng màu toàn cục.
+- Độ tương phản giữa các vùng.
+- Quan hệ màu giữa các bộ phận.
+
+Không tự thay đổi màu đã được người dùng chỉ định.
+
+Nếu yêu cầu mô tả màu không rõ ràng, AI có thể đề xuất bảng màu và hỏi lại khi sự lựa chọn ảnh hưởng đáng kể đến kết quả.
+
+## 8. TÔ MÀU VÀ KIỂM SOÁT VÙNG KÍN
+
+AI phải phân biệt hai phương pháp:
+
+1. Fill tool của Paint.
+2. Tô màu bằng cách tạo hình hoặc mask rồi đổ màu theo vùng.
+
+Trước khi sử dụng Fill tool, cần kiểm tra:
+
+- Biên vùng có kín hay không.
+- Có khe hở giữa các nét không.
+- Có đường viền chồng lấn không.
+- Vùng tô có kết nối với nền không.
+- Màu hiện tại có trùng với màu cần tô không.
+- Công cụ đang dùng đúng vùng làm việc không.
+
+Nếu có nguy cơ màu tràn:
+
+- Kiểm tra lại contour.
+- Phóng to vùng lỗi.
+- Đóng khe hở.
+- Thực hiện fill trên bản có thể hoàn tác.
+- Kiểm tra ảnh sau khi tô.
+
+Không tiếp tục đổ màu khi phát hiện vùng màu lan ra ngoài đối tượng.
+
+## 9. THỨ TỰ VẼ VÀ QUẢN LÝ LỚP LOGIC
+
+Paint có thể không hỗ trợ layer như phần mềm đồ họa chuyên dụng. Vì vậy, AI phải quản lý layer logic ở cấp độ kế hoạch.
+
+Ví dụ thứ tự:
+
+1. Nền.
+2. Mảng màu lớn.
+3. Các đối tượng ở phía sau.
+4. Hình khối chính.
+5. Đường viền.
+6. Chi tiết bên trong.
+7. Điểm nhấn.
+8. Kiểm tra và sửa lỗi.
+
+Nếu ứng dụng không hỗ trợ layer thực, AI phải tránh ghi đè lên các chi tiết đã hoàn thành. Các đối tượng cần chỉnh sửa phải được thiết kế sao cho có thể chọn, xóa hoặc vẽ lại có kiểm soát.
+
+## 10. KIỂM TRA HÌNH ẢNH SAU MỖI GIAI ĐOẠN
+
+Không được xem thao tác chuột thành công là bằng chứng hình vẽ chính xác.
+
+Sau mỗi nhóm thao tác quan trọng, AI phải:
+
+- Chụp hoặc lấy ảnh canvas.
+- Xác định vị trí đối tượng.
+- So sánh với kế hoạch hình học.
+- Kiểm tra tỷ lệ và vị trí.
+- Kiểm tra nét bị đứt.
+- Kiểm tra đường bị lệch.
+- Phát hiện vùng tô tràn.
+- Phát hiện đối tượng bị che hoặc mất.
+- Kiểm tra màu và độ dày nét.
+- Xác định có cần undo hoặc vẽ lại không.
+
+Có thể sử dụng Computer Vision để phát hiện contour, màu, bounding box và sai lệch hình học.
+
+Với bản vẽ kỹ thuật, ưu tiên kiểm tra tọa độ và kích thước. Với tranh minh họa, kết hợp kiểm tra hình học với đánh giá thị giác.
+
+## 11. TỰ SỬA LỖI
+
+Mỗi lỗi phải được phân loại:
+
+- CoordinateError.
+- GeometryError.
+- ProportionError.
+- StrokeError.
+- ColorError.
+- FillLeak.
+- OcclusionError.
+- ToolSelectionError.
+- CanvasStateError.
+- SaveError.
+
+Quy trình sửa:
+
+1. Xác định vùng lỗi.
+2. Xác định nguyên nhân.
+3. Tính toán phần cần sửa.
+4. Chọn phương pháp phục hồi ít ảnh hưởng nhất.
+5. Thực hiện chỉnh sửa.
+6. Kiểm tra lại vùng sửa và toàn bộ hình.
+7. Lưu kết quả nếu đạt yêu cầu.
+
+Ưu tiên sửa cục bộ. Chỉ vẽ lại toàn bộ khi lỗi ảnh hưởng nghiêm trọng đến cấu trúc tổng thể.
+
+Không lặp lại thao tác thất bại nhiều lần mà không thay đổi nguyên nhân hoặc chiến lược.
+
+## 12. VẼ THEO ẢNH THAM CHIẾU
+
+Khi người dùng cung cấp ảnh mẫu, AI phải:
+
+- Đọc kích thước và tỷ lệ ảnh.
+- Xác định vùng nội dung chính.
+- Phân tích silhouette.
+- Phân tích contour và thành phần.
+- Phân biệt vùng sáng, vùng tối và màu chủ đạo.
+- Xác định mức độ chi tiết phù hợp với canvas.
+- Chuyển đổi tọa độ ảnh mẫu sang tọa độ canvas.
+- Vẽ theo cấu trúc từ tổng thể đến chi tiết.
+- So sánh ảnh kết quả với ảnh mẫu.
+
+Không được chỉ nhận diện tên đối tượng rồi vẽ một hình tượng chung chung nếu người dùng yêu cầu tái hiện một mẫu cụ thể.
+
+Khi bản quyền hoặc quyền sử dụng ảnh có liên quan, phải tuân thủ chính sách áp dụng.
+
+## 13. XỬ LÝ YÊU CẦU VẼ NHÂN VẬT
+
+Với nhân vật có thiết kế đã tồn tại, AI phải xác định các đặc điểm nhận dạng quan trọng trước khi vẽ:
+
+- Silhouette.
+- Tỷ lệ đầu và thân.
+- Hình dạng mắt.
+- Vị trí các chi tiết khuôn mặt.
+- Đặc điểm nhận diện.
+- Đường viền.
+- Màu sắc.
+- Phụ kiện.
+- Tư thế.
+
+Tạo mô hình hình học cho từng thành phần. Các chi tiết phải phụ thuộc vào tỷ lệ tổng thể để tránh biến dạng khi đổi kích thước.
+
+Sau khi vẽ, kiểm tra:
+
+- Nhận diện tổng thể.
+- Tỷ lệ bộ phận.
+- Tính đối xứng khi phù hợp.
+- Vị trí chi tiết.
+- Độ liền mạch của contour.
+- Độ đồng nhất màu sắc.
+
+## 14. LƯU VÀ XUẤT TỆP
+
+AI phải hỗ trợ:
+
+- Lưu tệp hiện tại.
+- Save As.
+- Xuất PNG, JPEG, BMP hoặc định dạng được phiên bản Paint hỗ trợ.
+- Tạo bản sao trước khi sửa tệp quan trọng.
+- Xác minh đường dẫn đầu ra.
+- Đọc lại ảnh sau khi lưu.
+- Kiểm tra kích thước ảnh và định dạng.
+- Phân biệt trạng thái đã lưu và chưa lưu.
+
+Không được báo lưu thành công nếu chỉ mới mở hộp thoại Save.
+
+Nếu tệp đầu ra đã tồn tại, phải tuân theo chính sách ghi đè và xác nhận cần thiết.
+
+## 15. HỌC TẬP VÀ TỐI ƯU
+
+Sau mỗi tác vụ, AI phải lưu dữ liệu học tập có cấu trúc:
+
+- Loại yêu cầu.
+- Kích thước canvas.
+- Công cụ được sử dụng.
+- Mô hình hình học.
+- Kế hoạch thao tác.
+- Lỗi phát sinh.
+- Nguyên nhân.
+- Phương án sửa.
+- Kết quả kiểm tra.
+- Thời gian thực thi.
+- Phản hồi người dùng.
+
+Chỉ cập nhật workflow hoặc quy tắc sau khi có bằng chứng và kiểm thử phù hợp.
+
+Không được tự sửa mã nguồn hoặc thay đổi hành vi hệ thống một cách không kiểm soát.
+
+## 16. AN TOÀN VÀ PHỤC HỒI
+
+- Không đóng tệp chưa lưu mà không cảnh báo.
+- Không ghi đè bản gốc khi chưa được phép.
+- Không tiếp tục thao tác khi mất đồng bộ tọa độ.
+- Không click hoặc gõ vào cửa sổ không đúng ứng dụng.
+- Không thực hiện chuỗi thao tác khi cửa sổ Paint bị mất focus.
+- Có timeout và giới hạn số lần retry.
+- Ghi log cho mọi thao tác quan trọng.
+- Hỗ trợ undo và checkpoint.
+- Nếu trạng thái không xác định, phải dừng và kiểm tra thay vì tiếp tục vẽ.
+
+## 17. TIÊU CHÍ NGHIỆM THU
+
+### Nhóm A — Điều khiển
+
+- Nhận diện đúng cửa sổ Paint.
+- Xác định đúng canvas.
+- Chuyển đổi tọa độ chính xác.
+- Chọn đúng công cụ và màu.
+- Thực thi đúng các primitive.
+
+### Nhóm B — Hình học
+
+- Đối tượng nằm đúng vị trí.
+- Tỷ lệ được bảo toàn.
+- Đường nối đúng.
+- Contour không có khe hở ngoài ý muốn.
+- Không có nét vượt khỏi canvas.
+
+### Nhóm C — Tô màu
+
+- Đúng màu.
+- Đúng vùng.
+- Không tràn màu.
+- Không ghi đè chi tiết ngoài ý muốn.
+
+### Nhóm D — Kiểm chứng
+
+- Có ảnh kết quả thực tế.
+- Có so sánh với kế hoạch.
+- Phát hiện và sửa được lỗi.
+- Có thể tái lập quy trình.
+
+### Nhóm E — Lưu tệp
+
+- Tệp tồn tại.
+- Tệp mở lại được.
+- Định dạng đúng.
+- Kích thước ảnh đúng.
+- Không mất nội dung sau khi lưu.
+
+Chỉ đánh dấu PASS khi có bằng chứng kiểm chứng tương ứng. Các test mô phỏng không được tính là test điều khiển Paint thật.
+
+## 18. YÊU CẦU TRIỂN KHAI
+
+Trước khi viết mã, phải khảo sát kiến trúc AI Local Agent hiện tại và tái sử dụng các thành phần có sẵn.
+
+Cung cấp:
+
+1. Architecture design.
+2. Paint capability registry.
+3. Canvas coordinate engine.
+4. Geometry planning engine.
+5. Paint automation adapter.
+6. Color and fill controller.
+7. Visual verification engine.
+8. Error recovery engine.
+9. Save/export engine.
+10. Unit tests, integration tests và end-to-end tests.
+11. Báo cáo kết quả chạy thực tế.
+12. Danh sách tính năng chưa được hỗ trợ.
+
+Không tạo một implementation mới độc lập nếu hệ thống hiện tại đã có mouse controller, screen capture, UI Automation, vision model hoặc IPC có thể tái sử dụng.
+
+## 19. ĐỊNH NGHĨA HOÀN THÀNH
+
+AI nhận yêu cầu vẽ, xác định canvas, xây dựng kế hoạch hình học, thực thi bằng công cụ Paint phù hợp, kiểm tra hình ảnh thực tế, tự sửa lỗi, lưu tệp và xác minh đầu ra.
+
+Hệ thống phải ưu tiên độ chính xác, khả năng phục hồi và tính nhất quán hơn tốc độ click chuột.
+
+Không coi việc hoàn thành chuỗi thao tác là hoàn thành bức vẽ. Chỉ kết quả hình ảnh đã được kiểm tra mới là căn cứ nghiệm thu.
+
+END OF SPECIFICATION
