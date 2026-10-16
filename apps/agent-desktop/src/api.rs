@@ -218,7 +218,18 @@ impl Api {
             (&Method::POST, ["api", "conversations", id, "meta"]) if valid_task_id(id) => self.set_conversation_meta(id, &body),
             (&Method::GET, ["api", "settings"]) => Ok(json_reply(StatusCode::OK, self.settings())),
             (&Method::POST, ["api", "settings"]) => self.save_settings(&body),
-            (&Method::GET, ["api", "tasks", id]) if valid_task_id(id) => Ok(self.get_task(id)),
+            (&Method::GET, ["api", "tasks", id]) if valid_task_id(id) => {
+                // `?wait=<token>&timeout=<s>`: hold the call until the task changed (or the time is up), so the page
+                // sees every change within milliseconds without asking every second.
+                if let Some(token) = query_param(request.uri(), "wait") {
+                    let limit = query_param(request.uri(), "timeout").and_then(|v| v.parse::<u64>().ok()).unwrap_or(10).clamp(1, 25);
+                    let deadline = std::time::Instant::now() + Duration::from_secs(limit);
+                    while self.task_token(id) == token && std::time::Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(60));
+                    }
+                }
+                Ok(self.get_task(id))
+            }
             (&Method::GET, ["api", "tasks", id, "events"]) if valid_task_id(id) => {
                 let after = query_param(request.uri(), "after").and_then(|v| v.parse().ok()).unwrap_or(0);
                 Ok(json_reply(StatusCode::OK, self.events(id, after)))
@@ -402,6 +413,23 @@ impl Api {
         json_reply(StatusCode::OK, json!({"ok": true, "deleted": deleted, "running": running}))
     }
 
+    /// A cheap fingerprint of everything the page shows for a task: its record, its audit log, the answer being written,
+    /// the pending question and the pause flag. It changes whenever any of them changes.
+    fn task_token(&self, id: &str) -> String {
+        let stamp = |p: &Path| -> String {
+            fs::metadata(p).map(|m| format!("{}:{}", m.len(), m.modified().ok().and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map_or(0, |d| d.as_millis()))).unwrap_or_else(|_| "-".into())
+        };
+        let dir = self.tasks_dir();
+        format!(
+            "{}|{}|{}|{}|{}",
+            stamp(&dir.join(format!("{id}.json"))),
+            stamp(&self.audit_path(id)),
+            stamp(&dir.join(format!("{id}.partial.json"))),
+            stamp(&request_path(&dir, id)),
+            stamp(&dir.join(format!("{id}.pause")))
+        )
+    }
+
     fn get_task(&self, id: &str) -> Reply {
         let Some(task) = read_json(&self.tasks_dir().join(format!("{id}.json"))) else {
             return error(StatusCode::NOT_FOUND, "unknown task");
@@ -413,7 +441,7 @@ impl Api {
         let interrupted = interrupted(&task);
         // The answer text of a reply that is still being written (core: `<id>.partial.json`), for the live card.
         let partial = if interrupted { None } else { read_json(&self.tasks_dir().join(format!("{id}.partial.json"))).and_then(|p| p["text"].as_str().map(String::from)) };
-        json_reply(StatusCode::OK, json!({"task": task, "pending_request": pending, "pause_requested": paused, "partial": partial,
+        json_reply(StatusCode::OK, json!({"token": self.task_token(id), "task": task, "pending_request": pending, "pause_requested": paused, "partial": partial,
                                           "interrupted": interrupted, "conversation_id": self.conversation_of(id)}))
     }
 
@@ -888,6 +916,38 @@ mod live {
         for ext in ["json", "say.jsonl"] {
             let _ = std::fs::remove_file(dir.join(format!("{id}.{ext}")));
         }
+    }
+
+    #[test]
+    fn a_held_task_request_returns_as_soon_as_the_task_changes() {
+        let api = std::sync::Arc::new(api());
+        let id = format!("t-wait-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
+        let path = api.tasks_dir().join(format!("{id}.json"));
+        std::fs::write(&path, json!({"task_id": id, "goal": "x", "status": "executing", "runner_pid": std::process::id(), "steps": []}).to_string()).unwrap();
+        let (_, first) = call(&api, Method::GET, &format!("/api/tasks/{id}"), Value::Null);
+        let token = first["token"].as_str().unwrap().to_string();
+        // nothing changes: the call waits for its timeout (1 s) and still answers
+        let started = std::time::Instant::now();
+        let (code, same) = call(&api, Method::GET, &format!("/api/tasks/{id}?wait={}&timeout=1", token.replace('|', "%7C")), Value::Null);
+        assert_eq!(code, StatusCode::OK);
+        assert!(started.elapsed() >= Duration::from_millis(900), "returned early: {:?}", started.elapsed());
+        assert_eq!(same["token"], first["token"]);
+        // a change releases it at once
+        let writer = {
+            let path = path.clone();
+            let id = id.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(300));
+                std::fs::write(&path, json!({"task_id": id, "goal": "x", "status": "executing", "runner_pid": std::process::id(), "steps": [], "plan": ["a"]}).to_string()).unwrap();
+            })
+        };
+        let started = std::time::Instant::now();
+        let (_, changed) = call(&api, Method::GET, &format!("/api/tasks/{id}?wait={}&timeout=10", token.replace('|', "%7C")), Value::Null);
+        writer.join().unwrap();
+        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+        assert_ne!(changed["token"], first["token"]);
+        assert_eq!(changed["task"]["plan"][0], "a");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

@@ -792,10 +792,10 @@ function el(tag, attrs = {}, ...children) {
 }
 const short = (v, n = 400) => { const s = typeof v === "string" ? v : JSON.stringify(v, null, 1); return s && s.length > n ? s.slice(0, n) + "…" : (s || ""); };
 function toast(text) { const t = $("toast"); t.textContent = text; t.classList.add("show"); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove("show"), 3500); }
-async function api(path, body) {
+async function api(path, body, opts = {}) {
   // correlation id: the task the call concerns (from the path, else the task on screen), otherwise a random id
   const corr = (/\/api\/tasks\/([A-Za-z0-9-]+)/.exec(path) || [])[1] || (typeof body === "object" && body && body.task_id) || (typeof selected === "string" && selected) || Math.random().toString(36).slice(2, 12);
-  const r = await fetch(path, body === undefined ? { headers: { "X-Corr-Id": String(corr) } } : { method: "POST", headers: { "Content-Type": "application/json", "X-Corr-Id": String(corr) }, body: JSON.stringify(body) });
+  const r = await fetch(path, body === undefined ? { headers: { "X-Corr-Id": String(corr) }, signal: opts.signal } : { method: "POST", headers: { "Content-Type": "application/json", "X-Corr-Id": String(corr) }, body: JSON.stringify(body), signal: opts.signal });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) { const e = new Error(data.error || data.output || `Lỗi ${r.status}`); e.status = r.status; throw e; }
   return data;
@@ -1700,18 +1700,25 @@ function zoom(src) { const lb = $("lightbox"); lb.querySelector("img").src = src
 $("lightbox").onclick = () => { $("lightbox").style.display = "none"; };
 
 let polling = false, repoll = false;
+let pollAbort = null, keepListening = -1;
 async function poll(now = false) {
   if (!conv) return;
-  if (polling) { repoll = repoll || now; return; }
+  // an action of the person (answer, resume, send...) must not wait for a held request: cut it short
+  if (polling) { repoll = repoll || now; if (now && pollAbort) pollAbort.abort(); return; }
   polling = true;
   const c = conv;
   try {
     const sc = $("scroll"), atBottom = sc.scrollHeight - sc.scrollTop - sc.clientHeight < 60;
-    let drew = false;
+    let drew = false, changed = false;
     for (const turn of c.turns) {
       if (turn.settled) continue;
       try {
-        const data = await api(`/api/tasks/${turn.id}`);
+        // a task that is running is asked "tell me when something changes": the answer comes the moment it does
+        const holding = turn.token && turn.data && !TERMINAL.includes(turn.data.task.status) && !turn.data.interrupted && !turn.resumeUntil && c.turns[c.turns.length - 1] === turn;
+        pollAbort = holding ? new AbortController() : null;
+        const data = holding ? await api(`/api/tasks/${turn.id}?wait=${encodeURIComponent(turn.token)}&timeout=8`, undefined, { signal: pollAbort.signal }) : await api(`/api/tasks/${turn.id}`);
+        pollAbort = null;
+        if (data.token) { if (data.token !== turn.token) changed = true; turn.token = data.token; }
         const fresh = await api(`/api/tasks/${turn.id}/events?after=${turn.cursor}`);
         if (conv !== c) return;
         turn.events.push(...fresh.events); turn.cursor = fresh.next; turn.data = data;
@@ -1724,15 +1731,19 @@ async function poll(now = false) {
         if (terminal) { if (++turn.seen >= 3 && !waitingForRunner) turn.settled = true; } else turn.seen = 0;
         const listed = tasks.find(t => t.task_id === turn.id);
         if (listed && listed.status !== data.task.status) { listed.status = data.task.status; drawHistory(); }
-      } catch (e) { /* 404 while the runner creates the record */ }
+      } catch (e) { pollAbort = null; /* 404 while the runner creates the record, or a held request cut short */ }
     }
     const last = lastTurn();
     if (last && last.data) { currentData = last.data; selected = last.id; updateComposer(last.data); }
     drainQueue();
     if (drew && atBottom) sc.scrollTop = sc.scrollHeight;
+    // keep listening to a running task without waiting for the next timer tick (a short pause if nothing changed)
+    const lt = lastTurn();
+    keepListening = !!(lt && lt.data && !lt.settled && !TERMINAL.includes(lt.data.task.status) && !lt.data.interrupted) ? (changed ? 0 : 350) : -1;
   } finally {
     polling = false;
     if (repoll) { repoll = false; poll(); }
+    else if (keepListening >= 0 && conv) setTimeout(poll, keepListening);
   }
 }
 
@@ -2688,7 +2699,6 @@ refreshHistory().then(() => {
 });
 refreshHealth();
 setInterval(poll, POLL_MS);
-setInterval(() => { const t = lastTurn(); if (t && t.data && t.data.partial) poll(); }, 250);
 setInterval(refreshHistory, POLL_MS * 4);
 setInterval(refreshHealth, 15000);
 refreshLearning(); setInterval(refreshLearning, 45000);
