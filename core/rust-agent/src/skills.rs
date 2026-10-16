@@ -18,7 +18,7 @@
 use std::path::Path;
 
 const LIMIT: usize = 3;
-const MAX_BODY_CHARS: usize = 1400;
+const MAX_BODY_CHARS: usize = 2000;
 
 #[derive(Debug, Clone)]
 pub struct Playbook {
