@@ -447,6 +447,30 @@ impl<'a> TaskRunner<'a> {
         Ok(())
     }
 
+    /// Messages the person sent while this task was running (`memory/tasks/<id>.say.jsonl`, one JSON line each, written
+    /// by the chat window). They join the conversation the planner reads and are announced once as a notice, so the next
+    /// planner turn takes them into account instead of waiting for the task to end.
+    fn take_injected(&mut self, record: &mut TaskRecord) {
+        let path = self.rt.store.dir().join(format!("{}.say.jsonl", record.task_id));
+        if !path.is_file() {
+            return;
+        }
+        let taken = path.with_extension("taken");
+        if std::fs::rename(&path, &taken).is_err() {
+            return;
+        }
+        let Ok(text) = std::fs::read_to_string(&taken) else { return };
+        let _ = std::fs::remove_file(&taken);
+        for line in text.lines() {
+            let Ok(value) = serde_json::from_str::<Value>(line) else { continue };
+            let Some(said) = value.get("text").and_then(Value::as_str).map(str::trim).filter(|t| !t.is_empty()) else { continue };
+            let said: String = said.chars().take(2000).collect();
+            record.conversation.push(format!("The user added while you were working: {said}"));
+            self.notices.push(format!(
+                "The user sent a new message while you were working: \"{said}\". Take it into account now; if it changes what they want, follow it and say so."));
+        }
+    }
+
     fn finish(&self, record: &mut TaskRecord, status: TaskStatus, reason: &str) -> Result<()> {
         if status == TaskStatus::Failed {
             record.failure_reason = Some(reason.to_string());
@@ -531,6 +555,7 @@ impl<'a> TaskRunner<'a> {
                 self.set_status(record, TaskStatus::Planning, Some("unpaused"))?;
             }
 
+            self.take_injected(record);
             let Some(actions) = self.plan_next(record).await? else { continue };
             // A reply may hold several independent actions; they run in order and the batch stops at the
             // first one that does not succeed, so the planner always sees that failure next.
