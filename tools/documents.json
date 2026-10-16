@@ -78,6 +78,85 @@
       "verification": "none",
       "side_effects": "none",
       "policy_category": "filesystem.read"
+    },
+    {
+      "name": "data.aggregate",
+      "description": "EXACT numbers from a table, computed by code: sum, mean, min, max, median, count, count_nonempty or distinct of one column of a .csv / .xlsx / .json file, or of every table file in a folder (rows are combined), optionally filtered (where) or grouped (group_by). Use it for any 'tổng / trung bình / lớn nhất / đếm / có bao nhiêu' over file data instead of adding numbers yourself: it reads the real files, understands 1.950.000 and 1,950,000.50, and tells you how many rows it used. Column names match without accents or case.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path",
+          "column"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "a table file or a folder of table files"
+          },
+          "column": {
+            "type": "string",
+            "minLength": 1
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "sum",
+              "mean",
+              "min",
+              "max",
+              "median",
+              "count",
+              "count_nonempty",
+              "distinct"
+            ],
+            "default": "sum"
+          },
+          "where": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "column"
+            ],
+            "properties": {
+              "column": {
+                "type": "string"
+              },
+              "equals": {},
+              "contains": {
+                "type": "string"
+              },
+              "gt": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              }
+            }
+          },
+          "group_by": {
+            "type": "string"
+          },
+          "sheet": {
+            "type": "string"
+          },
+          "recursive": {
+            "type": "boolean"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "filesystem.read"
     }
   ]
 }

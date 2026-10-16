@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS memories (
     created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_used TEXT,
     UNIQUE(kind, text)
 );
+CREATE TABLE IF NOT EXISTS skill_candidates (
+    id INTEGER PRIMARY KEY, task_id TEXT NOT NULL UNIQUE, goal TEXT NOT NULL, keywords TEXT NOT NULL,
+    chain TEXT NOT NULL, hints TEXT NOT NULL, created_at TEXT NOT NULL
+);
 "#;
 /// Added to the older tables so one switch turns any memory off without deleting it.
 const MIGRATIONS: [&str; 3] = [
@@ -154,6 +158,31 @@ impl Recall {
         }
         out
     }
+}
+
+/// Words that say nothing about the kind of request (accent-free comparison): never a playbook trigger.
+fn is_filler_word(word: &str) -> bool {
+    let w = brain_core::text::norm(word);
+    w.chars().all(|c| c.is_ascii_digit())
+        || [
+            "cua", "cho", "toi", "ban", "nay", "mot", "cac", "nhung", "file", "tep", "hay", "trong", "voi", "tren", "duoi", "tuy", "den", "khong", "bang",
+            "vao", "nam", "may", "giup", "lam", "gioi", "cong", "xong", "roi", "sau", "that", "the", "and", "for", "with", "from", "that", "this", "bench", "folder",
+            "thu", "muc", "can", "nao", "gi", "duoc", "tai", "ghi", "doc", "mo", "tao", "xem",
+        ]
+        .contains(&w.as_str())
+}
+
+/// Minimum number of similar verified successes before a playbook is written.
+pub const MIN_SKILL_SUPPORT: usize = 2;
+
+/// A playbook produced from repeated successes (written to `skills/auto-*.md` by the agent).
+#[derive(Debug, Clone)]
+pub struct GeneratedSkill {
+    pub id: String,
+    pub name: String,
+    pub triggers: Vec<String>,
+    pub body: String,
+    pub support: usize,
 }
 
 pub struct Memory {
@@ -451,6 +480,100 @@ impl Memory {
         Ok((id, clash))
     }
 
+    /// A verified success with real work behind it. When at least `MIN_SKILL_SUPPORT` such tasks (different tasks, similar
+    /// requests) exist, a playbook for that kind of request is produced from them: which tools worked, in which order, and
+    /// what the model said it was doing at each step. Deterministic, no model call, no argument values (only their names).
+    pub fn record_skill_candidate(&self, task_id: &str, goal: &str, chain: &[String], hints: &[String]) -> Result<Option<GeneratedSkill>> {
+        if chain.len() < 2 || self.looks_sensitive(goal) {
+            return Ok(None);
+        }
+        if goal.to_lowercase().contains("lga-bench") {
+            return Ok(None); // test fixtures are not what the person asks for
+        }
+        let goal = self.clean(goal.trim());
+        let kws: Vec<String> = keywords(&goal).into_iter().filter(|k| !is_filler_word(k)).collect();
+        if kws.len() < 2 {
+            return Ok(None);
+        }
+        {
+            let conn = self.conn()?;
+            conn.execute(
+                "INSERT INTO skill_candidates (task_id, goal, keywords, chain, hints, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT(task_id) DO NOTHING",
+                params![task_id, goal, kws.join(" "), chain.join(" -> "), self.clean(&hints.join("\n")), Utc::now().to_rfc3339()],
+            )?;
+        }
+        let me: HashSet<String> = kws.iter().cloned().collect();
+        let rows: Vec<(String, String, String, String)> = {
+            let conn = self.conn()?;
+            let mut stmt = conn.prepare("SELECT goal, keywords, chain, hints FROM skill_candidates ORDER BY id DESC LIMIT 400")?;
+            let collected: Vec<(String, String, String, String)> =
+                stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.filter_map(|r| r.ok()).collect();
+            collected
+        };
+        let similar: Vec<&(String, String, String, String)> = rows
+            .iter()
+            .filter(|(_, k, _, _)| {
+                let other: HashSet<String> = k.split_whitespace().map(String::from).collect();
+                let inter = me.intersection(&other).count();
+                inter >= 2 && inter * 10 >= me.union(&other).count().max(1) * 5
+            })
+            .collect();
+        if similar.len() < MIN_SKILL_SUPPORT {
+            return Ok(None);
+        }
+        // the tool chain most of them share (most common), the triggers every (or most) of them contain
+        let mut chains: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        for (_, _, c, _) in &similar {
+            *chains.entry(c.as_str()).or_default() += 1;
+        }
+        let Some((best_chain, best_count)) = chains.iter().max_by_key(|(c, n)| (**n, c.len())).map(|(c, n)| (c.to_string(), *n)) else { return Ok(None) };
+        // similar requests solved with DIFFERENT tool chains are not a pattern: the same chain must repeat
+        if best_count < MIN_SKILL_SUPPORT {
+            return Ok(None);
+        }
+        let similar: Vec<&(String, String, String, String)> = similar.into_iter().filter(|(_, _, c, _)| *c == best_chain).collect();
+        let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (_, k, _, _) in &similar {
+            for w in k.split_whitespace().collect::<HashSet<_>>() {
+                *counts.entry(w.to_string()).or_default() += 1;
+            }
+        }
+        let need = (similar.len() * 6).div_ceil(10);
+        let mut triggers: Vec<(String, usize)> = counts.into_iter().filter(|(_, n)| *n >= need.max(2)).collect();
+        triggers.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let triggers: Vec<String> = triggers.into_iter().take(6).map(|(w, _)| brain_core::text::norm(&w)).collect();
+        if triggers.len() < 2 {
+            return Ok(None);
+        }
+        let hint_lines: Vec<&str> = similar
+            .iter()
+            .find(|(_, _, c, _)| *c == best_chain)
+            .map(|(_, _, _, h)| h.lines().collect())
+            .unwrap_or_default();
+        let mut examples: Vec<String> = Vec::new();
+        for (g, _, _, _) in &similar {
+            let e = format!("\"{}\"", g.chars().take(100).collect::<String>());
+            if !examples.contains(&e) && examples.len() < 3 {
+                examples.push(e);
+            }
+        }
+        let mut body = format!("Learned from {} verified successes for requests like {}.\nTools that worked, in order: {}.\n", similar.len(), examples.join(", "), best_chain);
+        let mut shown: Vec<&str> = Vec::new();
+        for line in hint_lines.iter().filter(|l| !l.starts_with("(continuing")) {
+            if !shown.contains(line) && shown.len() < 6 {
+                shown.push(line);
+                body.push_str(&format!("- {line}\n"));
+            }
+        }
+        body.push_str("Read the result back before finishing (file content, cell values) and finish only when it is correct.\n");
+        let body: String = body.chars().take(1500).collect();
+        let mut id_source = triggers.clone();
+        id_source.sort();
+        let slug: String = id_source.join("-").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(40).collect();
+        Ok(Some(GeneratedSkill { id: format!("auto-{slug}"), name: format!("Tự học: {}", triggers.join(" ")), triggers, body, support: similar.len() }))
+    }
+
     fn recall_memories(&self, goal: &str) -> Result<Vec<RecalledMemory>> {
         let wanted: HashSet<String> = keywords(goal).into_iter().collect();
         if wanted.is_empty() {
@@ -634,6 +757,24 @@ mod tests {
         m.update_memory(&format!("m:{id}"), None, Some("active")).unwrap();
         assert!(m.delete_memory(&format!("m:{id}")).unwrap());
         assert!(m.recall("xuất báo cáo pdf", 5).unwrap().memories.is_empty());
+    }
+
+    #[test]
+    fn repeated_verified_successes_become_a_playbook_and_unrelated_ones_do_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let m = Memory::open(&dir.path().join("m.db"), Redactor::new()).unwrap();
+        let chain = vec!["data.aggregate".to_string(), "filesystem.write".to_string()];
+        let hints = vec!["Tổng cột doanh thu bằng data.aggregate".to_string(), "Ghi dòng 'Tổng doanh thu' vào báo cáo".to_string()];
+        assert!(m.record_skill_candidate("t1", "Tính tổng doanh thu các file csv và ghi báo cáo", &chain, &hints).unwrap().is_none(), "one success is not a pattern");
+        assert!(m.record_skill_candidate("t2", "Làm báo cáo cuối: tổng doanh thu trong các file csv của thư mục", &["paint.draw".into(), "desktop.save_as".into()], &[]).unwrap().is_none());
+        let skill = m.record_skill_candidate("t3", "Tính tổng doanh thu mọi file csv rồi ghi vào báo cáo", &chain, &hints).unwrap().expect("two similar successes");
+        assert!(skill.id.starts_with("auto-") && skill.support >= 2, "{skill:?}");
+        assert!(skill.triggers.iter().any(|t| t == "doanh" || t == "csv" || t == "bao"), "{:?}", skill.triggers);
+        assert!(skill.body.contains("data.aggregate -> filesystem.write"), "{}", skill.body);
+        assert!(!skill.body.contains("C:\\"), "no argument values");
+        // a one-step task is not worth a playbook, nor is a goal that mentions a secret
+        assert!(m.record_skill_candidate("t4", "Mở notepad", &["desktop.launch_app".into()], &[]).unwrap().is_none());
+        assert!(m.record_skill_candidate("t5", "mật khẩu: abc123 tính tổng", &chain, &hints).unwrap().is_none());
     }
 
     #[test]

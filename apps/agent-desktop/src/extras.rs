@@ -21,7 +21,7 @@ fn dir(config: &Config) -> PathBuf {
 }
 
 fn valid_id(id: &str) -> bool {
-    id.starts_with("u-") && id.len() <= 64 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    (id.starts_with("u-") || id.starts_with("auto-")) && id.len() <= 64 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
 /// Playbooks written from the settings page (`u-*.md`), newest first.
