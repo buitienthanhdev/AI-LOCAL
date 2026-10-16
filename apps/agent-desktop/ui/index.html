@@ -1489,6 +1489,7 @@ async function control(action, turn) {
   try {
     await api(`/api/tasks/${turn.id}/${action}`, {});
     turn.settled = false; turn.seen = 0;
+    if (action === "resume") turn.resumeUntil = Date.now() + 60000;
     toast({ pause: "Đã yêu cầu tạm dừng", unpause: "Tiếp tục chạy", cancel: "Đã dừng", resume: "Đang chạy lại" }[action]);
   } catch (e) { toast(e.message); }
   poll();
@@ -1652,7 +1653,11 @@ async function poll(now = false) {
         turn.events.push(...fresh.events); turn.cursor = fresh.next; turn.data = data;
         render(turn); drew = true;
         // a finished request is read twice more (late audit lines), then left alone until it is resumed
-        if (TERMINAL.includes(data.task.status) || data.interrupted) { if (++turn.seen >= 3) turn.settled = true; } else turn.seen = 0;
+        const terminal = TERMINAL.includes(data.task.status) || data.interrupted;
+        if (!terminal) turn.resumeUntil = 0;
+        // after "Chạy lại" the record still says failed for a few seconds: keep looking until it moves (or 60 s pass)
+        const waitingForRunner = turn.resumeUntil && Date.now() < turn.resumeUntil;
+        if (terminal) { if (++turn.seen >= 3 && !waitingForRunner) turn.settled = true; } else turn.seen = 0;
         const listed = tasks.find(t => t.task_id === turn.id);
         if (listed && listed.status !== data.task.status) { listed.status = data.task.status; drawHistory(); }
       } catch (e) { /* 404 while the runner creates the record */ }
