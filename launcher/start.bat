@@ -1,14 +1,12 @@
 @echo off
 chcp 65001 >nul
 rem Mo "Tro ly may tinh" voi moi thu MOI NHAT:
-rem   [1/4] keo code/skill/cau hinh moi tu GitHub (git pull, chi khi khong xung dot)
-rem   [2/4] build lai neu ma nguon moi hon file chay (skill, tools, policy doc truc tiep tu thu muc nen khong can build)
-rem   [3/4] cap nhat kho tri thuc (bo qua neu vua cap nhat trong vong 1 gio)
-rem   [4/4] mo cua so chat
+rem   [1/3] keo code/skill/cau hinh moi tu GitHub (git pull, chi khi khong xung dot)
+rem   [2/3] build lai neu ma nguon moi hon file chay (skill, tools, policy doc truc tiep tu thu muc nen khong can build)
+rem   [3/3] mo cua so chat   (khong hoc/quet du lieu may o day: viec hoc chay nen trong ung dung)
 cd /d "%~dp0.."
 
 set "EXE=target\release\agent-desktop.exe"
-set "LOG=logs\cap-nhat-tri-thuc.log"
 
 tasklist /FI "IMAGENAME eq agent-desktop.exe" 2>nul | find /i "agent-desktop.exe" >nul
 if not errorlevel 1 (
@@ -16,7 +14,7 @@ if not errorlevel 1 (
   goto :end
 )
 
-echo [1/4] Kiem tra ban moi tren GitHub...
+echo [1/3] Kiem tra ban moi tren GitHub...
 git rev-parse --is-inside-work-tree >nul 2>&1
 if errorlevel 1 (
   echo Khong phai thu muc git, bo qua.
@@ -30,7 +28,7 @@ if errorlevel 1 (
   )
 )
 
-echo [2/4] Kiem tra ma nguon moi...
+echo [2/3] Kiem tra ma nguon moi...
 set "NEED_BUILD=0"
 if not exist "%EXE%" set "NEED_BUILD=1"
 if "%NEED_BUILD%"=="0" (
@@ -52,23 +50,7 @@ if "%NEED_BUILD%"=="1" (
   echo File chay da la ban moi nhat.
 )
 
-echo [3/4] Kiem tra kho tri thuc...
-if not exist "logs" mkdir "logs"
-set "SKIP_KB=0"
-powershell -NoProfile -Command "if ((Test-Path '%LOG%') -and ((Get-Date) - (Get-Item '%LOG%').LastWriteTime).TotalMinutes -lt 60) { exit 1 } else { exit 0 }"
-if errorlevel 1 set "SKIP_KB=1"
-if "%SKIP_KB%"=="1" (
-  echo Tri thuc vua cap nhat gan day, bo qua.
-) else (
-  echo Dang cap nhat tri thuc ^(muc uu tien thap^)...
-  pushd "services\company-brain"
-  echo ===== %date% %time% =====>> "..\..\%LOG%"
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run-low.ps1" -Log "%~dp0..\logs\cap-nhat-tri-thuc.log" python -m brain scan --all
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0run-low.ps1" -Log "%~dp0..\logs\cap-nhat-tri-thuc.log" python -m brain index
-  popd
-)
-
-echo [4/4] Mo Tro ly...
+echo [3/3] Mo Tro ly...
 start "" "%EXE%"
 
 :end

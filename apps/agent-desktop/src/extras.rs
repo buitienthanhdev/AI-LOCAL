@@ -99,6 +99,25 @@ pub fn delete_skill(config: &Config, id: &str) -> Result<Value> {
 
 /// What each brain did over the last `days` days, read from the task audit logs (`logs/tasks/*.jsonl`).
 pub fn usage(config: &Config, days: u64) -> Value {
+    // Reading two weeks of audit logs takes seconds: keep the last answer for a minute (per number of days).
+    use std::sync::Mutex;
+    static CACHE: Mutex<Vec<(u64, std::time::Instant, Value)>> = Mutex::new(Vec::new());
+    if let Ok(cache) = CACHE.lock() {
+        if let Some((_, at, v)) = cache.iter().find(|(d, _, _)| *d == days) {
+            if at.elapsed() < Duration::from_secs(60) {
+                return v.clone();
+            }
+        }
+    }
+    let value = usage_uncached(config, days);
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.retain(|(d, _, _)| *d != days);
+        cache.push((days, std::time::Instant::now(), value.clone()));
+    }
+    value
+}
+
+fn usage_uncached(config: &Config, days: u64) -> Value {
     #[derive(Default)]
     struct Acc {
         ok: u64,
