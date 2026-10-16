@@ -130,6 +130,12 @@ fn run() -> Result<()> {
             open_in_browser(&url);
             NewWindowResponse::Deny
         })
+        // The page is this app's own (no other origin is ever shown): it may use the microphone for voice input.
+        // Nothing else (camera, location, notifications...) is granted.
+        .with_permission_handler(|kind| match kind {
+            wry::PermissionKind::Microphone => wry::PermissionResponse::Allow,
+            _ => wry::PermissionResponse::Deny,
+        })
         .with_devtools(cfg!(debug_assertions))
         .with_url(start_url())
         .build(&window)?;

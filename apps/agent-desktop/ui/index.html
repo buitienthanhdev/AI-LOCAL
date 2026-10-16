@@ -616,6 +616,8 @@
             <select id="optVoiceLang"><option value="vi-VN">Tiếng Việt</option><option value="en-US">English (US)</option><option value="en-GB">English (UK)</option>
               <option value="ja-JP">日本語</option><option value="ko-KR">한국어</option><option value="zh-CN">中文</option><option value="fr-FR">Français</option></select></label>
           <label class="row"><span data-t="Đọc to câu trả lời khi xong">Đọc to câu trả lời khi xong</span><input type="checkbox" id="optSpeak"></label>
+          <div class="row"><span>Kiểm tra micro</span><span class="rowr"><button class="btn mini" id="micTest">Thử micro (3 giây)</button></span></div>
+          <div class="small muted" id="micState"></div>
           <div class="small muted" data-t="Ngôn ngữ ứng dụng hiện áp dụng cho khung giao diện chính và phần cài đặt; nội dung trả lời của AI theo ngôn ngữ bạn viết.">Ngôn ngữ ứng dụng hiện áp dụng cho khung giao diện chính và phần cài đặt; nội dung trả lời của AI theo ngôn ngữ bạn viết.</div>
         </div>
         <div class="grp"><h3 data-t="Âm thanh thông báo">Âm thanh thông báo</h3>
@@ -2140,6 +2142,25 @@ function drawLangTab() {
   $("optSound").checked = !!opt("sound"); $("optVolume").value = opt("volume");
   for (const k of ["send", "done", "error", "ask", "click"]) $("snd-" + k).checked = !!opt("snd-" + k);
 }
+$("micTest").onclick = async () => {
+  const out = $("micState");
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  out.textContent = "Đang xin quyền micro…";
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { out.textContent = "Cửa sổ này không có API micro (getUserMedia)."; return; }
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+  catch (e) { out.textContent = `Không mở được micro: ${e.name}. Kiểm tra Windows Settings → Privacy → Microphone → "Let desktop apps access your microphone".`; return; }
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const analyser = ctx.createAnalyser(); analyser.fftSize = 512;
+  ctx.createMediaStreamSource(stream).connect(analyser);
+  const buf = new Uint8Array(analyser.fftSize);
+  let peak = 0; const t0 = Date.now();
+  await new Promise(res => { const tick = () => { analyser.getByteTimeDomainData(buf); for (const v of buf) peak = Math.max(peak, Math.abs(v - 128)); if (Date.now() - t0 > 3000) res(); else requestAnimationFrame(tick); }; tick(); out.textContent = "Hãy nói vài từ…"; });
+  stream.getTracks().forEach(t => t.stop()); ctx.close();
+  const level = Math.round(peak / 128 * 100);
+  out.textContent = `Micro hoạt động (mức tín hiệu cao nhất ${level}%).` + (level < 3 ? " Gần như không thu được tiếng: hãy nói to hơn hoặc chọn đúng micro mặc định trong Windows." : "") +
+    (SR ? " Nhận giọng nói thành chữ: CÓ hỗ trợ." : " Nhận giọng nói thành chữ: cửa sổ này KHÔNG có (SpeechRecognition), nên nút 🎤 chưa dịch được giọng.");
+};
 $("optLang").onchange = e => { setOpt("lang", e.target.value); applyLang(); };
 $("optVoiceLang").onchange = e => setOpt("voiceLang", e.target.value);
 $("optSpeak").onchange = e => setOpt("speak", e.target.checked);
