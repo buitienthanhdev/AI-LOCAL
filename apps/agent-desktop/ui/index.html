@@ -503,6 +503,10 @@
   .badge.warn { background: var(--warn-soft); color: var(--warn); }
   .badge.ok { background: var(--ok-soft); color: var(--ok); }
   .mem .acts { display: flex; gap: 6px; justify-content: flex-end; }
+
+  /* the status block (brain, tracking, learned %, vision) is hidden: the same information lives in Settings */
+  .health > :not(#settingsBtn) { display: none; }
+  .health { padding-top: 6px; }
 </style>
 </head>
 <body>
