@@ -348,9 +348,13 @@ pub fn repair_json(text: &str) -> Option<String> {
                     if out[..trimmed].ends_with(',') {
                         out.truncate(trimmed - 1);
                     }
-                    if stack.last() == Some(&c) {
-                        stack.pop();
+                    if stack.last() != Some(&c) {
+                        // a closer of the wrong kind ("}}}]}" for "}}]}"): a stray one is dropped, not emitted
+                        let _ = out.trim_end();
+                        i += 1;
+                        continue;
                     }
+                    stack.pop();
                     out.push(c);
                     if stack.is_empty() {
                         return Some(out);
@@ -453,6 +457,15 @@ pub fn parse_reply(text: &str) -> Result<Vec<PlannerAction>, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn repair_json_drops_a_stray_closing_brace() {
+        let bad = r#"{"thought": "t", "plan": ["p"], "actions": [{"tool": "task.complete", "args": {"summary": "12"}}}]}"#;
+        assert!(serde_json::from_str::<Value>(bad).is_err());
+        let v = extract_json_value(bad).expect("repaired");
+        assert_eq!(v["actions"][0]["args"]["summary"], "12");
+        assert_eq!(v["actions"].as_array().unwrap().len(), 1);
+    }
+
     use super::*;
     use serde_json::json;
 
