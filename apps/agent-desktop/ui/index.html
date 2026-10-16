@@ -309,7 +309,8 @@
   .item { padding: 7px 10px; border-radius: 10px; align-items: center; }
   .item:hover { background: var(--hover); }
   .item.sel { background: var(--hover); }
-  .item .g { -webkit-line-clamp: 1; font-size: 14px; }
+  .item .g { -webkit-line-clamp: 2; font-size: 14px; line-height: 1.35; word-break: break-word; }
+  .item { align-items: flex-start; padding-right: 10px; }
   .item .t { font-size: 11px; }
   .item .dot { margin-top: 0; width: 7px; height: 7px; }
   .clearall { border: none; text-align: left; margin: 0 8px; }
@@ -516,6 +517,12 @@
   .item:hover .hbtn, .item:focus-within .hbtn { opacity: 1; }
   .hbtn:hover { background: var(--border); color: var(--text); }
   .caret-blink { animation: pulse 1s infinite; color: var(--accent); }
+  .kebab { position: absolute; right: 6px; top: 8px; width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center; font-size: 18px; line-height: 1;
+           color: var(--muted); background: var(--hover); opacity: 0; }
+  .item:hover .kebab, .item:focus-within .kebab, .kebab:focus-visible { opacity: 1; }
+  .kebab:hover { background: var(--border); color: var(--text); }
+  .steps-head b { white-space: nowrap; }
+  .steps-head #stepsInfo { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 </style>
 </head>
 <body>
@@ -1229,19 +1236,24 @@ function drawHistory() {
         el("span", { class: `dot ${t.interrupted ? "warn" : dotClass(t.status)}` }),
         el("div", { style: "flex:1;min-width:0" }, el("div", { class: "g" }, meta.pinned ? "📌 " : "", title),
           el("div", { class: "t" }, hit || `${when(c.updated)} · ${t.interrupted ? "Bị gián đoạn" : STATUS[t.status] || t.status}${more}`)),
-        el("button", { class: "hbtn", title: meta.pinned ? "Bỏ ghim" : "Ghim lên đầu", onclick: e => { e.stopPropagation(); setMeta(c.id, { pinned: !meta.pinned }); } }, meta.pinned ? "📍" : "📌"),
-        el("button", { class: "hbtn", title: "Đổi tên cuộc trò chuyện", onclick: e => {
+        el("button", { class: "kebab", title: "Tùy chọn cuộc trò chuyện", "aria-label": "Tùy chọn cuộc trò chuyện", onclick: e => {
           e.stopPropagation();
-          const input = el("input", { class: "search", value: title, style: "margin:0" });
           const row = e.currentTarget.closest(".item");
-          const done = save => { if (save) setMeta(c.id, { title: input.value }); else drawHistory(); };
-          input.onkeydown = ev => { ev.stopPropagation(); if (ev.key === "Enter") done(true); if (ev.key === "Escape") done(false); };
-          input.onclick = ev => ev.stopPropagation();
-          input.onblur = () => done(true);
-          row.querySelector(".g").replaceChildren(input);
-          input.focus(); input.select();
-        } }, "✎"),
-        el("button", { class: "del", title: "Xóa cuộc trò chuyện này", onclick: e => { e.stopPropagation(); confirmTwice(e.currentTarget, "Xóa?", "🗑", () => deleteConversation(c.id)); } }, "🗑")));
+          const rect = e.currentTarget.getBoundingClientRect();
+          linkMenu(rect, "", [
+            [meta.pinned ? "📍 Bỏ ghim" : "📌 Ghim lên đầu", () => setMeta(c.id, { pinned: !meta.pinned })],
+            ["✎ Đổi tên", () => {
+              const input = el("input", { class: "search", value: title, style: "margin:0" });
+              const done = save => { if (save) setMeta(c.id, { title: input.value }); else drawHistory(); };
+              input.onkeydown = ev => { ev.stopPropagation(); if (ev.key === "Enter") done(true); if (ev.key === "Escape") done(false); };
+              input.onclick = ev => ev.stopPropagation();
+              input.onblur = () => done(true);
+              row.querySelector(".g").replaceChildren(input);
+              input.focus(); input.select();
+            }],
+            ["🗑 Xóa cuộc trò chuyện…", () => linkMenu(rect, `Xóa "${String(title).slice(0, 60)}"? Không khôi phục được.`, [["Xác nhận xóa", () => deleteConversation(c.id)], ["Giữ lại", () => {}]])],
+          ]);
+        } }, "⋮")));
     }
   }
   if (!out.length) out.push(el("div", { class: "group" }, q ? "Không tìm thấy" : "Chưa có việc nào"));
