@@ -511,6 +511,7 @@
   .navstatus button.learn-mini { padding: 4px 6px; border-radius: 8px; width: 100%; }
   .navstatus button.learn-mini:hover { background: var(--hover); }
   .navstatus .dot { margin-top: 0; }
+  .model-tag { font-size: 12px; color: var(--muted); padding: 3px 9px; border-radius: 999px; background: var(--code); margin-right: 6px; align-self: center; }
 </style>
 </head>
 <body>
@@ -1389,6 +1390,18 @@ function reasonText(reason) {
 }
 
 /** Which model answered last ("Gemini" or the local fallback). */
+/** {model, brain} of the last planner call that answered: shown under the answer, whatever was tried before. */
+function answeringModel(events) {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const e = events[i];
+    if (e.kind !== "llm" || !e.provider) continue;
+    const route = String(e.provider).split(":").pop();
+    const model = e.detail && e.detail.model ? String(e.detail.model) : "";
+    return { model, brain: BRAIN_NAMES[route] || route };
+  }
+  return null;
+}
+function modelLabel(m) { return m ? (m.model ? `${m.model} · ${m.brain}` : m.brain) : ""; }
 function brainName(events) {
   for (let i = events.length - 1; i >= 0; i--) {
     const p = events[i].kind === "llm" && events[i].provider;
@@ -1553,7 +1566,7 @@ function render(turn) {
   });
 
   region(turn, "result", [st, task.final_summary, task.failure_reason, task.artifacts, task.escalation, task.updated_at && done, data.interrupted,
-    task.completion_basis, task.unverified_checks], () => {
+    task.completion_basis, task.unverified_checks, modelLabel(answeringModel(events))], () => {
     if (!done && !task.escalation) return null;
     const files = [...new Set(task.artifacts || [])].filter(a => !/\.png$/i.test(a));
     // The core records HOW a completion was established (machine-readable); the text of the summary is not the source.
@@ -1575,7 +1588,9 @@ function render(turn) {
           el("ul", { class: "plan" }, unconfirmed.map(c => el("li", {}, String(c))))) : null) : null,
       task.escalation ? el("div", { class: "txt", style: "margin-top:6px" }, "⚠ Việc này cần quyền Administrator. Trợ lý không tự vượt UAC — hãy tự chạy với quyền quản trị nếu bạn đồng ý.") : null,
       files.length ? el("div", { class: "files" }, files.map(f => el("button", { class: "chip", title: `Mở ${f} (Shift+bấm: mở vị trí)`, onclick: e => { lkTask = task.task_id; openTarget(f, { action: e.shiftKey ? "reveal" : "open", rect: e.currentTarget.getBoundingClientRect() }); } }, "📄", el("span", {}, fileName(f))))) : null,
-      answer ? el("div", { class: "answer-actions" }, el("button", { class: "ghost", title: "Chép câu trả lời", onclick: e => copyText(answer, e.currentTarget) }, "📋 Sao chép"),
+      answer ? el("div", { class: "answer-actions" },
+        modelLabel(answeringModel(events)) ? el("span", { class: "model-tag", title: "Model đã viết câu trả lời này" }, "🤖 " + modelLabel(answeringModel(events))) : null,
+        el("button", { class: "ghost", title: "Chép câu trả lời", onclick: e => copyText(answer, e.currentTarget) }, "📋 Sao chép"),
         el("button", { class: "ghost", title: "Cách làm này tốt: AI sẽ nhớ", onclick: () => rateTask(task.task_id, "up") }, "👍 Tốt"),
         el("button", { class: "ghost", title: "Chưa ưng? Dạy AI làm khác đi lần sau", onclick: () => openPrefs("teach", task.task_id) }, "👎 Chưa tốt · dạy lại")) : null);
   });
