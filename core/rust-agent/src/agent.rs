@@ -181,6 +181,7 @@ pub struct TaskRunner<'a> {
     environment: String,
     /// task.complete attempts rejected so far in this run.
     completion_rejections: u32,
+    suppressed_asks: u32,
     /// Tool groups shown in full to the planner (the others are listed in one line each until enabled).
     loaded_groups: Vec<String>,
     /// Shown while the agent operates applications with the mouse and keyboard.
@@ -198,7 +199,7 @@ const BLOCKED_MARKERS: [&str; 9] = [
 /// A step that repeats an earlier step (same tool, same arguments) and got the same observation again: after the
 /// third identical result the planner is told the answer will not change and to finish or do something else.
 fn repeated_check_notice(previous: &[StepRecord], step: &StepRecord) -> Option<String> {
-    if step.status != StepStatus::Succeeded || step.observation.is_empty() {
+    if step.status != StepStatus::Succeeded {
         return None;
     }
     let same = previous
@@ -359,12 +360,19 @@ async fn streamed_chat(llm: &dyn crate::llm::ChatProvider, request: ChatRequest,
 const MAX_QUESTIONS_PER_TASK: usize = 4;
 
 /// Questions that only end a turn politely ("bạn cần hỗ trợ gì thêm không?", "anything else?").
-fn is_closing_question(question: &str) -> bool {
+fn is_closing_question(question: &str, worked: bool) -> bool {
     let q = brain_core::text::norm(question);
-    const MARKERS: [&str; 8] = [
-        "ho tro gi them", "giup gi them", "gi them khong", "gi nua khong", "anything else", "further assistance", "any further", "need anything",
-    ];
-    MARKERS.iter().any(|m| q.contains(m))
+    // always a pleasantry
+    const ALWAYS: [&str; 8] = ["ho tro gi them", "giup gi them", "gi them khong", "gi nua khong", "anything else", "further assistance", "any further", "need anything"];
+    // a pleasantry once real work has been done ("... or any other action?"), a real question before
+    const AFTER_WORK: [&str; 5] = ["lam them", "thuc hien them", "thao tac khac", "thao tac nao khac", "gui email thong bao"];
+    ALWAYS.iter().any(|m| q.contains(m)) || (worked && AFTER_WORK.iter().any(|m| q.contains(m)))
+}
+
+/// Asking whether to retry a failed step ("Bạn có muốn tôi thử lại không?").
+fn is_retry_permission(question: &str) -> bool {
+    let q = brain_core::text::norm(question);
+    ["muon toi thu lai", "co muon thu lai", "thu lai khong", "thu lai mot lan nua", "should i retry", "try again", "shall i retry", "muon toi tiep tuc thu"].iter().any(|m| q.contains(m))
 }
 
 /// Choices of a clarification question: trimmed, de-duplicated, without any "other" entry of the model's own (the chat
@@ -548,6 +556,7 @@ impl<'a> TaskRunner<'a> {
             pending_failures: Vec::new(),
             environment: String::new(),
             completion_rejections: 0,
+            suppressed_asks: 0,
             loaded_groups: groups_for(&format!("{} {} {}", record.goal, record.conversation.join(" "),
                                                record.attachments.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(" "))),
             banner: None,
@@ -595,6 +604,14 @@ impl<'a> TaskRunner<'a> {
         }
     }
 
+    /// `skills/auto-*.md`: a playbook the assistant wrote for itself from repeated verified successes (see
+    /// `skills::write_auto_skill`). The person can see, edit and delete them in Settings.
+    fn write_auto_skill(&self, skill: &crate::memory::GeneratedSkill) {
+        if crate::skills::write_auto_skill(&self.rt.config.root.join("skills"), skill) {
+            self.cortex_note("hippocampus", &format!("new playbook {} from {} verified successes (triggers: {})", skill.id, skill.support, skill.triggers.join(", ")));
+        }
+    }
+
     fn finish(&self, record: &mut TaskRecord, status: TaskStatus, reason: &str) -> Result<()> {
         if status == TaskStatus::Failed {
             record.failure_reason = Some(reason.to_string());
@@ -610,6 +627,18 @@ impl<'a> TaskRunner<'a> {
             }
         }
         let verified = record.completion_basis.as_deref() == Some("verified");
+        if status == TaskStatus::Completed && verified {
+            let chain: Vec<String> = record.steps.iter().filter(|s| s.status == StepStatus::Succeeded && !s.tool.starts_with("task.")).map(|s| s.tool.clone()).collect();
+            let hints: Vec<String> = record.steps.iter().filter(|s| s.status == StepStatus::Succeeded && !s.tool.starts_with("task.") && !s.thought.is_empty())
+                .map(|s| s.thought.chars().take(110).collect::<String>()).collect();
+            match self.rt.memory.record_skill_candidate(&record.task_id, &record.goal, &chain, &hints) {
+                Ok(Some(skill)) => self.write_auto_skill(&skill),
+                Ok(None) => {}
+                Err(e) => {
+                    let _ = self.audit.record(AuditEvent { kind: "memory_error", error: Some(json!(e.to_string())), ..Default::default() });
+                }
+            }
+        }
         if let Err(e) = self.rt.memory.record_episode(
             &record.task_id, &record.goal, status.as_str(), record.final_summary.as_deref(), record.failure_reason.as_deref().or(Some(reason)).filter(|_| status != TaskStatus::Completed),
             &tools, record.steps.len(), verified,
@@ -749,10 +778,20 @@ impl<'a> TaskRunner<'a> {
                         let (options, multi) = clarification_options(&action.args);
                         // "Do you need anything else?" is not a question the task depends on: it only parks the task
                         // (and ends the process after the wait). A chat turn ends with task.complete instead.
-                        if options.is_empty() && is_closing_question(&question) {
+                        if is_closing_question(&question, record.steps.iter().any(|st| st.status == StepStatus::Succeeded)) {
                             record.final_summary = Some(question.clone());
                             record.completion_basis = Some("direct_answer".to_string());
                             return self.finish(record, TaskStatus::Completed, "answered");
+                        }
+                        // "Shall I try again?" is not a decision for the person: retry another way, or give up honestly.
+                        if is_retry_permission(&question) {
+                            self.suppressed_asks += 1;
+                            if self.suppressed_asks >= 3 {
+                                record.final_summary = Some(question.clone());
+                                return self.finish(record, TaskStatus::Failed, &format!("could not finish and kept asking whether to retry: {question}"));
+                            }
+                            self.notices.push("Do not ask the user for permission to retry. If your last step failed, fix the cause (read the error, change the arguments or the tool) and continue; if it cannot be done, finish with task.fail and say why.".to_string());
+                            break;
                         }
                         let asked = record.conversation.iter().filter(|c| c.starts_with("You asked the user:")).count();
                         if asked >= MAX_QUESTIONS_PER_TASK {
@@ -842,7 +881,18 @@ impl<'a> TaskRunner<'a> {
         let playbooks = {
             let book = crate::skills::load(&self.rt.config.root.join("skills"));
             let goal_n = brain_core::text::norm(&format!("{} {}", record.goal, record.conversation.join(" ")));
-            crate::skills::render(&crate::skills::matching(&book, &goal_n))
+            let mut text = crate::skills::render(&crate::skills::matching(&book, &goal_n));
+            // hints the bench-driven optimiser decided to keep (tests/bench/optimize_hints.py)
+            if let Ok(hints) = std::fs::read_to_string(self.rt.config.root.join("memory").join("optimizer").join("hints.md")) {
+                let hints: String = hints.trim().chars().take(1500).collect();
+                if !hints.is_empty() {
+                    text.push_str(&format!("## Learned hints
+{hints}
+
+"));
+                }
+            }
+            text
         };
         let mut attachments = Vec::new();
         for image in record.attachments.iter().filter(|a| a.is_image()).take(MAX_USER_IMAGES_PER_TURN) {
@@ -1016,7 +1066,27 @@ impl<'a> TaskRunner<'a> {
         StepOutcome { record: step, observation_for_planner: None, screenshot: None, surprise: None }
     }
 
+    /// One line in the audit log (and the activity panel) for every time a helper region of the assistant stepped in.
+    fn cortex_note(&self, region: &str, note: &str) {
+        let _ = self.audit.record(AuditEvent { kind: "cortex", detail: json!({"region": region, "note": note}), ..Default::default() });
+        self.ui.event(RunEvent::Notice(&format!("[{region}] {note}")));
+    }
+
     async fn execute_step(&mut self, record: &mut TaskRecord, action: &PlannerAction) -> Result<StepOutcome> {
+        // cerebellum: arguments that only break the schema in trivial ways are repaired instead of costing a planner turn
+        let repaired;
+        let action = match self.rt.catalog.get(&action.tool).filter(|spec| !self.rt.catalog.validate_args(&spec.name, &action.args).is_empty()) {
+            Some(spec) => match crate::cortex::refine_args(&spec.input_schema, &action.args) {
+                Some((fixed, notes)) if self.rt.catalog.validate_args(&spec.name, &fixed).is_empty() => {
+                    let note = format!("{}: {}", spec.name, notes.join(", "));
+                    self.cortex_note("cerebellum", &note);
+                    repaired = PlannerAction { args: fixed, ..action.clone() };
+                    &repaired
+                }
+                _ => action,
+            },
+            None => action,
+        };
         let step = self.new_step(record, action, &action.args);
         let Some(spec) = self.rt.catalog.get(&action.tool).cloned() else {
             let err = ToolErrorInfo::new(ErrorCode::UnknownTool, format!("{} is not a tool", action.tool), false);
@@ -1410,6 +1480,10 @@ impl<'a> TaskRunner<'a> {
         };
         let mut failures = assessment.failures;
         let summary = action.args["summary"].as_str().unwrap_or_default().to_string();
+        if let Some(why) = crate::cortex::unfinished_work(&record.steps, &summary) {
+            self.cortex_note("cingulate", &why);
+            failures.push(format!("not finished: {why}"));
+        }
         let direct_answer = completion::is_direct_answer(&record.steps, &action.args);
         let ui_work = completion::has_ui_work(&record.steps, &self.rt.catalog);
         if completion::needs_second_opinion(&failures, self.rt.config.agent.verify_completion_with_llm, direct_answer, ui_work) {
@@ -1556,10 +1630,20 @@ mod tests {
     }
 
     #[test]
+    fn asking_permission_to_retry_or_to_do_more_is_recognised() {
+        assert!(super::is_retry_permission("Bạn có muốn tôi thử lại với nội dung tối giản hơn không?"));
+        assert!(super::is_retry_permission("Do you want me to try again?"));
+        assert!(!super::is_retry_permission("Bạn muốn xóa file nào?"));
+        assert!(super::is_closing_question("Tôi đã đưa dữ liệu vào Word. Bạn có muốn tôi gửi email thông báo hay thực hiện thêm thao tác nào khác không?", true));
+        assert!(!super::is_closing_question("Bạn muốn tôi làm thêm bản PDF hay Excel?", false), "before any work it is a real question");
+        assert!(!super::is_closing_question("Bạn muốn lưu báo cáo ở thư mục nào?", true));
+    }
+
+    #[test]
     fn closing_pleasantries_are_not_questions() {
-        assert!(super::is_closing_question("Tôi đang mở file 'qr-code (1).png' cho bạn. Bạn có cần tôi hỗ trợ gì thêm với file này không?"));
-        assert!(super::is_closing_question("Do you need anything else?"));
-        assert!(!super::is_closing_question("Bạn muốn xóa những file nào trong Downloads?"));
+        assert!(super::is_closing_question("Tôi đang mở file 'qr-code (1).png' cho bạn. Bạn có cần tôi hỗ trợ gì thêm với file này không?", false));
+        assert!(super::is_closing_question("Do you need anything else?", false));
+        assert!(!super::is_closing_question("Bạn muốn xóa những file nào trong Downloads?", true));
     }
 
     #[test]

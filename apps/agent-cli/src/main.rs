@@ -71,6 +71,8 @@ enum Command {
     Status { task_id: Option<String> },
     /// Request cancellation of a running task.
     Cancel { task_id: String },
+    /// Build playbooks (skills/auto-*.md) from the verified successes already in the task history.
+    Learn,
     /// List past tasks.
     History {
         #[arg(long, default_value_t = 20)]
@@ -393,6 +395,27 @@ async fn main_inner() -> Result<ExitCode> {
             }
             let marker = request_cancel(&config.tasks_dir(), &task_id)?;
             println!("Cancellation requested for {task_id} ({}); the runner stops after the current action.", marker.display());
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Learn => {
+            let redactor = lga_core::agent::build_redactor(&config);
+            let memory = lga_core::memory::Memory::open(&config.path(&config.memory.persistent_db), redactor)?;
+            let (mut seen, mut written) = (0, 0);
+            let mut records = store(&config).list()?;
+            records.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+            for record in records.iter().filter(|r| r.status == lga_core::state::TaskStatus::Completed && r.completion_basis.as_deref() == Some("verified")) {
+                let ok = |s: &&lga_core::state::StepRecord| s.status == lga_core::state::StepStatus::Succeeded && !s.tool.starts_with("task.");
+                let chain: Vec<String> = record.steps.iter().filter(ok).map(|s| s.tool.clone()).collect();
+                let hints: Vec<String> = record.steps.iter().filter(ok).filter(|s| !s.thought.is_empty()).map(|s| s.thought.chars().take(110).collect()).collect();
+                seen += 1;
+                if let Some(skill) = memory.record_skill_candidate(&record.task_id, &record.goal, &chain, &hints)? {
+                    if lga_core::skills::write_auto_skill(&config.root.join("skills"), &skill) {
+                        written += 1;
+                        println!("playbook {} ({} successes): {}", skill.id, skill.support, skill.triggers.join(", "));
+                    }
+                }
+            }
+            println!("{seen} verified successes read, {written} playbooks written or updated");
             Ok(ExitCode::SUCCESS)
         }
         Command::History { limit } => {

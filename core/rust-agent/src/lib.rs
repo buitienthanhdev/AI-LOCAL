@@ -20,6 +20,7 @@ pub mod agent;
 pub mod completion;
 pub mod planner;
 pub mod skills;
+pub mod cortex;
 pub mod doctor;
 pub mod process;
 pub mod interaction;

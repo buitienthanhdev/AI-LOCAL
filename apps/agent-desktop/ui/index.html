@@ -645,6 +645,10 @@
           <textarea id="styleText" rows="6" placeholder="Ví dụ: Gọi tôi là anh Tiến. Trả lời ngắn gọn bằng tiếng Việt. Luôn hỏi lại trước khi xoá file. Khi làm Excel, ghi rõ đơn vị tiền."></textarea>
           <div class="actions"><button class="btn primary" id="styleSave">Lưu phong cách</button><span class="small muted" id="styleState"></span></div>
         </div>
+        <div class="grp"><h3>Kỹ năng AI tự học</h3>
+          <div class="small muted" style="margin-bottom:6px">Sau ít nhất 2 lần làm đúng và được kiểm chứng cùng một kiểu việc với cùng chuỗi công cụ, AI tự viết kỹ năng ở đây (tối đa 40). Chỉ được dùng khi yêu cầu của bạn có ít nhất 2 từ khóa. Xóa một kỹ năng thì nó chỉ được viết lại khi AI lại tự chứng minh được.</div>
+          <div id="autoSkillList" class="list"></div>
+        </div>
         <div class="grp"><h3 data-t="Kỹ năng của bạn">Kỹ năng của bạn</h3>
           <div class="small muted" style="margin-bottom:6px">Một kỹ năng là quy trình AI sẽ nhớ và dùng khi yêu cầu của bạn có các từ khóa tương ứng.</div>
           <div id="skillList" class="list"></div>
@@ -1930,7 +1934,8 @@ function drawSteps(turn) {
   const started = events.filter(e => e.kind === "step_started");
   const finished = new Set(task.steps.map(s => s.step_id));
   const current = started.length && !finished.has(started[started.length - 1].step_id) ? started[started.length - 1] : null;
-  const sig = JSON.stringify([turn.id, task.steps.length, st, current && current.step_id, done, !!pendingReq, brainName(events)]);
+  const cortex = events.filter(e => e.kind === "cortex");
+  const sig = JSON.stringify([turn.id, task.steps.length, st, current && current.step_id, done, !!pendingReq, brainName(events), cortex.length]);
   if (sig === stepsSig) return;
   stepsSig = sig;
   const sc = body.scrollHeight - body.scrollTop - body.clientHeight < 80;
@@ -1944,6 +1949,11 @@ function drawSteps(turn) {
       el("pre", {}, short(stepArgs(s.tool, s.args), 500)),
       el("div", { class: `as-r ${ok ? "ok" : "bad"}` }, `${ok ? "✓ Thành công" : "✗ " + s.status} · ${(s.duration_ms / 1000).toFixed(1)}s${s.error ? ` · ${s.error.code}: ${short(s.error.message, 160)}` : ""}`),
       s.observation ? el("details", {}, el("summary", {}, "Kết quả"), el("pre", {}, short(s.observation, 900))) : null));
+  }
+  if (cortex.length) {
+    const REGION = { cerebellum: "🧠 Tiểu não · sửa thao tác", cingulate: "🧠 Hồi đai trước · chặn báo xong sớm", parietal: "🧠 Thùy đỉnh · tính toán" };
+    nodes.push(el("div", { class: "as" }, el("div", { class: "as-h" }, "Bộ não phụ đã can thiệp"),
+      ...cortex.slice(-8).map(e => el("div", { class: "as-t", style: "margin:2px 0" }, `${REGION[e.detail && e.detail.region] || (e.detail && e.detail.region)}: ${short(e.detail && e.detail.note, 220)}`))));
   }
   if (!done) {
     if (current) {
@@ -2213,6 +2223,8 @@ function drawSkillTab() {
     const t = $("styleText"); t.value = (t.value.trim() ? t.value.trim() + "\n" : "") + "- " + p;
   } }, "＋ " + p)));
   const mine = userSkills.filter(x => x.kind === "skill");
+  const autos = userSkills.filter(x => x.kind === "auto");
+  $("autoSkillList").replaceChildren(...(autos.length ? autos.map(sk => skillRow(sk, null)) : [el("div", { class: "muted small" }, "Chưa có kỹ năng nào tự học.")]));
   $("skillList").replaceChildren(...(mine.length ? mine.map(sk => skillRow(sk, k => {
     editingSkill = k.id; $("skName").value = k.name; $("skTriggers").value = k.triggers.join(", "); $("skBody").value = k.body; $("skState").textContent = "Đang sửa — bấm Lưu để cập nhật.";
   })) : [el("div", { class: "muted small" }, "Chưa có kỹ năng nào.")]));

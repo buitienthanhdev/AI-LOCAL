@@ -25,6 +25,8 @@ pub struct Playbook {
     pub name: String,
     pub triggers: Vec<String>,
     pub body: String,
+    /// How many of its triggers must occur in the request (auto-written playbooks need 2: a lone common word is not enough).
+    pub min_hits: usize,
 }
 
 /// Parse one playbook file; None when the front matter is missing.
@@ -35,14 +37,17 @@ pub fn parse(text: &str) -> Option<Playbook> {
     let (front, body) = (&rest[..end], rest[end + 4..].trim());
     let mut name = String::new();
     let mut triggers = Vec::new();
+    let mut min_hits = 1usize;
     for line in front.lines() {
         if let Some(v) = line.trim().strip_prefix("name:") {
             name = v.trim().to_string();
+        } else if let Some(v) = line.trim().strip_prefix("min_hits:") {
+            min_hits = v.trim().parse().unwrap_or(1).clamp(1, 6);
         } else if let Some(v) = line.trim().strip_prefix("triggers:") {
             triggers = v.split(',').map(|t| t.trim().to_lowercase()).filter(|t| !t.is_empty()).collect();
         }
     }
-    (!name.is_empty() && !triggers.is_empty() && !body.is_empty()).then(|| Playbook { name, triggers, body: body.to_string() })
+    (!name.is_empty() && !triggers.is_empty() && !body.is_empty()).then(|| Playbook { name, triggers, body: body.to_string(), min_hits })
 }
 
 pub fn load(dir: &Path) -> Vec<Playbook> {
@@ -58,6 +63,29 @@ pub fn load(dir: &Path) -> Vec<Playbook> {
     out
 }
 
+/// Write (or refresh) `skills/<id>.md` for a playbook generated from repeated verified successes. At most `MAX_AUTO`
+/// auto playbooks exist. Returns true when the file changed.
+pub fn write_auto_skill(skills_dir: &Path, skill: &crate::memory::GeneratedSkill) -> bool {
+    const MAX_AUTO: usize = 40;
+    let path = skills_dir.join(format!("{}.md", skill.id));
+    let existing = std::fs::read_dir(skills_dir).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().starts_with("auto-")).count()).unwrap_or(0);
+    if !path.exists() && existing >= MAX_AUTO {
+        return false;
+    }
+    let content = format!("---
+name: {}
+kind: auto
+min_hits: 2
+triggers: {}
+---
+{}", skill.name, skill.triggers.join(", "), skill.body);
+    if std::fs::read_to_string(&path).ok().as_deref() == Some(content.as_str()) {
+        return false;
+    }
+    let tmp = path.with_extension("md.tmp");
+    std::fs::write(&tmp, content).is_ok() && std::fs::rename(&tmp, &path).is_ok()
+}
+
 /// The playbooks that apply to `goal` (already accent-free and lower case), best first.
 pub fn matching<'a>(playbooks: &'a [Playbook], goal_normalized: &str) -> Vec<&'a Playbook> {
     let padded = format!(" {goal_normalized} ");
@@ -68,7 +96,7 @@ pub fn matching<'a>(playbooks: &'a [Playbook], goal_normalized: &str) -> Vec<&'a
         .iter()
         .filter(|p| !p.triggers.iter().any(|t| t == "*"))
         .map(|p| (p.triggers.iter().filter(|t| padded.contains(&format!(" {t} ")) || (t.contains(' ') && padded.contains(t.as_str()))).count(), p))
-        .filter(|(n, _)| *n > 0)
+        .filter(|(n, p)| *n >= p.min_hits.max(1))
         .collect();
     scored.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.cmp(&b.1.name)));
     always.chain(scored.into_iter().take(LIMIT).map(|(_, p)| p)).collect()
@@ -112,6 +140,21 @@ Answer briefly.
         let books = vec![always, word];
         assert_eq!(matching(&books, "gui email").len(), 1);
         assert_eq!(matching(&books, "mo file word").len(), 2);
+    }
+
+    #[test]
+    fn an_auto_playbook_needs_two_trigger_words() {
+        let p = parse("---
+name: auto
+kind: auto
+min_hits: 2
+triggers: doanh, csv, tong
+---
+body
+").unwrap();
+        let books = vec![p];
+        assert!(matching(&books, "gui csv cho toi").is_empty(), "one common word is not enough");
+        assert_eq!(matching(&books, "tong doanh thu trong csv").len(), 1);
     }
 
     #[test]

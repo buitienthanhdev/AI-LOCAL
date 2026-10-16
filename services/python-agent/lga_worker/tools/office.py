@@ -111,7 +111,7 @@ class Office:
             values = rng.Value
             if not isinstance(values, tuple):
                 values = ((values,),)
-            rows = [["" if v is None else (v if isinstance(v, (int, float, bool)) else str(v)) for v in row] for row in values]
+            rows = [["" if v is None else _cell_text(v) for v in row] for row in values]
             formulas = rng.Formula
             if not isinstance(formulas, tuple):
                 formulas = ((formulas,),)
@@ -340,6 +340,21 @@ async def _run(ctx: ToolContext, fn, *args: Any) -> Any:
         raise ToolError(ErrorCode.EXECUTION_FAILED, f"Office: {text}") from exc
 
 
+# Excel hands error cells over as large negative integers (COM): name them, a formula that ends in #DIV/0! is not done.
+EXCEL_ERRORS = {-2146826281: "#DIV/0!", -2146826246: "#N/A", -2146826259: "#NAME?", -2146826288: "#NULL!",
+                -2146826252: "#NUM!", -2146826265: "#REF!", -2146826273: "#VALUE!"}
+
+
+def _cell_text(v: Any) -> Any:
+    if isinstance(v, int) and not isinstance(v, bool) and v in EXCEL_ERRORS:
+        return EXCEL_ERRORS[v]
+    return v if isinstance(v, (int, float, bool)) else str(v)
+
+
+def _error_cells(rows: list[list[Any]]) -> list[str]:
+    return [f"row {r + 1} col {c + 1} {v}" for r, row in enumerate(rows) for c, v in enumerate(row) if isinstance(v, str) and v in EXCEL_ERRORS.values()]
+
+
 def _table(rows: list[list[Any]], limit: int = 40) -> str:
     lines = [" | ".join(str(v) for v in row) for row in rows[:limit]]
     more = f"\n... {len(rows) - limit} more rows" if len(rows) > limit else ""
@@ -354,7 +369,9 @@ def register(registry: ToolRegistry) -> None:
         formulas = "; ".join(f"{k}{v}" for k, v in list(data["formulas"].items())[:20])
         return ToolOutcome(data=data, backend=BACKEND,
                            observation=f"{data['workbook']} [{data['sheet']}] {data['range']} (sheets: {', '.join(data['sheets'])}):\n"
-                           f"{_table(data['rows'])}" + (f"\nFormulas: {formulas}" if formulas else ""))
+                           f"{_table(data['rows'])}" + (f"\nFormulas: {formulas}" if formulas else "")
+                           + (f"\nWARNING: error values in the range ({'; '.join(_error_cells(data['rows'])[:6])}): the formulas that produce them are NOT working, "
+                              "so the task is not done; look at the cells they refer to." if _error_cells(data['rows']) else ""))
 
     @registry.handler("office.excel_write")
     async def excel_write(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
