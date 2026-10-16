@@ -1,0 +1,356 @@
+SPECIFICATION — HỆ THỐNG ĐỌC, TẠO VÀ KIỂM TRA BẢN VẼ KỸ THUẬT NHÀ BẰNG
+AUTOCAD Phiên bản 1.0 | Đặc tả tổng quát cho AI Agent / CAD automation
+
+MỤC TIÊU VÀ GIỚI HẠN Xây dựng hệ thống có thể đọc, phân tích, dựng, hiệu
+chỉnh, kiểm tra và xuất bản vẽ kiến trúc nhà ở bằng AutoCAD. Đầu ra phải
+là DWG có thể chỉnh sửa, PDF có thể kiểm tra, cùng báo cáo lỗi và nguồn
+dữ liệu. Không được kết luận “đạt chuẩn ngành” chỉ vì lệnh CAD chạy
+thành công hoặc bản vẽ nhìn đẹp. Phân biệt CAD_VALID, DRAWING_CHECKED,
+COORDINATED, CODE_REVIEWED và ISSUED_FOR_CONSTRUCTION. Chỉ người có thẩm
+quyền mới được xác nhận tuân thủ pháp lý, an toàn và phát hành thi công.
+Không tự bịa kích thước, kết cấu, quy chuẩn, điều khoản pháp lý hoặc
+thông tin khảo sát. Giá trị thiếu phải là UNKNOWN/ASSUMED và có nguồn
+gốc rõ ràng.
+
+1.  PROJECT STANDARDS PROFILE Trước khi dựng, yêu cầu cấu hình:
+
+-   Quốc gia, địa phương, cơ quan quản lý, loại công trình và giai đoạn
+    hồ sơ.
+-   Loại nhà, số tầng, phạm vi thiết kế và bộ môn thuộc phạm vi.
+-   Bộ quy chuẩn/tiêu chuẩn, quy hoạch, PCCC, tiếp cận, kết cấu, MEP và
+    yêu cầu địa phương do chủ trì thiết kế xác nhận.
+-   Phiên bản AutoCAD/edition, định dạng DWG/DXF, đơn vị, hệ tọa độ, khổ
+    giấy, tỷ lệ, font, linetype, lineweight, CTB/STB, title block và quy
+    ước layer.
+-   Tiêu chí tính diện tích và quy ước trình bày. Nếu thiếu thông tin
+    quan trọng, hiển thị hộp thoại với lựa chọn đề xuất, cho phép chọn
+    nhiều đáp án khi cần, mục “Khác” để nhập tự do và “Chưa biết — giữ
+    UNKNOWN”. Không tự tuyên bố một thông số là yêu cầu pháp lý nếu chưa
+    xác minh.
+
+2.  INPUT / OUTPUT Đầu vào có thể gồm DWG, DXF, PDF vector, ảnh
+    scan/chụp, IFC hoặc dữ liệu khảo sát nếu có bộ đọc tương ứng;
+    template, CTB/STB, font, block, xref, yêu cầu công năng và bảng diện
+    tích. Đầu ra: DWG chỉnh sửa được; PDF theo sheet; danh mục bản vẽ;
+    bảng cửa/cửa sổ, bảng hoàn thiện, bảng phòng/diện tích nếu yêu cầu;
+    báo cáo validation; danh sách giả định/xung đột; preview; revision
+    log. Giữ nguyên file gốc read-only. Làm việc trên bản sao. Không
+    tuyên bố file đầu ra tồn tại nếu chưa xác minh đường dẫn và khả năng
+    mở.
+
+3.  NGUỒN GỐC DỮ LIỆU Mỗi dữ liệu có source_status: PROVIDED, MEASURED,
+    IMPORTED, DERIVED, ASSUMED, UNKNOWN hoặc CONFLICTED; kèm
+    file/entity/page, đơn vị, thời gian, confidence và ghi chú. Không
+    chuyển ASSUMED thành VERIFIED nếu không có bằng chứng. Khi hai nguồn
+    mâu thuẫn, lưu cả hai và hỏi người dùng nguồn ưu tiên. Schema đối
+    tượng tối thiểu: entity_id, entity_type, geometry,
+    coordinate_system, units, level_id, elevation/height, properties,
+    relationships, source, status, revision, validation_results,
+    issue_ids. Loại đối tượng gợi ý: SITE, GRID, LEVEL, WALL, COLUMN,
+    SLAB, DOOR, WINDOW, STAIR, RAILING, ROOF, ROOM, OPENING, FINISH,
+    FIXTURE, ANNOTATION, DIMENSION, DETAIL_MARKER, OTHER. Dùng schema mở
+    rộng theo từng loại; trường không có trong nguồn phải null/UNKNOWN,
+    không tự sinh giá trị giả.
+
+4.  WORKFLOW A. Kiểm kê file: xác định version, đơn vị, UCS/WCS, layer,
+    block, xref, font, linetype, plot style, layout, lỗi file và entity
+    bất thường. B. Phân tích: nhận diện ranh đất, lưới trục, tường, cột,
+    cửa, cầu thang, phòng, mái, cao độ và annotation. Không suy ra ý
+    nghĩa chỉ từ hình dạng nếu không đủ căn cứ. C. Tạo mô hình dữ liệu
+    trung gian có ID ổn định và nguồn gốc. D. Lập danh mục sheet, tỷ lệ,
+    khổ giấy, view và quan hệ tham chiếu. E. Dựng hình từ dữ liệu nguồn,
+    không vẽ tất cả trên một layer. F. Validation hình học, annotation,
+    liên kết giữa các view và in ấn. G. Sửa lỗi theo mức độ, chạy
+    regression tests, xuất DWG/PDF và báo cáo. Không ghi đè bản phát
+    hành; tạo revision mới.
+
+5.  AUTOCAD FILE SETUP
+
+-   Model Space theo kích thước thực 1:1; Paper Space/Layout dùng cho
+    khổ giấy và viewport.
+-   Khai báo INSUNITS, UCS/WCS, datum cao độ và transform import. Không
+    scale chỉ để hình vừa màn hình.
+-   Tách hình học xây dựng khỏi dimension, text, trục, hatch, ký hiệu và
+    đường tham chiếu.
+-   Ưu tiên ByLayer cho màu, linetype và lineweight.
+-   Không explode hàng loạt block/xref hoặc purge khi chưa kiểm tra
+    dependency.
+-   Block cho cửa, cửa sổ, trục, cao độ, section/elevation/detail
+    marker, title block; thuộc tính cần dùng cho schedule phải có dữ
+    liệu có cấu trúc.
+-   Xref phải có đường dẫn được giải quyết, trạng thái reload rõ ràng và
+    báo lỗi khi mất nguồn.
+
+6.  LAYER STANDARD — MẪU ÁNH XẠ Các tên sau là mẫu; nếu văn phòng có
+    template thì ánh xạ sang chuẩn hiện hữu: A-SITE-BOUNDARY: ranh
+    đất/chỉ giới có nguồn A-SITE-CONTEXT: bối cảnh hiện trạng A-GRID:
+    lưới trục A-WALL-EXT / A-WALL-INT: tường ngoài/trong A-WALL-EXIST /
+    A-WALL-DEMO: tường hiện trạng/phá dỡ A-OPENING: lỗ mở A-DOOR /
+    A-WINDOW: cửa đi/cửa sổ A-COLUMN-ARCH: cột thể hiện kiến trúc
+    A-STAIR / A-RAILING: cầu thang/lan can A-ROOF / A-CEILING: mái/trần
+    A-FLOOR-FINISH / A-WALL-FINISH: phạm vi hoàn thiện A-ROOM-BOUNDARY /
+    A-ROOM-TAG: boundary và nhãn phòng A-FURN / A-FIXT: nội thất minh
+    họa/thiết bị cố định A-GLAZING: kính A-SECTION-CUT / A-SECTION-PROJ:
+    đường cắt/chiếu mặt cắt A-HIDDEN: nét khuất A-HATCH: hatch vật liệu
+    A-DIMS: kích thước A-ANNO-TEXT / A-ANNO-LEVEL / A-ANNO-GRID: chú
+    thích/cao độ/trục A-ANNO-KEYNOTE: ghi chú vật liệu A-DETAIL-MARKER:
+    ký hiệu tham chiếu chi tiết A-AREA: boundary tính diện tích
+    A-OVERHEAD: đối tượng phía trên mặt phẳng cắt A-NPLT: đối tượng
+    không in có kiểm soát Các bộ môn khác dùng namespace S-, E-, M-, P-,
+    FP- theo chuẩn dự án. Không nhập cấu kiện kết cấu/MEP vào đối tượng
+    kiến trúc mà không ghi rõ ranh trách nhiệm.
+
+7.  ĐỘ CHÍNH XÁC VÀ HÌNH HỌC
+
+-   Tất cả tolerance phải cấu hình được theo đơn vị và mục đích kiểm
+    tra; không hard-code một giá trị cho mọi trường hợp.
+-   Phân biệt đường tim, đường bao, đường hoàn thiện, đường cắt, đường
+    chiếu và đường khuất.
+-   Tường phải có bề dày hoặc quy ước tim tường rõ.
+-   Cửa/cửa sổ phải liên kết opening với tường, không chỉ là ký hiệu
+    chồng lên.
+-   Boundary phòng phải kín nếu dùng để tính diện tích; boundary hở phải
+    báo lỗi.
+-   Phát hiện zero-length segment, self-intersection, polyline hở, arc
+    lỗi, entity trùng, geometry ngoài vùng và đối tượng sai cao độ.
+-   Không tự xóa entity trùng trước khi xác định đó là lỗi hay nét chồng
+    có chủ ý.
+-   Không làm tròn hình học để làm nhãn dimension trông đẹp hơn. Độ
+    chính xác hình học và định dạng hiển thị dimension là hai cấu hình
+    riêng.
+
+8.  MẶT BẰNG KIẾN TRÚC Mặt bằng tổng thể/vị trí:
+
+-   Thể hiện ranh đất, hướng Bắc, đường tiếp cận, công trình, khoảng
+    lùi/chỉ giới khi có dữ liệu xác minh.
+-   Ghi nguồn khảo sát, ngày đo và hệ tọa độ khi cần. Không suy diễn chỉ
+    giới từ ảnh không xác minh. Mặt bằng từng tầng:
+-   Ghi tầng, cao độ sàn, tỷ lệ, lưới trục và kích thước.
+-   Phân biệt tường ngoài/trong, hiện trạng/mới/phá dỡ.
+-   Cửa có mã, kích thước, hướng mở và quan hệ với tường; cửa sổ có mã,
+    vị trí và cao độ bậu/đỉnh khi cần.
+-   Cầu thang có bậc, chiếu nghỉ, hướng đi lên, lan can và ký hiệu phần
+    phía trên mặt phẳng cắt.
+-   Phòng có mã/tên; diện tích chỉ ghi khi có boundary và quy tắc tính
+    rõ.
+-   Khu ướt, bếp, thiết bị vệ sinh và trục kỹ thuật cần phối hợp MEP.
+-   Không để dimension, text, hatch che lối đi, cửa hoặc đường bao quan
+    trọng. Kích thước:
+-   Có kích thước tổng thể, phân đoạn và định vị theo quy ước dự án.
+-   Kiểm tra chuỗi kích thước không mâu thuẫn; dimension phải đo đúng
+    geometry.
+-   Nếu dimension override khác hình học, báo CONFLICT, không âm thầm
+    sửa một phía. Diện tích:
+-   Phân biệt diện tích xây dựng, diện tích sàn, diện tích sử dụng và
+    diện tích phòng.
+-   Ghi rõ đo theo tim tường, mép hoàn thiện, mép trong hay quy tắc được
+    yêu cầu.
+-   Tổng diện tích phải tái tính từ boundary và có thể truy vết.
+
+9.  MẶT ĐỨNG, MẶT CẮT, CAO ĐỘ Mặt đứng:
+
+-   Thể hiện nền, tầng, mái, cửa, cửa sổ, ban công, lan can, vật liệu và
+    đường gờ cần thiết.
+-   Cao độ phải dùng chung datum; vị trí cửa/cửa sổ phải khớp mặt bằng.
+    Mặt cắt:
+-   Có mã, hướng nhìn và section marker hợp lệ.
+-   Thể hiện cao độ sàn, trần, mái, nền, tầng, cầu thang và cấu kiện
+    liên quan trong phạm vi kiến trúc.
+-   Hatch phần bị cắt phải rõ, không gây hiểu nhầm vật liệu.
+-   Kiểm tra chiều cao thông thủy, chiều cao tầng và quan hệ cầu thang.
+-   Không tự quyết định kích thước kết cấu nếu không có thiết kế kỹ sư.
+    Cao độ:
+-   Có datum gốc (ví dụ ±0.000 theo quy ước dự án).
+-   Phân biệt cao độ kiến trúc, kết cấu, hoàn thiện và khảo sát.
+-   Kiểm tra mặt bằng/mặt đứng/mặt cắt nhất quán; không gán cao độ địa
+    lý khi thiếu khảo sát.
+
+10. CỬA, CỬA SỔ, CẦU THANG, PHÒNG Cửa: mã duy nhất, loại, rộng/cao,
+    hướng mở, vật liệu nếu biết, tầng, tường chứa, source và ghi chú.
+    Bảng cửa lấy từ cùng nguồn dữ liệu với ký hiệu trên mặt bằng. Báo mã
+    trùng, opening không liên kết, kích thước lệch hoặc hướng mở xung
+    đột. Cửa sổ: mã, kích thước, vật liệu/kính nếu đã xác định, cao độ
+    bậu/đỉnh và tường chủ. Không tự tuyên bố đạt yêu cầu kính an
+    toàn/chống cháy khi chưa kiểm tra quy chuẩn áp dụng. Cầu thang: tầng
+    đi/đến, tổng cao độ, số bậc, chiều cao bậc, mặt bậc, chiều rộng vế,
+    chiếu nghỉ, hướng đi, lan can và khoảng thông thủy. Kiểm tra phép
+    tính tổng cao độ/số bậc; giới hạn đạt chuẩn phải lấy từ profile được
+    xác minh. Phòng: mã, tên, tầng, boundary, diện tích theo quy tắc,
+    cao độ và công năng. Báo boundary hở/chồng lấn hoặc sai tầng.
+    Mái/ban công/giếng trời: ranh, cao độ, độ dốc/hướng thoát nước khi
+    có dữ liệu, parapet/lan can và liên hệ mặt cắt. Không tự xác nhận
+    thiết kế kết cấu hoặc thoát nước khi thiếu chuyên môn/hồ sơ.
+
+11. TEXT, DIMENSION, KÝ HIỆU, HATCH
+
+-   Dùng TextStyle/DimStyle thống nhất; chọn chiều cao chữ theo khổ giấy
+    và tỷ lệ in.
+-   Dùng annotative hoặc chiến lược tỷ lệ được quy định thống nhất,
+    không trộn tùy tiện.
+-   Kiểm tra font SHX/TTF, tiếng Việt, ký tự đặc biệt, dấu ± và đường
+    kính.
+-   Dimension có witness line, arrow/tick, precision và unit format
+    thống nhất.
+-   Tránh chữ bị cắt, chồng lấn, quá nhỏ, xoay sai hoặc che hình học.
+-   Section/elevation/detail marker phải tham chiếu sheet tồn tại và
+    đúng mã.
+-   Hatch nằm trong boundary hợp lệ, không tràn qua lỗ mở; scale/angle
+    phù hợp tỷ lệ in.
+-   Hatch vật liệu chỉ là ký hiệu đồ họa, không tự chứng minh vật liệu
+    thực tế.
+-   Có legend cho quy ước hiện trạng/mới/phá dỡ.
+
+12. SHEET SET THAM KHẢO Tạo danh mục theo phạm vi dự án; không phải
+    sheet nào cũng bắt buộc: G-001 Bìa, thông tin dự án, danh mục bản vẽ
+    G-002 Ghi chú chung, quy ước, legend G-003 Vị trí/mặt bằng tổng thể
+    nếu thuộc phạm vi A-101 Mặt bằng kiến trúc tầng 1 A-102 Mặt bằng
+    tầng 2 và các tầng tiếp theo A-103 Mặt bằng mái A-110 Mặt bằng nội
+    thất nếu yêu cầu A-120 Mặt bằng lát sàn/hoàn thiện sàn A-121 Mặt
+    bằng trần A-130 Sơ đồ định vị cửa/cửa sổ A-201 Mặt đứng chính A-202
+    Các mặt đứng còn lại A-301 Mặt cắt chính A-302 Mặt cắt phụ A-401 Chi
+    tiết cầu thang A-402 Chi tiết khu ướt A-403 Chi tiết cửa/cửa
+    sổ/bậu/ngưỡng A-404 Chi tiết ban công/lan can/mái khi cần A-501 Bảng
+    cửa A-502 Bảng hoàn thiện A-503 Bảng phòng/diện tích Mã sheet là cấu
+    hình của tổ chức, không phải quy định phổ quát. Kết cấu, điện, HVAC,
+    cấp thoát nước, PCCC và bộ môn khác chỉ phát hành từ người chịu
+    trách nhiệm bộ môn; kiến trúc cần phối hợp và nêu ranh trách nhiệm.
+
+13. LAYOUT VÀ PLOT
+
+-   Mỗi sheet có Layout đúng khổ giấy/orientation, title block và
+    viewport tỷ lệ chính xác, khóa viewport sau khi thiết lập.
+-   Title block gồm dự án, chủ đầu tư, đơn vị thiết kế, người lập/kiểm
+    tra/phê duyệt, mã sheet, tên sheet, tỷ lệ, ngày, revision và trạng
+    thái phát hành theo yêu cầu.
+-   Không tự điền tên, chữ ký, chứng chỉ hoặc thông tin pháp lý.
+-   Kiểm tra plotter/PDF driver, plot area, centering, lineweight,
+    transparency, CTB/STB và font.
+-   Kiểm tra PDF sau khi render thành ảnh; không chỉ tin lệnh PLOT trả
+    về thành công.
+-   Kiểm tra text/nét ở kích thước in thực tế, thứ tự sheet, số trang và
+    đối tượng bị clip.
+
+14. TỰ ĐỘNG HÓA AUTOCAD Chọn adapter phù hợp: AutoCAD .NET API,
+    AutoLISP/Visual LISP, ActiveX/COM hoặc DXF library; xác minh phiên
+    bản/edition/API trước khi dùng. Không giả định API giống nhau ở mọi
+    phiên bản hoặc AutoCAD LT.
+
+-   Thay đổi theo transaction/rollback; có backup.
+-   Trước thao tác chuột/phím, xác minh cửa sổ AutoCAD và document đang
+    active.
+-   Phát hiện command prompt chưa hoàn tất, modal dialog, timeout và
+    trạng thái recovery.
+-   Mỗi operation có ID, input, entity bị ảnh hưởng, trạng thái, log và
+    lỗi.
+-   Retry không được tạo entity trùng; dùng ID/marker để bảo đảm
+    idempotency.
+-   Hỗ trợ DRY_RUN/PREVIEW và APPLY/COMMIT tách biệt.
+-   Cancel phải an toàn; có checkpoint/resume.
+-   Batch cập nhật, tránh regenerate/zoom sau từng entity; theo dõi thời
+    gian mở, regenerate, plot và dung lượng.
+-   Không chạy LISP/script/plugin từ nguồn không tin cậy nếu chưa kiểm
+    tra.
+
+15. VALIDATION RULES File:
+
+-   DWG mở được; không có recovery warning chưa xử lý.
+-   Xref, font, linetype, plot style và block cần thiết resolved.
+-   AUDIT hoặc kiểm tra database có log kết quả. Geometry:
+-   Tìm entity trùng/gần trùng, boundary hở, self-intersection,
+    zero-length, arc lỗi, tường/cửa không liên kết, đối tượng xa vùng
+    bản vẽ và sai cao độ. Annotation:
+-   Dimension override lệch geometry; text rỗng/trùng/cắt; font thiếu;
+    nhãn trục trùng; marker tham chiếu sheet không tồn tại; dimension
+    ngoài khung. Coordination:
+-   Tường/cửa/cửa sổ khớp giữa mặt bằng và mặt đứng.
+-   Cao độ nhất quán giữa mặt bằng/mặt đứng/mặt cắt.
+-   Mã cửa/cửa sổ khớp schedule.
+-   Mã phòng/diện tích khớp boundary và quy tắc tính.
+-   Section/detail marker có view tương ứng. Plot:
+-   Đúng khổ giấy, tỷ lệ, plot style, font, thứ tự sheet; không thiếu
+    layer/đối tượng quan trọng; PDF được render và kiểm tra. Mức lỗi:
+    BLOCKER: file không mở, sai đơn vị, mất dữ liệu hoặc hình học chính
+    không đáng tin. ERROR: sai kích thước/hình học, view mâu thuẫn hoặc
+    thiếu tham chiếu quan trọng. WARNING: chồng lấn annotation, font
+    thay thế, layer/plot có nguy cơ. INFO: cải thiện trình bày/hiệu
+    năng. Không PASS nếu còn BLOCKER. ERROR chỉ được đóng bằng sửa lỗi
+    hoặc ngoại lệ có người chịu trách nhiệm duyệt.
+
+16. REVISION VÀ TRACEABILITY
+
+-   Không ghi đè bản phát hành; mỗi lần phát hành tạo revision mới.
+-   Ghi entity, giá trị trước/sau, lý do, nguồn yêu cầu, thời gian,
+    người/agent và sheet bị ảnh hưởng.
+-   So sánh revision theo geometry, properties, layer và annotation,
+    không chỉ binary diff.
+-   Import revision mới phải phân loại
+    added/modified/deleted/conflicted.
+-   Không tự chấp nhận xóa hàng loạt khi mapping entity không chắc.
+-   Mỗi ngoại lệ có người duyệt, lý do, ngày và phạm vi.
+
+17. AI DIALOG VÀ GOVERNANCE
+
+-   Phân biệt fact, inference, assumption, unknown.
+-   Trước thay đổi lớn hiển thị preview và danh sách tác động.
+-   Yêu cầu xác nhận trước xóa nhiều đối tượng, purge, explode, đổi đơn
+    vị/scale, ghi đè hoặc thay đổi cấu trúc layer.
+-   Khi không chắc ý nghĩa đường/block/ký hiệu, trình bày lựa chọn và
+    cho người dùng chọn; có “Khác” và “Giữ UNKNOWN”.
+-   Không biến dữ liệu dự án chưa duyệt thành quy tắc chung.
+-   Không gửi hồ sơ lên cloud nếu chưa có quyền và chính sách dữ liệu
+    cho phép.
+-   Không phát hành hoặc sửa production khi chưa có quyền rõ ràng.
+
+18. NGHIỆM THU VÀ TEST Functional: đọc định dạng được hỗ trợ; giữ file
+    gốc; tạo DWG chỉnh sửa được; xuất PDF; có validation report.
+    Geometric: model 1:1; unit/transform xác minh; boundary hợp lệ; kích
+    thước khớp geometry trong tolerance; không có BLOCKER. Coordination:
+    schedule khớp ký hiệu; cao độ nhất quán; marker tồn tại; diện tích
+    khớp boundary; conflict được liệt kê. Plot: đúng khổ/tỷ lệ; tiếng
+    Việt đúng; lineweight/hatch đọc được; PDF không thiếu đối tượng; đã
+    render kiểm tra. Test tối thiểu: file lỗi; xref/font thiếu; unit
+    không rõ; UCS xoay; tọa độ lớn; boundary hở; entity trùng; dimension
+    override sai; block dynamic/attribute; nhiều layout/CTB/STB; tiếng
+    Việt; timeout/retry; modal dialog; cancel/rollback; mở DWG đầu ra và
+    render PDF. Mỗi rule có rule_id, mô tả, phạm vi, tham số, severity,
+    kết quả PASS/FAIL/WARN/NOT_RUN và bằng chứng.
+
+19. TRẠNG THÁI BÁO CÁO Mỗi lần chạy xuất: INPUT_REVIEW; ASSUMPTIONS;
+    QUESTIONS; DRAWING_PLAN; EXECUTION_LOG; VALIDATION; OPEN_ISSUES;
+    OUTPUTS; FINAL_STATUS; LIMITATIONS. FINAL_STATUS chỉ được chọn đúng
+    mức: DRAFT, CAD_VALID, DRAWING_CHECKED, COORDINATED, CODE_REVIEWED
+    hoặc trạng thái phát hành cấu hình. Chỉ kết luận hoàn thành khi file
+    thực sự tồn tại, mở được, test đã chạy và trạng thái phản ánh đúng
+    việc đã kiểm chứng. Nếu không có AutoCAD để mở hoặc render PDF, ghi
+    rõ bước chưa thực hiện.
+
+20. CHỈ THỊ TRIỂN KHAI CHO AI AGENT Trước khi sửa, kiểm tra codebase
+    hiện có, công nghệ, AutoCAD API/version, module và test. Không viết
+    lại toàn bộ nếu có thể mở rộng an toàn. Thứ tự triển khai:
+
+21. Project Standards Profile và schema có nguồn gốc.
+
+22. AutoCAD adapter có kiểm tra version/API.
+
+23. Geometry/annotation model trung gian.
+
+24. Layer, unit, coordinate, block, layout manager.
+
+25. Đọc/phân tích bản vẽ và báo ambiguity.
+
+26. Sinh mặt bằng, mặt đứng, mặt cắt, chi tiết và schedule từ dữ liệu
+    chung.
+
+27. Validation và cross-view coordination.
+
+28. PDF plot và visual checks.
+
+29. Revision, log, backup, dry-run, rollback, confirmation dialog.
+
+30. Unit/integration tests, AutoCAD smoke tests, regression tests và PDF
+    visual checks. Không tạo placeholder cho dữ liệu thiết kế; không
+    hard-code thông số pháp lý chưa xác minh; ưu tiên tính đúng và nhất
+    quán hơn tốc độ. Cung cấp file đã sửa, lệnh test thực tế, kết quả,
+    DWG/PDF thật, lỗi còn lại và giới hạn chưa kiểm chứng.
+
+KẾT THÚC SPECIFICATION

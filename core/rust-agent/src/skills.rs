@@ -158,6 +158,24 @@ body
     }
 
     #[test]
+    fn the_drawing_spec_playbooks_apply_to_their_requests() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills");
+        let books = load(&dir);
+        let names = |goal: &str| matching(&books, goal).iter().map(|p| p.name.clone()).collect::<Vec<_>>();
+        let dora = names("ve doraemon toan than trong paint");
+        assert!(dora.contains(&"ve-doraemon-v2".to_string()) && dora.contains(&"ve-doraemon-paint".to_string()), "{dora:?}");
+        let cad = names("ve mat bang nha 2 tang bang autocad");
+        assert!(cad.contains(&"autocad-ban-ve-nha".to_string()) && cad.contains(&"autocad-ban-ve-kiem-tra".to_string()), "{cad:?}");
+        assert!(!names("tong doanh thu trong file csv").iter().any(|n| n.starts_with("ve-doraemon") || n.starts_with("autocad")));
+        for need in ["FINAL_STATUS", "DRAFT", "UNKNOWN", "BLOCKER"] {
+            assert!(books.iter().any(|b| b.name.starts_with("autocad") && b.body.contains(need)), "autocad playbooks lost {need}");
+        }
+        for need in ["DRAW_EXECUTION_PASS", "VISUAL_QUALITY_PASS", "6 whiskers"] {
+            assert!(books.iter().any(|b| b.name.starts_with("ve-doraemon") && b.body.contains(need)), "doraemon playbooks lost {need}");
+        }
+    }
+
+    #[test]
     fn the_shipped_playbooks_load() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills");
         let books = load(&dir);
