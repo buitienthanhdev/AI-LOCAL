@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use crate::agent::{Interaction, RunEvent};
 
-pub const RESPONSE_TIMEOUT: Duration = Duration::from_secs(600);
+pub const RESPONSE_TIMEOUT: Duration = Duration::from_secs(1800);
 const POLL_INTERVAL: Duration = Duration::from_millis(300);
 
 pub fn request_path(tasks_dir: &Path, task_id: &str) -> PathBuf {
