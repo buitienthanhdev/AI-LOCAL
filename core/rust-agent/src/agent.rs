@@ -245,8 +245,13 @@ fn failure_coaching(consecutive: u32, step: &StepRecord) -> Option<String> {
 /// The text of the `summary` argument of a `task.complete` action in the planner's JSON reply received so far (the
 /// reply may be cut anywhere). None while that part has not started: a reply that runs a tool shows nothing.
 pub fn partial_summary(raw: &str) -> Option<String> {
-    if !raw.contains("task.complete") {
-        return None;
+    // The reply may list "args" before "tool": until the tool name is known a summary is taken to be the answer; once a
+    // tool other than task.complete is named, nothing is shown.
+    if let Some(at) = raw.find("\"tool\"") {
+        let named = raw[at + 6..].trim_start().strip_prefix(':').map(|r| r.trim_start());
+        if named.is_some_and(|r| r.len() > 12 && !r.starts_with("\"task.complete\"")) {
+            return None;
+        }
     }
     let key = raw.rfind("\"summary\"")?;
     let rest = &raw[key + "\"summary\"".len()..];
@@ -296,17 +301,27 @@ async fn streamed_chat(llm: &dyn crate::llm::ChatProvider, request: ChatRequest,
     let mut last_write = Instant::now() - Duration::from_secs(1);
     let mut last_text = String::new();
     let mut finished = false;
+    let (mut deltas, mut first_ms) = (0u32, 0u64);
     while let Some(event) = rx.recv().await {
         match event {
             Ok(StreamEvent::Backend(b)) => backend = b,
             Ok(StreamEvent::Delta(d)) => {
+                if deltas == 0 {
+                    first_ms = started.elapsed().as_millis() as u64;
+                }
+                deltas += 1;
                 raw.push_str(&d);
                 if last_write.elapsed() >= Duration::from_millis(120) {
                     if let Some(text) = partial_summary(&raw) {
                         if text != last_text {
+                            let body = serde_json::json!({"text": text, "at": chrono::Utc::now().to_rfc3339()}).to_string();
                             let tmp = partial.with_extension("tmp");
-                            if std::fs::write(&tmp, serde_json::json!({"text": text, "at": chrono::Utc::now().to_rfc3339()}).to_string()).is_ok() {
-                                let _ = std::fs::rename(&tmp, partial);
+                            // atomic when possible; a reader that holds the file open (no delete sharing) blocks the
+                            // rename on Windows, then the file is rewritten in place
+                            let renamed = std::fs::write(&tmp, &body).is_ok() && std::fs::rename(&tmp, partial).is_ok();
+                            if !renamed {
+                                let _ = std::fs::remove_file(&tmp);
+                                let _ = std::fs::write(partial, &body);
                             }
                             last_text = text;
                         }
@@ -335,7 +350,8 @@ async fn streamed_chat(llm: &dyn crate::llm::ChatProvider, request: ChatRequest,
         backend,
         latency_ms: started.elapsed().as_millis() as u64,
         attempts,
-        usage: None,
+        // no token counts from a stream; how it arrived is recorded instead (diagnostics)
+        usage: Some(serde_json::json!({"streamed": true, "deltas": deltas, "first_delta_ms": first_ms})),
     })
 }
 
@@ -1501,7 +1517,7 @@ mod tests {
         for n in 1..=9 {
             let notice = super::repeated_check_notice(&history, &step);
             assert_eq!(notice.is_some(), n % 3 == 0, "repeat {n}: {notice:?}");
-            if n >= 6 {
+            if n >= 6 && n % 3 == 0 {
                 assert!(notice.unwrap().contains("MUST be task.complete"), "repeat {n} must force a decision");
             }
             history.push(step.clone());
@@ -1535,6 +1551,8 @@ mod tests {
         );
         assert_eq!(none(r#"{"actions":[{"tool":"task.complete","args":{"summary":"cắt giữa \u00"#).as_deref(), Some("cắt giữa "));
         assert_eq!(none(r#"{"actions":[{"args":{"summary":"Xong."},"tool":"task.complete"}]}"#).as_deref(), Some("Xong."));
+        assert_eq!(none(r#"{"thought":"t","actions":[{"args":{"summary":"Đang viết dở"#).as_deref(), Some("Đang viết dở"), "args before tool");
+        assert_eq!(none(r#"{"actions":[{"args":{"summary":"Một tool khác"},"tool":"office.word_write"}]}"#), None);
     }
 
     #[test]
