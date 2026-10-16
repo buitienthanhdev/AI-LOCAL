@@ -13,16 +13,16 @@
 [agent]
 # Execution mode: "normal" | "trusted" | "full_access". See docs/security.md.
 mode = "normal"
-# Hard cap on planner iterations per task.
-max_steps = 80
+# Hard cap on planner iterations per task (effectively unlimited: a task is finished, not abandoned).
+max_steps = 10000
 # A task fails after this many consecutive failed steps.
-max_consecutive_failures = 4
+max_consecutive_failures = 25
 # The same tool call with identical arguments may be repeated at most this many times in a row.
 max_identical_actions = 2
 # Malformed planner replies tolerated per step before the step counts as failed.
 max_parse_retries = 2
 # Upper bound for one whole task.
-task_timeout_ms = 1_800_000
+task_timeout_ms = 43_200_000
 # Number of most recent screenshots kept in the model context.
 history_images = 2
 # Number of most recent step records kept verbatim in the model context.

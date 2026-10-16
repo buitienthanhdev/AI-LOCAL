@@ -206,9 +206,20 @@ fn repeated_check_notice(previous: &[StepRecord], step: &StepRecord) -> Option<S
         .filter(|p| p.tool == step.tool && p.input_hash == step.input_hash && p.observation == step.observation)
         .count()
         + 1;
-    if same == 3 || same == 6 {
+    // Every third repeat, not only the first two: a model that ignores the notice twice needs it again, sharper.
+    if same >= 3 && same % 3 == 0 {
+        let seen: String = step.observation.chars().take(400).collect();
+        let push = if same >= 6 {
+            format!(
+                " This is repeat {same}: stop calling {tool}. The state is exactly this:
+{seen}
+Compare it with the request word by word.                  If every part is satisfied, your next action MUST be task.complete with what was done. If a part is missing or wrong                  (for example values changed type, a column lost), fix exactly that with a DIFFERENT method.",
+                tool = step.tool)
+        } else {
+            String::new()
+        };
         return Some(format!(
-            "You have made this exact {} call {same} times and got the same result each time; it will not change. If what you have              verified already satisfies the request, call task.complete now with the result. Otherwise do something different; do not              check again.",
+            "You have made this exact {} call {same} times and got the same result each time; it will not change. If what you have              verified already satisfies the request, call task.complete now with the result. Otherwise do something different; do not              check again.{push}",
             step.tool));
     }
     None
@@ -226,9 +237,106 @@ fn failure_coaching(consecutive: u32, step: &StepRecord) -> Option<String> {
     }
     if consecutive == 2 || consecutive == 3 {
         return Some(format!(
-            "{consecutive} steps failed in a row. Before the next call, write in your thought: (1) the actual cause of the last error,              (2) why the previous attempt could not work, (3) a DIFFERENT method (another tool or a simpler script). Repeating the same              call with small changes is not allowed; if nothing different is possible, ask the user one short question or use task.fail."));
+            "{consecutive} steps failed in a row. Before the next call, write in your thought: (1) the actual cause of the last error,              (2) why the previous attempt could not work, (3) a DIFFERENT method (another tool or a simpler script). Repeating the same              call with small changes is not allowed; if nothing different is possible, ask the user one short question."));
     }
     None
+}
+
+/// The text of the `summary` argument of a `task.complete` action in the planner's JSON reply received so far (the
+/// reply may be cut anywhere). None while that part has not started: a reply that runs a tool shows nothing.
+pub fn partial_summary(raw: &str) -> Option<String> {
+    if !raw.contains("task.complete") {
+        return None;
+    }
+    let key = raw.rfind("\"summary\"")?;
+    let rest = &raw[key + "\"summary\"".len()..];
+    let rest = rest.trim_start().strip_prefix(':')?.trim_start().strip_prefix('"')?;
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => break,
+            '\\' => match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => {}
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some('/') => out.push('/'),
+                Some('u') => {
+                    let hex: String = chars.by_ref().take(4).collect();
+                    if hex.len() < 4 {
+                        break; // cut inside the escape: wait for more
+                    }
+                    if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                        out.push(ch);
+                    }
+                }
+                Some(other) => out.push(other),
+                None => break,
+            },
+            c => out.push(c),
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// One planner call. With `stream` on, the reply is read as it arrives and the growing answer text is written to
+/// `partial` (the chat window shows it while it is written). Anything that goes wrong with the stream falls back to the
+/// ordinary call, so streaming can only make an answer appear sooner, never fail a task that would have worked.
+async fn streamed_chat(llm: &dyn crate::llm::ChatProvider, request: ChatRequest, partial: &std::path::Path, stream: bool) -> Result<crate::llm::ChatReply, crate::llm::LlmError> {
+    use crate::llm::StreamEvent;
+    if !stream {
+        return llm.chat(request).await;
+    }
+    let started = Instant::now();
+    let Ok(mut rx) = llm.stream(request.clone()).await else { return llm.chat(request).await };
+    let mut raw = String::new();
+    let (mut backend, mut model, mut attempts) = (String::new(), String::new(), Vec::new());
+    let mut last_write = Instant::now() - Duration::from_secs(1);
+    let mut last_text = String::new();
+    let mut finished = false;
+    while let Some(event) = rx.recv().await {
+        match event {
+            Ok(StreamEvent::Backend(b)) => backend = b,
+            Ok(StreamEvent::Delta(d)) => {
+                raw.push_str(&d);
+                if last_write.elapsed() >= Duration::from_millis(120) {
+                    if let Some(text) = partial_summary(&raw) {
+                        if text != last_text {
+                            let tmp = partial.with_extension("tmp");
+                            if std::fs::write(&tmp, serde_json::json!({"text": text, "at": chrono::Utc::now().to_rfc3339()}).to_string()).is_ok() {
+                                let _ = std::fs::rename(&tmp, partial);
+                            }
+                            last_text = text;
+                        }
+                    }
+                    last_write = Instant::now();
+                }
+            }
+            Ok(StreamEvent::Meta { model: m, attempts: a }) => {
+                model = m;
+                attempts = a;
+            }
+            Ok(StreamEvent::Done) => {
+                finished = true;
+                break;
+            }
+            Err(_) => break,
+        }
+    }
+    if !finished || raw.trim().is_empty() {
+        return llm.chat(request).await;
+    }
+    Ok(crate::llm::ChatReply {
+        content: raw,
+        reasoning: None,
+        model,
+        backend,
+        latency_ms: started.elapsed().as_millis() as u64,
+        attempts,
+        usage: None,
+    })
 }
 
 /// A task may ask this many questions; after that the planner is told to decide with defaults.
@@ -818,10 +926,16 @@ impl<'a> TaskRunner<'a> {
             attempt += 1;
             record.llm_calls += 1;
             let started = Instant::now();
+            let partial = self.rt.store.dir().join(format!("{}.partial.json", record.task_id));
+            let streaming = self.rt.config.agent.stream_answers;
             let result = tokio::select! {
-                r = self.rt.llm.chat(request.clone()) => r,
-                _ = self.cancel.cancelled() => return Err(anyhow!("cancelled while waiting for the planner")),
+                r = streamed_chat(self.rt.llm.as_ref(), request.clone(), &partial, streaming) => r,
+                _ = self.cancel.cancelled() => {
+                    let _ = std::fs::remove_file(&partial);
+                    return Err(anyhow!("cancelled while waiting for the planner"));
+                }
             };
+            let _ = std::fs::remove_file(&partial);
             match result {
                 Ok(reply) => {
                     self.audit.record(AuditEvent {
@@ -1154,11 +1268,9 @@ impl<'a> TaskRunner<'a> {
         self.audit.step(&step)?;
         // Many steps for one request: stop and take stock (a model that flails varies its calls, so no repeat check sees it).
         let n_steps = record.steps.len() + 1;
-        if n_steps == 12 || n_steps == 24 || n_steps == 36 {
+        if n_steps % 12 == 0 {
             self.notices.push(format!(
-                "You have used {n_steps} steps. Stop and take stock: what is done and verified, what remains. Is there a simpler way \
-                 (one script instead of many calls, a different tool)? If the request cannot be done, say so with task.fail or ask the \
-                 user one short question; do not keep trying variations."));
+                "You have used {n_steps} steps. Take stock: what is done and verified, what remains. Do not give up and do not hand the                  work back to the user: the request will be finished. If you keep getting the same result, you are repeating yourself:                  use a different tool, one script instead of many calls, or split the work into parts you finish one by one. If the                  request is already satisfied, call task.complete."));
         }
         // The same check with the same answer again and again is a model that cannot decide it is finished.
         if let Some(notice) = repeated_check_notice(&record.steps, &step) {
@@ -1380,15 +1492,18 @@ mod tests {
     }
 
     #[test]
-    fn identical_checks_are_called_out_on_the_third_and_sixth_repeat() {
+    fn identical_checks_are_called_out_on_every_third_repeat() {
         let mut step = failed_step("file exists (10 bytes)");
         step.status = crate::state::StepStatus::Succeeded;
         step.tool = "filesystem.stat".into();
         step.input_hash = "h1".into();
         let mut history = Vec::new();
-        for n in 1..=6 {
+        for n in 1..=9 {
             let notice = super::repeated_check_notice(&history, &step);
-            assert_eq!(notice.is_some(), n == 3 || n == 6, "repeat {n}: {notice:?}");
+            assert_eq!(notice.is_some(), n % 3 == 0, "repeat {n}: {notice:?}");
+            if n >= 6 {
+                assert!(notice.unwrap().contains("MUST be task.complete"), "repeat {n} must force a decision");
+            }
             history.push(step.clone());
         }
         let mut other = step.clone();
@@ -1406,6 +1521,20 @@ mod tests {
         assert!(options.is_empty() && !multi, "no usable list: free text only");
         let many: Vec<String> = (0..20).map(|i| format!("o{i}")).collect();
         assert_eq!(super::clarification_options(&serde_json::json!({"options": many})).0.len(), 8);
+    }
+
+    #[test]
+    fn the_answer_text_is_read_out_of_a_partly_received_plan() {
+        let none = super::partial_summary;
+        assert_eq!(none(r#"{"thought":"x","actions":[{"tool":"shell.exec","args":{"summary":"nope"}}]}"#), None, "only task.complete streams");
+        assert_eq!(none(r#"{"thought":"t","actions":[{"tool":"task.complete","args":{"summ"#), None);
+        assert_eq!(none(r#"{"actions":[{"tool":"task.complete","args":{"summary":"Xin ch"#).as_deref(), Some("Xin ch"));
+        assert_eq!(
+            none(r#"{"actions":[{"tool":"task.complete","args":{"summary":"Dòng 1\nDòng \"2\" và \u00e9 đ"#).as_deref(),
+            Some("Dòng 1\nDòng \"2\" và é đ")
+        );
+        assert_eq!(none(r#"{"actions":[{"tool":"task.complete","args":{"summary":"cắt giữa \u00"#).as_deref(), Some("cắt giữa "));
+        assert_eq!(none(r#"{"actions":[{"args":{"summary":"Xong."},"tool":"task.complete"}]}"#).as_deref(), Some("Xong."));
     }
 
     #[test]

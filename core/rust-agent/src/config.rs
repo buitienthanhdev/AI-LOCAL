@@ -54,6 +54,9 @@ pub struct AgentCfg {
     pub max_context_tokens: usize,
     pub language: String,
     pub verify_completion_with_llm: bool,
+    /// Read the planner's reply as a stream and show the answer text while it is written.
+    #[serde(default = "default_true")]
+    pub stream_answers: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -345,4 +348,8 @@ mod tests {
 
 fn default_max_context_tokens() -> usize {
     16_384
+}
+
+fn default_true() -> bool {
+    true
 }
