@@ -82,6 +82,8 @@ pub struct ModelInfo {
 pub enum StreamEvent {
     Backend(String),
     Delta(String),
+    /// The model and the attempts behind the answer, sent just before `Done`.
+    Meta { model: String, attempts: Vec<Value> },
     Done,
 }
 
@@ -328,7 +330,16 @@ impl ChatProvider for GatewayProvider {
                             "delta" => Ok(StreamEvent::Delta(
                                 payload.get("content").and_then(Value::as_str).unwrap_or_default().into(),
                             )),
-                            "done" => Ok(StreamEvent::Done),
+                            "done" => {
+                                let meta = StreamEvent::Meta {
+                                    model: payload.get("model").and_then(Value::as_str).unwrap_or_default().into(),
+                                    attempts: payload.get("attempts").and_then(Value::as_array).cloned().unwrap_or_default(),
+                                };
+                                if tx.send(Ok(meta)).await.is_err() {
+                                    return;
+                                }
+                                Ok(StreamEvent::Done)
+                            }
                             "error" => Err(LlmError::Unavailable(
                                 payload.get("message").and_then(Value::as_str).unwrap_or("stream error").into(),
                             )),

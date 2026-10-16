@@ -359,7 +359,7 @@ impl Gateway {
 
     /// Stream `(backend, delta)` into `tx`. Fails over only before the first token: once part of an
     /// answer reached the caller, switching backends would splice two answers.
-    pub async fn stream(&self, request: &ChatRequest, tx: mpsc::Sender<(String, StreamDelta)>) -> Result<(), GatewayError> {
+    pub async fn stream(&self, request: &ChatRequest, tx: mpsc::Sender<(String, StreamDelta)>) -> Result<StreamSummary, GatewayError> {
         self.check_attachments(request)?;
         let deadline = self.deadline(request);
         let mut attempts: Vec<Attempt> = Vec::new();
@@ -397,7 +397,8 @@ impl Gateway {
             match result {
                 Ok(()) => {
                     route.breaker().record_success();
-                    return Ok(());
+                    attempts.push(Attempt { backend: name.clone(), ok: true, error_kind: None, message: None, duration_ms: millis(t0), status: Some(200), last_observed_state: None });
+                    return Ok(StreamSummary { backend: name, model: route.backend.resolve_model(&request.model), attempts });
                 }
                 Err(error) => {
                     attempts.push(failed(&name, &error, t0));
@@ -455,4 +456,12 @@ pub async fn ensure_process(route: Arc<Route>) {
         tokio::time::sleep(STARTUP_POLL_INTERVAL).await;
     }
     crate::log::error(&format!("{name} did not become reachable within {}s", route.startup_timeout.as_secs()));
+}
+
+/// How a streamed answer ended: who answered, with which model, and every attempt that led to it.
+#[derive(Debug, Clone)]
+pub struct StreamSummary {
+    pub backend: String,
+    pub model: String,
+    pub attempts: Vec<Attempt>,
 }

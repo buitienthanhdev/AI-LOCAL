@@ -515,6 +515,7 @@
   .hbtn { flex: none; align-self: center; font-size: 12px; padding: 3px 6px; border-radius: 6px; color: var(--muted); opacity: 0; }
   .item:hover .hbtn, .item:focus-within .hbtn { opacity: 1; }
   .hbtn:hover { background: var(--border); color: var(--text); }
+  .caret-blink { animation: pulse 1s infinite; color: var(--accent); }
 </style>
 </head>
 <body>
@@ -1437,8 +1438,8 @@ function reasonText(reason) {
     return "Bộ não AI không phản hồi: Gemini đang bị Google tạm chặn hoặc mất kết nối, và AI dự phòng trên máy cũng không trả lời được. Hãy thử lại sau ít phút." + pinned;
   if (/quota|rate limit|usage limit|429/i.test(r)) return "Bộ não AI này đã hết hạn mức tạm thời. Hãy chọn bộ não khác hoặc thử lại sau." + pinned;
   if (/consecutive failed steps/i.test(r)) return "Đã thử nhiều cách liên tiếp nhưng đều không thành công (xem Chi tiết kỹ thuật).";
-  if (/time budget/i.test(r)) return "Hết thời gian cho phép của một việc.";
-  if (/step budget/i.test(r)) return "Việc này cần quá nhiều bước; hãy chia nhỏ yêu cầu.";
+  if (/time budget/i.test(r)) return "Đã hết thời gian tối đa cho một việc mà chưa xong. Bấm \"Chạy lại\" để AI làm tiếp.";
+  if (/step budget/i.test(r)) return "Đã chạy hết số bước tối đa mà chưa xong. Bấm \"Chạy lại\" để AI làm tiếp.";
   if (/cancelled/i.test(r)) return "Bạn đã dừng việc này.";
   if (/worker failed/i.test(r)) return "Bộ phận điều khiển máy gặp lỗi nhiều lần; hãy thử lại.";
   if (/^internal error/i.test(r)) return "Lỗi nội bộ của Trợ lý: " + r.replace(/^internal error:\s*/i, "") + " — bấm \"Chạy lại\" hoặc báo mình nếu lặp lại.";
@@ -1610,11 +1611,15 @@ function render(turn) {
   const started = events.filter(e => e.kind === "step_started");
   const finished = new Set(task.steps.map(s => s.step_id));
   const current = started.length && !finished.has(started[started.length - 1].step_id) ? started[started.length - 1] : null;
-  region(turn, "live", [st, current && current.step_id, task.plan, task.steps.length, done, brainName(events), !!pending, task.pending_question], () => {
+  region(turn, "live", [st, current && current.step_id, task.plan, task.steps.length, done, brainName(events), !!pending, task.pending_question, data.partial || ""], () => {
     if (done) return null;
     const what = current ? friendly(current.tool) : (STATUS[st] || st);
     const thought = current && current.detail && current.detail.thought;
     const brain = brainName(events);
+    if (data.partial) {
+      // the AI is writing its final answer: show it as it grows (Markdown rendered each time), with a caret
+      return el("div", { class: "answer ok streaming" }, el("div", { class: "md" }, MD.render(data.partial)), el("span", { class: "caret-blink" }, "▍"));
+    }
     return el("div", { class: "card" },
       el("div", { class: "live" }, ["paused", "needs_user"].includes(st) ? el("span", {}, "⏸") : el("div", { class: "spin" }),
         el("span", { class: "what" }, st === "needs_user" && !pending ? "Đang chờ bạn trả lời" : what),
@@ -2683,6 +2688,7 @@ refreshHistory().then(() => {
 });
 refreshHealth();
 setInterval(poll, POLL_MS);
+setInterval(() => { const t = lastTurn(); if (t && t.data && t.data.partial) poll(); }, 250);
 setInterval(refreshHistory, POLL_MS * 4);
 setInterval(refreshHealth, 15000);
 refreshLearning(); setInterval(refreshLearning, 45000);

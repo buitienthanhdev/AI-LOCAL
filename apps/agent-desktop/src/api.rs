@@ -411,7 +411,9 @@ impl Api {
         // A task that is not finished but whose runner process is gone (crash, reboot, killed) will never
         // move again on its own: the UI offers to run it again instead of showing it as busy forever.
         let interrupted = interrupted(&task);
-        json_reply(StatusCode::OK, json!({"task": task, "pending_request": pending, "pause_requested": paused,
+        // The answer text of a reply that is still being written (core: `<id>.partial.json`), for the live card.
+        let partial = if interrupted { None } else { read_json(&self.tasks_dir().join(format!("{id}.partial.json"))).and_then(|p| p["text"].as_str().map(String::from)) };
+        json_reply(StatusCode::OK, json!({"task": task, "pending_request": pending, "pause_requested": paused, "partial": partial,
                                           "interrupted": interrupted, "conversation_id": self.conversation_of(id)}))
     }
 

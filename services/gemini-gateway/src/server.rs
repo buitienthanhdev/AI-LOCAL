@@ -229,7 +229,7 @@ async fn handle_chat_stream(State(state): State<AppState>, body: Bytes) -> Respo
         };
         let (result, current) = tokio::join!(run, forward);
         let last = match result {
-            Ok(()) => sse("done", json!({"backend": current})),
+            Ok(summary) => sse("done", json!({"backend": current.or(Some(summary.backend)), "model": summary.model, "attempts": summary.attempts})),
             Err(e) => sse("error", json!({"kind": e.kind.as_str(), "message": e.message, "attempts": e.attempts})),
         };
         let _ = out_tx.send(last).await;
