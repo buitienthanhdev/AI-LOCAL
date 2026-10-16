@@ -386,6 +386,10 @@ mod tests {
         assert_eq!(r["status"], "not_found", "{r}");
         let r = handle(&c, &json!({"target": r"..\..\..\Windows\win.ini"}));
         assert_eq!(r["status"], "outside_workspace", "{r}");
+        // VS Code at a line (the person has `code` on PATH): started detached, reported as opened
+        let r = handle(&c, &json!({"target": "README.md", "action": "ide", "line": 3}));
+        assert!(r["ok"] == true || r["status"] == "ide_unavailable", "{r}");
+        println!("ide result: {r}");
         let r = handle(&c, &json!({"target": "javascript:alert(1)"}));
         assert_eq!(r["status"], "blocked_scheme", "{r}");
     }

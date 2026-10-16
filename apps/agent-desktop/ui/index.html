@@ -655,6 +655,7 @@
             <input id="memSearch" type="text" class="wide" placeholder="Tìm trong bộ nhớ…">
             <select id="memKind"><option value="">Tất cả</option><option value="semantic">Quy tắc / thông tin</option><option value="feedback">Điều bạn đã sửa</option>
               <option value="episodic">Việc đã làm</option><option value="procedural">Quy trình đã chạy tốt</option><option value="failure">Lỗi đã gặp</option></select></div>
+          <div id="memStats" class="small muted" style="margin-bottom:6px"></div>
           <div id="memConflict" class="small" style="color:var(--warn);margin-bottom:8px"></div>
           <div id="memList" class="list"></div>
         </div>
@@ -775,7 +776,9 @@ function el(tag, attrs = {}, ...children) {
 const short = (v, n = 400) => { const s = typeof v === "string" ? v : JSON.stringify(v, null, 1); return s && s.length > n ? s.slice(0, n) + "…" : (s || ""); };
 function toast(text) { const t = $("toast"); t.textContent = text; t.classList.add("show"); clearTimeout(toast.h); toast.h = setTimeout(() => t.classList.remove("show"), 3500); }
 async function api(path, body) {
-  const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  // correlation id: the task the call concerns (from the path, else the task on screen), otherwise a random id
+  const corr = (/\/api\/tasks\/([A-Za-z0-9-]+)/.exec(path) || [])[1] || (typeof body === "object" && body && body.task_id) || (typeof selected === "string" && selected) || Math.random().toString(36).slice(2, 12);
+  const r = await fetch(path, body === undefined ? { headers: { "X-Corr-Id": String(corr) } } : { method: "POST", headers: { "Content-Type": "application/json", "X-Corr-Id": String(corr) }, body: JSON.stringify(body) });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) { const e = new Error(data.error || data.output || `Lỗi ${r.status}`); e.status = r.status; throw e; }
   return data;
@@ -2491,6 +2494,8 @@ async function loadMemory() {
   try {
     const r = await api(`/api/memory?q=${encodeURIComponent($("memSearch").value.trim())}`);
     memItems = r.items || [];
+    const st = r.stats || {};
+    $("memStats").textContent = `${st.total || 0} mục · ${st.active || 0} đang bật · ${st.used || 0} đã được dùng · ${st.verified || 0} đã kiểm chứng · ${st.repeated_corrections || 0} điều bạn phải sửa lặp lại`;
     $("memConflict").textContent = r.conflicts ? `⚠ ${r.conflicts} mục đang mâu thuẫn với nhau — hãy tắt hoặc sửa mục sai để AI không phải đoán.` : "";
   } catch (e) { memItems = []; $("memList").replaceChildren(el("div", { class: "muted small" }, e.message)); return; }
   drawMemory();
