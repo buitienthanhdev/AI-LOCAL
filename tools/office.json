@@ -348,6 +348,372 @@
       "verification": "self",
       "side_effects": "yes",
       "policy_category": "office.send"
+    },
+    {
+      "name": "office.capabilities",
+      "description": "Query the Office capability registry (spec 7) BEFORE acting: per application installed/available/supported and unsupported operations with evidence and reasons. Probes registration/importability only; Graph is reported unavailable (not configured/no credentials).",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "application": {
+            "type": "string"
+          },
+          "detail": {
+            "enum": [
+              "summary",
+              "full"
+            ],
+            "default": "summary"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "office.read"
+    },
+    {
+      "name": "office.detect",
+      "description": "Detect the REAL format of a file by magic bytes/package content (not the extension): docx/xlsx/pptx/odt, doc/xls/ppt/msg, pdf, accdb/mdb, vsdx, eml, ics, csv...; flags encrypted, corrupt, oversized, macro-enabled and routes to the handlers that exist.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "office.read"
+    },
+    {
+      "name": "office.check_action",
+      "description": "Office permission guard (spec 11): classify an operation into level 1 read, 2 reversible edit, 3 external effect, 4 high risk and decide ALLOW, CONFIRM or BLOCK with reasons. Call before send/share/delete/macro/cloud actions.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "operation"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "type": "string",
+            "minLength": 1
+          },
+          "params": {
+            "type": "object"
+          },
+          "context": {
+            "type": "object"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "office.read"
+    },
+    {
+      "name": "office.route",
+      "description": "Intent router: from a request (Vietnamese or English) pick the Office application and the execution method by priority (API > COM > file library > UI Automation > vision) using the registry, or return a clarification question with options when ambiguous.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "request"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "request": {
+            "type": "string",
+            "minLength": 1
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "context": {
+            "type": "object"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "office.read"
+    },
+    {
+      "name": "office.workflow_plan",
+      "description": "Create a cross-application workflow with a dependency graph and a JSON checkpoint (templates weekly_report, project_plan, email_doc_analysis, or explicit steps). Steps without evidence in the registry are marked unsupported.",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "template": {
+            "enum": [
+              "weekly_report",
+              "project_plan",
+              "email_doc_analysis"
+            ]
+          },
+          "params": {
+            "type": "object"
+          },
+          "title": {
+            "type": "string"
+          },
+          "workflow_id": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.read"
+    },
+    {
+      "name": "office.workflow_status",
+      "description": "Status of a workflow (or the list when no id): per-step status, ready/blocked steps, resume plan and which steps can continue offline or must wait.",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "workflow_id": {
+            "type": "string"
+          },
+          "online": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "office.read"
+    },
+    {
+      "name": "office.workflow_step",
+      "description": "Record the outcome of a workflow step: start, succeed (needs evidence), fail (returns the retry decision; non-idempotent steps are never retried blindly), partial, wait_user, user_decision, reconcile (check real state), retry, cancel.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "workflow_id",
+          "step_id",
+          "action"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "workflow_id": {
+            "type": "string"
+          },
+          "step_id": {
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "start",
+              "succeed",
+              "fail",
+              "partial",
+              "wait_user",
+              "user_decision",
+              "reconcile",
+              "retry",
+              "cancel"
+            ]
+          },
+          "evidence": {},
+          "error": {
+            "type": "string"
+          },
+          "error_kind": {
+            "type": "string"
+          },
+          "done": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remaining": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "question": {
+            "type": "string"
+          },
+          "approve": {
+            "type": "boolean"
+          },
+          "observed": {
+            "type": "object"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.read"
+    },
+    {
+      "name": "office.verify",
+      "description": "Re-read a SAVED docx/xlsx/pptx/pdf/csv and check it with evidence (headings, tables, duplicates, error values #REF! #DIV/0!, formulas vs values, blank vs 0 vs empty string, every slide overflow/overlap/images, PDF pages). options per type, e.g. expected_text, before, expected_cells. Never recalculates; unverifiable items are listed in not_verified.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "options": {
+            "type": "object"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "office.read"
+    },
+    {
+      "name": "office.learn",
+      "description": "Store a structured lesson (spec 13). Refused unless verified by evidence from a tool/test/user/human, never from the AI's own answer; secrets are redacted; a lesson seen once is only a candidate.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "record"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "record": {
+            "type": "object"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.read"
+    },
+    {
+      "name": "office.audit_tail",
+      "description": "Read the most recent Office audit log entries (redacted, hash-chained) and verify the chain.",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 20
+          },
+          "action": {
+            "type": "string"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "office.read"
     }
   ]
 }
