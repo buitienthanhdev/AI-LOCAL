@@ -8,6 +8,7 @@ typed into another window). Each operation here reads its own result back from W
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ DIALOG_CLASS = "#32770"
 # The common file dialog's controls (stable AutomationIds since Vista).
 FILE_NAME_EDIT_ID = "1001"
 SAVE_BUTTON_ID = "1"
+FILE_TYPE_COMBO_ID = "FileTypeControlHost"
 CONFIRM_YES_ID = "6"
 OVERWRITE_WORDS = ("already exists", "replace", "đã tồn tại", "thay thế", "ghi đè")
 DISCARD_BUTTON_NAMES = ("don't save", "don’t save", "do not save", "không lưu", "discard", "no")
@@ -173,6 +175,32 @@ class DesktopOpsMixin:
                 return None
             time.sleep(0.15)
 
+    def _select_file_type(self, dialog_hwnd: int, ext: str) -> str | None:
+        """Pick the 'Save as type' entry that matches the extension of the file name, so the dialog writes that format
+        (Paint's list can start on HEIC: a name ending in .png would then hold HEIC bytes). Best effort: returns the
+        entry chosen, or None when the dialog has no type list or no entry for `ext` (the caller verifies the file)."""
+        if not ext:
+            return None
+        combos = self.find_element(ElementQuery(window_hwnd=dialog_hwnd, automation_id=FILE_TYPE_COMBO_ID,
+                                                include_offscreen=True, max_results=2))
+        if not combos:
+            return None
+        x, y = combos[0].rect.center
+        self.click(x, y, "left")
+        time.sleep(0.6)
+        items = self.find_element(ElementQuery(window_hwnd=dialog_hwnd, control_type="ListItemControl",
+                                               include_offscreen=True, max_results=60))
+        matches = [i for i in items if ext in re.findall(r"\*(\.\w+)", i.name.lower())]
+        if ext == ".bmp":  # several bitmap depths: the full-colour one
+            matches = [i for i in matches if "24-bit" in i.name] or matches
+        if not matches:
+            self.press_key("escape", 1)
+            return None
+        x, y = matches[0].rect.center
+        self.click(x, y, "left")
+        time.sleep(0.4)
+        return matches[0].name
+
     def save_as(self, hwnd: int, path: Path, overwrite: bool, timeout_s: float) -> dict[str, Any]:
         """Save the document of `hwnd` to `path` through the application's Save As dialog, and prove it."""
         if not win32.is_window(hwnd):
@@ -218,9 +246,13 @@ class DesktopOpsMixin:
                             f"'{info.title}' showed no Save As dialog for {', '.join(tried)}{seen}; use its File menu "
                             "(desktop.inspect_ui) or the app's own tools (office.* for Word/Excel/PowerPoint)",
                             details={"tried": tried, "answered": answered})
+        chosen_type = self._select_file_type(dialog.hwnd, path.suffix.lower())
+        name_box = self._file_name_box(dialog.hwnd) or name_box  # the list rewrites the name: look the box up again
         wanted = str(path)
-        content = self.write_element(name_box.element_id, wanted)
-        if (content.value or "").strip().strip('"') != wanted:
+        # after a type was picked the box ignores a value set through UI Automation (measured on Paint 11: the dialog
+        # then saved 'Untitled.png' in its own folder): type the path instead
+        content = None if chosen_type else self.write_element(name_box.element_id, wanted)
+        if content is None or (content.value or "").strip().strip('"') != wanted:
             self.focus_element(name_box.element_id)
             self.hotkey(["ctrl", "a"])
             self.uia.TypeText(wanted, interval=0.0)
