@@ -603,3 +603,17 @@ def test_every_corner_of_the_allowed_parameter_range_still_satisfies_the_constra
                 p = doraemon.prepare(CANVAS, doraemon.Params(head_aspect=head, hand_reach=reach, height_fraction=frac))
                 assert all(c.ok for c in p.constraints), (head, reach, frac, [c.name for c in p.constraints if not c.ok])
                 geometry.plan_scene(p.scene.objects, CANVAS)
+
+
+@pytest.mark.parametrize("canvas", CANVASES)
+def test_every_polygon_has_a_long_first_edge_so_paint_does_not_drop_it(canvas: Canvas) -> None:
+    """Measured live: a polygon whose longest edge is under ~12 px was silently not drawn (the face patch vanished)."""
+    p = prepared(canvas)
+    px = canvas.px_per_unit
+    for o in p.scene.objects:
+        if o.kind != "polygon":
+            continue
+        ring = list(o.points)
+        edges = [math.dist(a, b) * px for a, b in zip(ring, ring[1:] + ring[:1])]
+        assert max(edges) >= 14.0 or canvas.height < 300, (o.id, canvas, max(edges))
+        assert min(edges) >= 5.0, (o.id, canvas, min(edges))

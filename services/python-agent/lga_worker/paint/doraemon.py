@@ -49,6 +49,7 @@ WHISKERS = 6
 MAX_WIDTH_FRACTION = 0.92  # portrait canvases: the figure is limited by width instead of height
 
 MIN_VERTEX_GAP_PX = 6.0  # Paint reads polygon vertices closer than ~4 px as a double click
+POLYGON_EDGE_PX = 15.0  # edge length of the sampled round outlines
 SAMPLE_GAP_PX = 4.0  # spacing of the points of a brush stroke
 
 STAGE_OF = {
@@ -235,15 +236,21 @@ def build_scene(canvas: Canvas, params: Params | None = None) -> Scene:
 
     head_h = 50.0
     head_w = head_h * p.head_aspect
-    n_head = max(40, min(110, round(math.pi * (head_w + head_h) * f.k * px / 18.0)))
+    def count_for(rx: float, ry: float) -> int:
+        """Vertices for a smooth outline whose edges are about POLYGON_EDGE_PX long: Paint drops a polygon whose first
+        dragged edge is under ~12 px, so the spacing must stay well above that (the curve error stays under 0.3 px)."""
+        perimeter = math.pi * (3 * (rx + ry) - math.sqrt((3 * rx + ry) * (rx + 3 * ry)))
+        return max(24, round(perimeter * f.k * px / POLYGON_EDGE_PX))
+
+    n_head = count_for(head_w / 2.0, head_h / 2.0)
     head = curves.superellipse(AXIS, head_h / 2.0, head_w / 2.0, head_h / 2.0, exponent=p.head_exponent, count=n_head)
     shape("head_outer", "polygon", poly_points(head), fill=p.body, width=prof.silhouette)
 
     face_rx = head_w * 0.43
-    face = curves.superellipse(AXIS, 31.5, face_rx, 17.5, exponent=2.2, count=max(36, round(n_head * 0.8)))
+    face = curves.superellipse(AXIS, 31.5, face_rx, 17.5, exponent=2.2, count=count_for(face_rx, 17.5))
     shape("face_patch", "polygon", poly_points(face), fill=p.belly, width=prof.region)
 
-    torso = curves.superellipse(AXIS, 68.0, 19.5, 21.0, exponent=2.4, count=64)
+    torso = curves.superellipse(AXIS, 68.0, 19.5, 21.0, exponent=2.4, count=count_for(19.5, 21.0))
     shape("torso", "polygon", poly_points(torso), fill=p.body, width=prof.silhouette)
 
     for side, sign in (("left", -1.0), ("right", 1.0)):
@@ -258,7 +265,7 @@ def build_scene(canvas: Canvas, params: Params | None = None) -> Scene:
     shape("foot_left", "ellipse", f.box(16.5, 88.0, 38.5, 100.0), fill=p.belly, width=prof.silhouette)
     shape("foot_right", "ellipse", f.box(mirror(38.5), 88.0, mirror(16.5), 100.0), fill=p.belly, width=prof.silhouette)
 
-    belly = curves.superellipse(AXIS, 70.5, 13.5, 15.5, exponent=2.0, count=48)
+    belly = curves.superellipse(AXIS, 70.5, 13.5, 15.5, exponent=2.0, count=count_for(13.5, 15.5))
     shape("belly", "polygon", poly_points(belly), fill=p.belly, width=prof.region)
 
     # the pocket: a flat mouth line and a soft U, one closed brush stroke without fill (the belly colour shows through)
@@ -600,7 +607,7 @@ def measure_reference(image: Image.Image, *, url: str | None = None, retrieved_a
         head_rows = blue[top: top + int(bh * 0.52)]
         hy, hx = np.where(head_rows)
         if len(hx) > 500:
-            out["head_aspect"] = round((hx.max() - hx.min() + 1) / (hy.max() - hy.min() + 1), 3)
+            out["head_aspect"] = round(float((hx.max() - hx.min() + 1) / (hy.max() - hy.min() + 1)), 3)
             measured.append("head_aspect")
     out["confidence"] = round(0.35 + 0.1 * len(measured), 2)
     return out
