@@ -979,6 +979,624 @@
       "supports_rollback": true,
       "verification": "self",
       "policy_category": "autocad.write", "side_effects": "yes"
+    },
+    {
+      "name": "autocad.profile_check",
+      "description": "Check a Project Standards Profile (locality, authority, house type, floors, units, coordinate system, paper, scale, layer convention, area rule, codes) before drawing. Lists what is missing, assumed, invalid or legally unverified and returns clarification questions with suggested options, a multi-select flag, 'Khac' and 'Giu UNKNOWN'. Never fills a missing value and never suggests legal requirements. Offline; does not need AutoCAD.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "type": "object",
+            "description": "Field id -> value, or {value, status PROVIDED|ASSUMED|UNKNOWN, verified_by}. Omit for an empty profile (all questions)."
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "ready_to_draw",
+          "ready_for_plot",
+          "ready_for_code_review",
+          "missing",
+          "questions",
+          "assumed",
+          "invalid",
+          "unverified_legal",
+          "unknown_fields",
+          "fields"
+        ],
+        "properties": {
+          "ready_to_draw": {
+            "type": "boolean"
+          },
+          "ready_for_plot": {
+            "type": "boolean"
+          },
+          "ready_for_code_review": {
+            "type": "boolean"
+          },
+          "missing": {
+            "type": "object"
+          },
+          "assumed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "invalid": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "unverified_legal": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "unknown_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "questions": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "fields": {
+            "type": "object"
+          }
+        }
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "policy_category": "autocad.read",
+      "side_effects": "none"
+    },
+    {
+      "name": "autocad.validate_model",
+      "description": "Run the drawing validation rules (rule_id, scope, severity BLOCKER/ERROR/WARNING/INFO, result PASS/FAIL/WARN/NOT_RUN with evidence) over an intermediate model: units, zero-length segments, open or self-intersecting boundaries, duplicate entities, walls without thickness, doors/windows without a host wall, duplicate door codes, schedule vs symbols, dimension override vs geometry (CONFLICT), area recomputed from the boundary, stair risers vs height, level consistency. Give exactly one of model, model_path (JSON file) or autocad_entities (the entities array from autocad.get_entities). Tolerances are per purpose in mm. Any open BLOCKER or ERROR makes overall FAIL; rules lacking data are NOT_RUN. Offline; does not need AutoCAD and does not change any drawing.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "object",
+            "description": "{meta, entities[], schedules, profile}; entity schema: entity_id, entity_type, geometry, units, level_id, elevation, properties, relationships, source, status."
+          },
+          "model_path": {
+            "type": "string",
+            "description": "Absolute path of a JSON file holding the model."
+          },
+          "autocad_entities": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "Entities as returned by autocad.get_entities; types are inferred only from standard layer names."
+          },
+          "meta": {
+            "type": "object",
+            "description": "With autocad_entities: units (mm|cm|m|in|ft), insunits, source_file."
+          },
+          "layer_map": {
+            "type": "object",
+            "description": "Standard layer name -> office layer name."
+          },
+          "profile": {
+            "type": "object"
+          },
+          "tolerances": {
+            "type": "object",
+            "description": "Purpose -> mm (or {value, unit: mm|drawing}); area_rel and scale_rel are ratios."
+          },
+          "rule_params": {
+            "type": "object",
+            "description": "rule_id -> parameters, e.g. COORD.STAIR_RISERS {max_riser_height} only from a verified profile."
+          },
+          "waivers": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "{rule_id, approved_by, reason, date, scope, entity_ids?}; BLOCKERs cannot be waived."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "FILE",
+                "GEOMETRY",
+                "ANNOTATION",
+                "COORDINATION",
+                "PLOT"
+              ]
+            }
+          },
+          "rule_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "list_rules": {
+            "type": "boolean",
+            "default": false,
+            "description": "Only list the rule catalogue."
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "overall",
+          "counts",
+          "by_scope",
+          "not_run",
+          "results"
+        ],
+        "properties": {
+          "overall": {
+            "type": "string",
+            "enum": [
+              "PASS",
+              "WARN",
+              "FAIL",
+              "NOT_RUN"
+            ]
+          },
+          "counts": {
+            "type": "object"
+          },
+          "by_scope": {
+            "type": "object"
+          },
+          "not_run": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "waived": {
+            "type": "array"
+          },
+          "rejected_waivers": {
+            "type": "array"
+          },
+          "tolerances": {
+            "type": "object"
+          },
+          "open_blockers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "open_errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_count": {
+            "type": "integer"
+          },
+          "rules": {
+            "type": "array"
+          }
+        }
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "policy_category": "autocad.read",
+      "side_effects": "none"
+    },
+    {
+      "name": "autocad.compare_revisions",
+      "description": "Compare two entity sets (old, new; optional common base) by id, geometry, layer, properties and relationships into added / modified / deleted / conflicted, with possible id renames. When ids barely overlap the mapping is flagged uncertain and a mass deletion is marked as needing confirmation. Optional log builds revision-log rows (reason, source request, actor, sheets). Offline; changes nothing.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "old": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "old_path": {
+            "type": "string"
+          },
+          "new": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "new_path": {
+            "type": "string"
+          },
+          "base": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "base_path": {
+            "type": "string"
+          },
+          "tolerance": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "default": 0.01,
+            "description": "Geometry/number tolerance in drawing units."
+          },
+          "log": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "source_request": {
+                "type": "string"
+              },
+              "actor": {
+                "type": "string"
+              },
+              "sheets_affected": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "added",
+          "modified",
+          "deleted",
+          "conflicted",
+          "counts",
+          "mapping_uncertain",
+          "mass_delete_requires_confirmation"
+        ],
+        "properties": {
+          "added": {
+            "type": "array"
+          },
+          "modified": {
+            "type": "array"
+          },
+          "deleted": {
+            "type": "array"
+          },
+          "conflicted": {
+            "type": "array"
+          },
+          "unchanged": {
+            "type": "integer"
+          },
+          "possible_renames": {
+            "type": "array"
+          },
+          "mapping_uncertain": {
+            "type": "boolean"
+          },
+          "mass_delete_requires_confirmation": {
+            "type": "boolean"
+          },
+          "match_ratio": {
+            "type": "number"
+          },
+          "counts": {
+            "type": "object"
+          },
+          "log": {
+            "type": "array"
+          }
+        }
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "policy_category": "autocad.read",
+      "side_effects": "none"
+    },
+    {
+      "name": "autocad.plan_operation",
+      "description": "Dry-run check of a planned AutoCAD operation: returns its idempotency key and entity marker (a retry with the same inputs is recognised, not repeated) and whether it needs explicit confirmation (bulk delete over the threshold, purge, explode, unit/scale change, layer-structure change, overwriting an existing file). Changes nothing.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "CREATE",
+              "MODIFY",
+              "DELETE",
+              "PURGE",
+              "EXPLODE",
+              "CHANGE_UNITS",
+              "OVERWRITE",
+              "LAYER_STRUCTURE",
+              "EXPORT",
+              "SAVE"
+            ]
+          },
+          "inputs": {
+            "type": "object"
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0,
+            "default": 1,
+            "description": "Entities affected."
+          },
+          "target_path": {
+            "type": "string"
+          },
+          "bulk_threshold": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 5
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "idempotency_key",
+          "marker",
+          "needs_confirmation",
+          "confirmation_reasons"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "marker": {
+            "type": "string"
+          },
+          "needs_confirmation": {
+            "type": "boolean"
+          },
+          "confirmation_reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "backup_planned": {
+            "type": "boolean"
+          },
+          "note": {
+            "type": "string"
+          }
+        }
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "policy_category": "autocad.read",
+      "side_effects": "none"
+    },
+    {
+      "name": "autocad.report",
+      "description": "Build the run report with sections INPUT_REVIEW, ASSUMPTIONS, QUESTIONS, DRAWING_PLAN, EXECUTION_LOG, VALIDATION, OPEN_ISSUES, OUTPUTS, FINAL_STATUS, LIMITATIONS. FINAL_STATUS is computed only from verified evidence (DRAFT, CAD_VALID, DRAWING_CHECKED, COORDINATED, CODE_REVIEWED): output files are listed only if they exist on disk, evidence flags (dwg_opened_in_autocad, pdf_rendered_checked) must be set only when a prior tool result proved them, and a construction-issue status is impossible without a human code-review file and an approval file. Optional model/model_path/autocad_entities is validated first. report_path (.md) also writes a .json twin. Never claims compliance; lists what was NOT checked.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "project"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "project": {
+            "type": "string",
+            "minLength": 1
+          },
+          "profile": {
+            "type": "object"
+          },
+          "model": {
+            "type": "object"
+          },
+          "model_path": {
+            "type": "string"
+          },
+          "autocad_entities": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "meta": {
+            "type": "object"
+          },
+          "layer_map": {
+            "type": "object"
+          },
+          "validate": {
+            "type": "boolean",
+            "default": true
+          },
+          "tolerances": {
+            "type": "object"
+          },
+          "rule_params": {
+            "type": "object"
+          },
+          "waivers": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "FILE",
+                "GEOMETRY",
+                "ANNOTATION",
+                "COORDINATION",
+                "PLOT"
+              ]
+            }
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "evidence": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "description": "dwg_opened_in_autocad, pdf_rendered_checked, autocad_session: true only when a prior tool result proved it."
+          },
+          "drawing_plan": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "execution_log": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "assumptions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "open_questions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "limitations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "code_review_file": {
+            "type": "string",
+            "description": "Absolute path of a JSON file written by the human reviewer: reviewer, role, date, scope."
+          },
+          "issue_label": {
+            "type": "string"
+          },
+          "issue_approval_file": {
+            "type": "string",
+            "description": "Absolute path of a JSON file: approved_by, role, date, document_ref."
+          },
+          "report_path": {
+            "type": "string",
+            "pattern": "(?i)\\.md$",
+            "description": "Absolute .md path to write (a .json twin is written next to it)."
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "report",
+          "markdown",
+          "final_status",
+          "files"
+        ],
+        "properties": {
+          "report": {
+            "type": "object"
+          },
+          "markdown": {
+            "type": "string"
+          },
+          "final_status": {
+            "type": "string"
+          },
+          "verified_level": {
+            "type": "string"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "validation_overall": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "self",
+      "policy_category": "autocad.write",
+      "side_effects": "possible"
     }
   ],
   "$defs": {

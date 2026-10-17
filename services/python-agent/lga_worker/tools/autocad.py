@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from lga_worker import inventory
-from lga_worker.autocad import floorplan, geometry
+from lga_worker.autocad import floorplan, geometry, safety, spec_tools
 from lga_worker.autocad.provider import (
     ACAD_IMAGE_NAME,
     PLAN_LAYERS,
@@ -102,6 +102,62 @@ def _file_checks(path: Path) -> tuple[list[Check], int, bytes]:
         with path.open("rb") as fh:
             head = fh.read(DXF_HEAD_BYTES)
     return [Check("file_exists", exists, str(path)), Check("file_not_empty", size > 0, f"{size} bytes")], size, head
+
+
+def _journal_path(ctx: ToolContext) -> Path | None:
+    try:
+        return ctx.artifact_dir("autocad") / "operations.jsonl"
+    except OSError:
+        return None
+
+
+async def _guarded_write(ctx: ToolContext, kind: safety.OpKind, path: Path, overwrite: bool,
+                         run: Callable[[], Any]) -> tuple[Any, safety.OperationRecord]:
+    """Run a file-writing provider call with an operation record and, when it overwrites, a verified backup first.
+
+    A failed write restores the backup if the target changed. Journal problems never fail the tool.
+    """
+    journal = safety.OperationJournal(_journal_path(ctx))
+    inputs = {"path": str(path), "overwrite": overwrite}
+    record = safety.new_record(kind, safety.Mode.APPLY, inputs, [str(path)])
+    journal.add(record)
+    try:
+        if overwrite and path.is_file():
+            try:
+                record.backup = await asyncio.to_thread(safety.backup_file, path)
+            except (safety.SafetyError, OSError) as exc:
+                raise ToolError(ErrorCode.EXECUTION_FAILED,
+                                f"refusing to overwrite {path}: its backup could not be made ({exc})") from exc
+            record.note(f"backup {record.backup.backup if record.backup else '?'}")
+        try:
+            result = await run()
+        except BaseException as exc:
+            record.status = safety.OpStatus.FAILED
+            record.error = f"{type(exc).__name__}: {exc}"
+            if record.backup is not None:
+                try:
+                    if not path.is_file() or safety.sha256_file(path) != record.backup.sha256:
+                        safety.restore_backup(record.backup)
+                        record.status = safety.OpStatus.ROLLED_BACK
+                        record.note("target restored from backup")
+                except (safety.SafetyError, OSError) as restore_error:
+                    record.note(f"restore failed: {restore_error}")
+            raise
+        record.status = safety.OpStatus.APPLIED
+        return result, record
+    finally:
+        record.finished = safety._now()
+        journal.flush(record)
+
+
+def _write_extras(record: safety.OperationRecord) -> tuple[dict[str, Any], list[Check]]:
+    data: dict[str, Any] = {"operation_id": record.op_id}
+    checks: list[Check] = []
+    if record.backup is not None:
+        data["backup"] = record.backup.to_dict()
+        checks.append(Check("backup_before_overwrite", Path(record.backup.backup).is_file(),
+                            f"{record.backup.backup} sha256 {record.backup.sha256[:12]}"))
+    return data, checks
 
 
 def _created(result: CreateResult) -> ToolOutcome:
@@ -267,11 +323,14 @@ def register(registry: ToolRegistry) -> None:
     async def save(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
         provider = await _provider(ctx)
         path = _output_path(args["path"], ".dwg")
-        result = await _sta(ctx, provider, provider.save, path, bool(args["overwrite"]))
+        result, op = await _guarded_write(ctx, safety.OpKind.SAVE, path, bool(args["overwrite"]),
+                                          lambda: _sta(ctx, provider, provider.save, path, bool(args["overwrite"])))
+        extra, extra_checks = _write_extras(op)
         checks, size, _ = await asyncio.to_thread(_file_checks, path)
+        checks += extra_checks
         associated = same_file_path(result.full_name, path) if path.exists() else False
         checks.append(Check("document_path_is_target", associated, f"drawing path is {result.full_name!r}"))
-        return ToolOutcome(data={"path": str(path), "size": size}, checks=checks,
+        return ToolOutcome(data={"path": str(path), "size": size, **extra}, checks=checks,
                            artifacts=[{"kind": "file", "path": str(path)}],
                            observation=f"Saved drawing to {path} ({size} bytes, verified).", backend=BACKEND)
 
@@ -279,8 +338,11 @@ def register(registry: ToolRegistry) -> None:
     async def export_dxf(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
         provider = await _provider(ctx)
         path = _output_path(args["path"], ".dxf")
-        result = await _sta(ctx, provider, provider.export_dxf, path, bool(args["overwrite"]))
+        result, op = await _guarded_write(ctx, safety.OpKind.EXPORT, path, bool(args["overwrite"]),
+                                          lambda: _sta(ctx, provider, provider.export_dxf, path, bool(args["overwrite"])))
+        extra, extra_checks = _write_extras(op)
         checks, size, head = await asyncio.to_thread(_file_checks, path)
+        checks += extra_checks
         checks.append(Check("dxf_header", looks_like_dxf(head), f"starts with {head[:16]!r}"))
         if result.expected_acadver is not None:
             checks.append(Check("dxf_version", result.acadver == result.expected_acadver,
@@ -290,7 +352,7 @@ def register(registry: ToolRegistry) -> None:
         checks.append(Check("temporary_selection_set_removed", result.cleanup_error is None,
                             result.cleanup_error or "removed"))
         return ToolOutcome(data={"path": str(path), "size": size, "document_path": result.document_path,
-                                 "dxf_version": result.acadver},
+                                 "dxf_version": result.acadver, **extra},
                            checks=checks, artifacts=[{"kind": "file", "path": str(path)}],
                            observation=f"Exported DXF ({result.acadver}) to {path} ({size} bytes, verified); "
                                        f"drawing still "
@@ -300,14 +362,17 @@ def register(registry: ToolRegistry) -> None:
     async def export_pdf(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
         provider = await _provider(ctx)
         path = _output_path(args["path"], ".pdf")
-        result = await _sta(ctx, provider, provider.export_pdf, path, bool(args["overwrite"]))
+        result, op = await _guarded_write(ctx, safety.OpKind.EXPORT, path, bool(args["overwrite"]),
+                                          lambda: _sta(ctx, provider, provider.export_pdf, path, bool(args["overwrite"])))
+        extra, extra_checks = _write_extras(op)
         checks, size, head = await asyncio.to_thread(_file_checks, path)
+        checks += extra_checks
         checks.append(Check("pdf_header", head.startswith(PDF_MAGIC), f"starts with {head[:8]!r}"))
         checks.append(Check("layout_settings_restored", not result.restore_errors,
                             "; ".join(result.restore_errors) or f"layout {result.layout} restored"))
         return ToolOutcome(
             data={"path": str(path), "size": size, "device": result.device, "media": result.media,
-                  "layout": result.layout},
+                  "layout": result.layout, **extra},
             checks=checks, artifacts=[{"kind": "file", "path": str(path)}],
             observation=f"Plotted layout {result.layout} (extents, fit, centred, {result.media}) to {path} "
                         f"({size} bytes, verified).",
@@ -417,3 +482,76 @@ def register(registry: ToolRegistry) -> None:
                           f"handle {handle} {'no longer resolves' if result.gone else 'still resolves'}")],
             observation=f"Erased {result.object_name} handle={handle} (verified).", backend=BACKEND,
         )
+
+    # ------------------------------------------------------------------ spec tools: offline, no AutoCAD needed
+
+    async def _offline(fn: Callable[[Mapping[str, Any]], dict[str, Any]], args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(fn, args)
+        except spec_tools.SpecInputError as exc:
+            raise ToolError(ErrorCode.INVALID_ARGUMENT, str(exc)) from exc
+
+    @registry.handler("autocad.profile_check")
+    async def profile_check(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        data = await _offline(spec_tools.profile_check, args)
+        missing = {tier: ids for tier, ids in data["missing"].items() if ids}
+        return ToolOutcome(
+            data=data, backend="offline",
+            observation=(f"Profile: ready_to_draw={data['ready_to_draw']}, ready_for_plot={data['ready_for_plot']}, "
+                         f"ready_for_code_review={data['ready_for_code_review']}; {len(data['questions'])} question(s). "
+                         f"Missing: {missing or 'nothing'}. Ask the user the questions (options, Khac, Giu UNKNOWN); "
+                         "do not fill missing values or state a legal requirement."))
+
+    @registry.handler("autocad.validate_model")
+    async def validate_model(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        data = await _offline(spec_tools.validate_model, args)
+        if args.get("list_rules"):
+            return ToolOutcome(data=data, backend="offline", observation=f"{len(data['rules'])} validation rules.")
+        failing = [f"{r['rule_id']} ({r['severity']})" for r in data["results"] if r["result"] == "FAIL"]
+        return ToolOutcome(
+            data=data, backend="offline",
+            observation=(f"Validation {data['overall']} over {data['entity_count']} entities: counts {data['counts']}, "
+                         f"by scope {data['by_scope']}. Failing: {failing or 'none'}. NOT_RUN: {data['not_run'] or 'none'}. "
+                         "NOT_RUN means not checked; it is not a pass."))
+
+    @registry.handler("autocad.compare_revisions")
+    async def compare_revisions(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        data = await _offline(spec_tools.compare_revisions, args)
+        c = data["counts"]
+        note = " Mapping is uncertain: confirm before accepting any deletion." if data["mass_delete_requires_confirmation"] else ""
+        return ToolOutcome(data=data, backend="offline",
+                           observation=f"Revisions: {c['added']} added, {c['modified']} modified, {c['deleted']} deleted, "
+                                       f"{c['conflicted']} conflicted, {c['unchanged']} unchanged.{note}")
+
+    @registry.handler("autocad.plan_operation")
+    async def plan_operation(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        data = await _offline(spec_tools.plan_operation, args)
+        verdict = ("needs explicit confirmation: " + "; ".join(data["confirmation_reasons"])) if data["needs_confirmation"] \
+            else "no confirmation needed"
+        return ToolOutcome(data=data, backend="offline",
+                           observation=f"{data['kind']} dry run: {verdict}. Idempotency key {data['idempotency_key']} "
+                                       f"(marker {data['marker']}).")
+
+    @registry.handler("autocad.report")
+    async def report(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        built = await _offline(spec_tools.build_report, args)
+        files: list[str] = []
+        checks: list[Check] = []
+        if args.get("report_path"):
+            path = absolute_path(args["report_path"])
+            try:
+                written = await asyncio.to_thread(spec_tools.write_report_files, built["markdown"], built["report"], path)
+            except spec_tools.SpecInputError as exc:
+                raise ToolError(ErrorCode.INVALID_ARGUMENT, str(exc)) from exc
+            files = [str(p) for p in written]
+            checks.append(Check("report_written", path.is_file() and path.stat().st_size > 0, f"{path}"))
+        final = built["report"]["FINAL_STATUS"]
+        validation_overall = (built["validation"] or {}).get("overall")
+        return ToolOutcome(
+            data={"report": built["report"], "markdown": built["markdown"], "final_status": final["status"],
+                  "verified_level": final["verified_level"], "files": files, "validation_overall": validation_overall},
+            checks=checks, artifacts=[{"kind": "file", "path": f} for f in files], backend="offline",
+            observation=(f"Report built. FINAL_STATUS {final['status']} (verified level {final['verified_level']}); "
+                         f"validation {validation_overall or 'not run'}; "
+                         f"{len(built['report']['LIMITATIONS'])} limitation(s). Report the status exactly as computed."
+                         + (f" Written: {', '.join(files)}." if files else "")))
