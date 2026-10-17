@@ -138,10 +138,19 @@ def build_spec(*, request: str, plan: Plan, draw_order: list[PlannedObject], sta
         ref_type = "photo_reference"
     else:
         ref_type = "original"
+    template_version = source.get("template_version")
+    if template_version:  # a named character drawn from a stored template: reference-based, never a free interpretation
+        ref_type = "existing_artwork"
     intent = brief.get("intent")
     fidelity = {"REPRODUCTION": "faithful_reproduction", "STUDY": "faithful_reproduction", "ADAPTATION": "inspired",
                 "INTERPRETATION": "inspired", "INSPIRED_BY": "inspired"}.get(intent or "", None)
-    if fidelity is None:
+    if fidelity is None and template_version:
+        fidelity = "faithful_reproduction"
+        assume("metadata.fidelity_level", fidelity,
+               f"named character {source.get('name')!r} drawn from template {template_version}: reference-based, "
+               f"reference_status {source.get('reference_status', 'OFFLINE_TEMPLATE')}")
+        P("metadata.fidelity_level", INFERRED, f"template {template_version}", 0.7)
+    elif fidelity is None:
         fidelity = "faithful_reproduction" if source.get("kind") == "image" else "free_interpretation"
         assume("metadata.fidelity_level", fidelity, "no intent stated: derived from the kind of source")
         P("metadata.fidelity_level", INFERRED, "source kind", 0.7)
@@ -156,6 +165,12 @@ def build_spec(*, request: str, plan: Plan, draw_order: list[PlannedObject], sta
         "reference_type": ref_type, "reference_source": source.get("reference_source") or source.get("reference_path")
         or source.get("name"), "fidelity_level": fidelity,
     }
+    if template_version:
+        metadata["template_version"] = template_version
+        metadata["reference_status"] = source.get("reference_status", "OFFLINE_TEMPLATE")
+        metadata["reference_retrieved_at"] = source.get("reference_retrieved_at")
+        P("metadata.reference_status", KNOWN, "the reference was " + ("analysed" if metadata["reference_status"] == "AVAILABLE"
+                                                                    else "NOT analysed: local template only"), 1.0)
     P("metadata.title", KNOWN if work or source.get("name") else INFERRED, "brief / source", 0.9)
     P("metadata.reference_type", KNOWN if work or ref_given else INFERRED, "brief / source", 0.9)
     if brief.get("verification"):
@@ -223,10 +238,14 @@ def build_spec(*, request: str, plan: Plan, draw_order: list[PlannedObject], sta
             "bounding_box": _bbox(o), "contour_points": [list(p) for p in pts], "geometry_type": _geometry_type(o),
             "transform": {"translate": [0, 0], "rotate_deg": 0, "scale": 1.0}, "depth_order": rank, "layer": o.layer,
             "color_regions": regions, "detail_level": round(min(1.0, len(o.outline) / 40.0), 2), "occlusion": cover,
-            "confidence": 1.0 if user_supplied_plan else 0.75, "children": [],
+            "confidence": source.get("object_confidence", 1.0 if user_supplied_plan else 0.75), "children": [],
         })
-    P("objects", KNOWN if user_supplied_plan else INFERRED, "planned objects" if user_supplied_plan else "traced from a picture",
-      1.0 if user_supplied_plan else 0.75)
+    if template_version:  # the shapes come from knowledge of the character, not from measuring a picture of it
+        P("objects", INFERRED, f"template {template_version} (not measured from a reference picture unless reference_status is AVAILABLE)",
+          source.get("object_confidence", 0.8))
+    else:
+        P("objects", KNOWN if user_supplied_plan else INFERRED, "planned objects" if user_supplied_plan else "traced from a picture",
+          1.0 if user_supplied_plan else 0.75)
 
     # ---- F: colour and lighting -------------------------------------------------------------------------------
     weights: dict[tuple[int, int, int], float] = {}
@@ -273,7 +292,13 @@ def build_spec(*, request: str, plan: Plan, draw_order: list[PlannedObject], sta
         "highlight_regions": [{"object": ids[o.id], "color": hex_of(o.fill)} for o in bright[:12]],
         "ambient_occlusion": {"applicable": False, "reason": "not modelled in Paint"},
     }
-    P("color_lighting.color_palette", KNOWN, "planned colours", 1.0)
+    if template_version:
+        measured = set(source.get("measured") or [])
+        P("color_lighting.color_palette", KNOWN if measured else INFERRED,
+          "measured from the reference picture" if measured else "baseline palette of the specification, not measured",
+          0.9 if measured else 0.7)
+    else:
+        P("color_lighting.color_palette", KNOWN, "planned colours", 1.0)
 
     # ---- D: composition ---------------------------------------------------------------------------------------
     bg_like = [o for o in drawn if _area(o) > 0.6 * total]

@@ -40,7 +40,7 @@ def test_templates_fit_every_canvas_without_warnings(name: str, canvas: Canvas) 
 
 
 def test_objects_are_drawn_back_to_front() -> None:
-    plan = plan_of("doraemon")
+    plan = plan_of("doraemon_v1")
     layers = [o.layer for o in plan.objects]
     assert layers == sorted(layers)
     order = [o.id for o in plan.objects]
@@ -102,7 +102,7 @@ def test_curve_passes_through_its_points_and_is_smooth() -> None:
 
 
 def test_interior_point_is_inside_for_every_closed_object() -> None:
-    plan = plan_of("doraemon")
+    plan = plan_of("doraemon_v1")
     for obj in plan.objects:
         if not obj.closed:
             assert geometry.interior_point(obj) is None
@@ -142,7 +142,7 @@ def test_every_filled_template_region_is_bucket_safe_in_the_reference_raster() -
 
 
 def test_a_perfect_canvas_verifies() -> None:
-    plan = plan_of("doraemon")
+    plan = plan_of("doraemon_v1")
     report = verify.compare(plan, raster.render_plan(plan))
     assert report.ok, report.summary()
     assert report.spill_ratio == 0.0
@@ -150,7 +150,7 @@ def test_a_perfect_canvas_verifies() -> None:
 
 
 def test_flooding_the_page_blue_is_caught_as_spill() -> None:
-    plan = plan_of("doraemon")
+    plan = plan_of("doraemon_v1")
     flooded = Image.new("RGB", (CANVAS.width, CANVAS.height), (63, 72, 204))
     ImageDraw.Draw(flooded).ellipse((560, 357, 642, 392), outline="black", width=4)
     report = verify.compare(plan, flooded)
@@ -160,7 +160,7 @@ def test_flooding_the_page_blue_is_caught_as_spill() -> None:
 
 
 def test_a_missing_object_is_named_and_only_it_fails() -> None:
-    plan = plan_of("doraemon")
+    plan = plan_of("doraemon_v1")
     without_nose = raster.render(plan.canvas, [o for o in plan.objects if o.id != "nose"])
     report = verify.compare(plan, without_nose)
     assert not report.ok
@@ -283,7 +283,7 @@ class FakePaint:
 def test_engine_draws_everything_once_when_nothing_goes_wrong() -> None:
     from lga_worker.paint import engine
 
-    plan = plan_of("doraemon")
+    plan = plan_of("doraemon_v1")
     fake = FakePaint(CANVAS)
     result = engine.run_plan(plan, fake)
     assert result.ok and result.redraws == {}
@@ -294,7 +294,7 @@ def test_engine_draws_everything_once_when_nothing_goes_wrong() -> None:
 def test_engine_redraws_only_the_object_that_was_missed() -> None:
     from lga_worker.paint import engine
 
-    plan = plan_of("doraemon")
+    plan = plan_of("doraemon_v1")
     fake = FakePaint(CANVAS, skip_first=frozenset({"nose"}))
     result = engine.run_plan(plan, fake)
     assert result.ok
@@ -306,7 +306,7 @@ def test_engine_redraws_only_the_object_that_was_missed() -> None:
 def test_engine_stops_instead_of_piling_on_when_the_page_floods() -> None:
     from lga_worker.paint import engine
 
-    plan = plan_of("doraemon")
+    plan = plan_of("doraemon_v1")
     fake = FakePaint(CANVAS, flood_on="head")
     result = engine.run_plan(plan, fake)
     assert not result.ok
@@ -330,7 +330,7 @@ def test_engine_honours_cancellation() -> None:
 def test_repair_redraws_what_was_covered_by_the_failed_object_not_just_the_failed_one() -> None:
     from lga_worker.paint import engine
 
-    plan = plan_of("doraemon")
+    plan = plan_of("doraemon_v1")
     todo = [o.id for o in engine.repair_set(plan, ["torso"])]
     assert todo[0] == "torso"
     assert {"arm_l", "belly", "pocket", "head"} <= set(todo)  # drawn later and overlapping: must go back on top
@@ -341,7 +341,7 @@ def test_repair_redraws_what_was_covered_by_the_failed_object_not_just_the_faile
 def test_a_missing_curve_does_not_make_the_object_it_crosses_look_broken() -> None:
     # Live Doraemon run: the smile came out as a straight line, and the collar was reported as failing because the
     # smile's expected black pixels lay on the collar's outline.
-    plan = plan_of("doraemon")
+    plan = plan_of("doraemon_v1")
     without_mouth = raster.render(plan.canvas, [o for o in plan.objects if o.id != "mouth"])
     report = verify.compare(plan, without_mouth)
     assert report.failed_ids == ["mouth"]
@@ -434,7 +434,7 @@ class _StubbornPaint(FakePaint):
 def test_traced_pictures_tolerate_a_few_unmatched_regions_but_exact_drawings_do_not() -> None:
     from lga_worker.paint import engine
 
-    plan = plan_of("doraemon")
+    plan = plan_of("doraemon_v1")
     stubborn = {"pupil_l", "pupil_r"}
     strict = engine.run_plan(plan, _StubbornPaint(CANVAS, stubborn))
     assert not strict.ok and set(strict.final.failed_ids) == stubborn
@@ -517,7 +517,7 @@ def test_sketch_plan_is_drawn_by_the_paint_engine_as_one_brush_stroke_each() -> 
 
 
 def test_repair_never_draws_objects_of_later_stages() -> None:
-    plan = plan_of("doraemon")
+    plan = plan_of("doraemon_v1")
     early = {o.id for o in plan.objects if o.layer <= 3}
     from lga_worker.paint import engine as paint_engine
 

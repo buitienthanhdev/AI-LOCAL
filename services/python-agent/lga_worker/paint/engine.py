@@ -253,10 +253,12 @@ def _already_drawn(plan: Plan, driver: CanvasDriver, fill_ok: float, check_strok
 
 
 def run_plan(plan: Plan, driver: CanvasDriver, *, should_stop: Callable[[], bool] = lambda: False,
-             max_repair_rounds: int = MAX_REPAIR_ROUNDS, tolerance: float = 0.0, resume: bool = False) -> DrawResult:
+             max_repair_rounds: int = MAX_REPAIR_ROUNDS, tolerance: float = 0.0, resume: bool = False,
+             on_stage: Callable[[int, Stage, verify.VerifyReport], None] | None = None) -> DrawResult:
     """Draw `plan` through `driver`. `tolerance` is the share of objects that may still be wrong at the end
     (0 for exact drawings; a traced photo of 100 regions accepts a few thin ones that Paint did not take).
-    `resume` first looks at the canvas and draws only what is not already there."""
+    `resume` first looks at the canvas and draws only what is not already there. `on_stage(index, stage, report)` is
+    called after every stage has been compared with the plan (the gate saves one screenshot per stage there)."""
     ordered = draw_order(plan.objects)
     fill_ok = verify.FILL_TRACED_OK if tolerance > 0 else verify.FILL_SAMPLE_OK
     stages: list[Stage] = []
@@ -300,6 +302,8 @@ def run_plan(plan: Plan, driver: CanvasDriver, *, should_stop: Callable[[], bool
         stage.failed = list(report.failed_ids)
         stage.spill_ratio = report.spill_ratio
         stages.append(stage)
+        if on_stage is not None:
+            on_stage(len(stages) - 1, stage, report)
         if not _acceptable(report, len(drawn_ids(stages, plan)), tolerance):
             break  # what is on the canvas is not what the plan says; more drawing would pile on top of a mistake
 

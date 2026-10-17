@@ -112,3 +112,35 @@ single monitor; one Paint window per call (never one that may hold the user's wo
 `engine.repair_set(plan, failed, drawn)` is limited to the objects already on the canvas. Before 2026-10-12 a
 failed early stage redrew the whole plan, including objects of later layers, and the stage then reported 57 %
 unexplained ink. `art.draw` (docs/art-engine.md) drives this same engine for Paint.
+
+## Doraemon template V2 and the four verdicts (docs/specs/NANG_CAP_LOGIC_VE_DORAEMON.txt, SPEC_PAINT.txt)
+
+`template: "doraemon"` is now version 2 (`lga_worker/paint/doraemon.py`); `doraemon_v1` is kept as the way back.
+
+* Normalised design box mapped by ONE uniform scale (`FigureFrame`): never stretched. Figure 87 % of the canvas height
+  (84-90 % allowed), silhouette w/h 0.77 (0.72-0.86), head w/h 1.14 (1.08-1.20); narrow canvases are limited by width.
+* 28 named objects (`ROLES`), layers from an occlusion graph (`EDGES`, `paint/occlusion.py`), stages A-D as in the spec.
+* Curves are cubic Beziers sampled at near-even spacing (`paint/curves.py`); polygon vertices keep Paint's 6 px gap.
+* `prepare()` checks 26 constraints on the geometry and corrects/refuses BEFORE Paint is touched; a preview PNG is rendered
+  from the same plan that is drawn.
+* Reference: `reference_image` (+ `reference_url`, `reference_retrieved_at`) is measured (palette, silhouette and head aspect,
+  clamped to the allowed ratios) and `reference_status` is AVAILABLE; without it OFFLINE_TEMPLATE, said in the result.
+* Stage screenshots (`stage-<n>-<id>.png`) are saved by the gate; the specification records fidelity as
+  `faithful_reproduction` (reference-based), object confidence 0.8 (not 1.0), palette provenance INFERRED unless measured.
+* `paint/quality.py` separates `execution_conformance`, `character_fidelity`, `visual_quality`, `canvas_safety` and the flags
+  `DRAW_EXECUTION_PASS` / `VISUAL_QUALITY_PASS`. Fidelity is measured on the screenshot (silhouette, landmark error of nose,
+  bell, pupils); with no reference it states that the local template is unreviewed.
+* `paint/template_store.py` (`memory/paint_templates/doraemon/`): only real drawings with an existing screenshot are recorded;
+  defects seen twice produce a *candidate*; a candidate replaces the best version only after a real drawing passes every gate
+  with a score not lower than the current best. The built-in template stays the offline fallback.
+* `paint.save` saves with Paint's Save As and reads the file back (exists, new, format, pixel size, content equals the canvas).
+
+Spec deliverable -> code: capability registry = `driver.probe` + `art/capabilities.py`; coordinate engine =
+`calibration.CanvasTransform` (one function; origin/zoom from Paint's UI, cross-checked on a screenshot); geometry planning =
+`geometry.plan_scene` + `doraemon.py`; automation adapter = `driver.py`; colour/fill = driver + `engine.fill_decision`;
+visual verification = `verify.py` + `quality.py`; recovery = `engine._Runner` (popup recovery, fill undo, bounded repairs);
+save/export = `saving.py`.
+
+Measured on this machine (2026-10-17, Paint 11.2605, canvas 1152x648): V2 drawn live in 98.5 s, 28 objects, execution and visual
+verdicts both true, landmark errors <= 0.0042 of the figure height; screenshot `artifacts/doraemon-v2-live/result-*.png`.
+NOT tested live: `paint.save`, `reference_image` with a real downloaded picture, zoom other than 100 %, DPI other than this display.

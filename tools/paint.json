@@ -4,7 +4,7 @@
   "tools": [
     {
       "name": "paint.draw",
-      "description": "Draw a whole picture in Microsoft Paint in ONE call (never drag the mouse yourself for a drawing). Opens a fresh Paint window, draws, checks the canvas against the plan and fails with VERIFICATION_FAILED if it does not match. Use `template` for known pictures: 'doraemon', 'house'. Otherwise give `objects`: coordinates are composition units, x 0..1000 across the canvas and y 0..562 down on the default 1152x648 canvas (a point outside is rejected with the allowed range). kinds: rect/ellipse/triangle = 2 points (opposite corners of the box; triangle apex at top centre), line = 2 points, polygon = 3+ points (closed, can be filled), polyline = 2+ points (open), curve = 3+ points (smooth through them). fill/stroke: '#RRGGBB' or a colour name (red, blue, yellow, green, black, white, orange, pink, brown, purple, grey, skin, gold, sky). weight: detail (thin) | structure | accent (bold outline). layer: lower layers are drawn first, so put backgrounds low and details high; objects on the same layer must not overlap. Lines and open shapes cannot have a fill. When it succeeds the canvas has been verified; finish with task.complete using the check {\"tool\": \"paint.inspect\", \"args\": {}, \"expect\": {\"matches_plan\": true}}.",
+      "description": "Draw a whole picture in Microsoft Paint in ONE call (never drag the mouse yourself for a drawing). Opens a fresh Paint window, draws, checks the canvas against the plan and fails with VERIFICATION_FAILED if it does not match. Use `template` for known pictures: 'doraemon' (version 2: a proportion-checked front view that is verified against its own constraints BEFORE Paint is touched; 'doraemon_v1' is the old version), 'house'. For a named character pass `reference_image` (a front-view picture you found; its colours and proportions are measured and `reference_status` becomes AVAILABLE) or leave it out (OFFLINE_TEMPLATE: the local template, nothing analysed). The result separates DRAW_EXECUTION_PASS (the tool drew what was planned) from VISUAL_QUALITY_PASS (lines, fills, stray ink, proportions measured on the screenshot): never present the first as proof of the second. Otherwise give `objects`: coordinates are composition units, x 0..1000 across the canvas and y 0..562 down on the default 1152x648 canvas (a point outside is rejected with the allowed range). kinds: rect/ellipse/triangle = 2 points (opposite corners of the box; triangle apex at top centre), line = 2 points, polygon = 3+ points (closed, can be filled), polyline = 2+ points (open), curve = 3+ points (smooth through them). fill/stroke: '#RRGGBB' or a colour name (red, blue, yellow, green, black, white, orange, pink, brown, purple, grey, skin, gold, sky). weight: detail (thin) | structure | accent (bold outline). layer: lower layers are drawn first, so put backgrounds low and details high; objects on the same layer must not overlap. Lines and open shapes cannot have a fill. When it succeeds the canvas has been verified; finish with task.complete using the check {\"tool\": \"paint.inspect\", \"args\": {}, \"expect\": {\"matches_plan\": true}}.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -13,6 +13,8 @@
             "type": "string",
             "enum": [
               "doraemon",
+              "doraemon_v2",
+              "doraemon_v1",
               "house"
             ]
           },
@@ -91,6 +93,22 @@
                 }
               }
             }
+          },
+          "reference_image": {
+            "type": "string",
+            "description": "Absolute path of a clean front-view reference picture for the template (a character). Its palette, silhouette and head proportions are measured and replace the baseline values inside the allowed ratios."
+          },
+          "reference_url": {
+            "type": "string",
+            "description": "Where the reference picture came from (recorded with the retrieval time; never invented)."
+          },
+          "reference_retrieved_at": {
+            "type": "string",
+            "description": "ISO time the reference was retrieved."
+          },
+          "candidate": {
+            "type": "string",
+            "description": "Id of a template candidate proposed from repeated, observed defects: draw with it; it replaces the best template only when this real drawing passes every quality gate."
           },
           "reuse_window": {
             "type": "boolean",
@@ -370,6 +388,69 @@
       "supports_rollback": false,
       "verification": "none",
       "policy_category": "paint.observe", "side_effects": "possible"
+    },
+    {
+      "name": "paint.save",
+      "description": "Save the picture in the Paint window opened by paint.draw to an image file (png, jpg, bmp, gif, tif) and PROVE it: the file must exist, be new, reopen as an image of the right format and the canvas pixel size, and (png/bmp) show what the canvas showed. Opening the Save dialog is not saving: the call fails with VERIFICATION_FAILED unless the read-back passes. An existing file is only replaced with overwrite=true, after a backup copy next to it.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 3,
+            "description": "Absolute path including the file name and extension."
+          },
+          "overwrite": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "path",
+          "size",
+          "verification"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "format": {
+            "type": "string"
+          },
+          "canvas": {
+            "type": "object"
+          },
+          "verification": {
+            "type": "object"
+          },
+          "backup": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "overwritten": {
+            "type": "boolean"
+          }
+        }
+      },
+      "timeout_ms": 90000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "policy_category": "desktop.input", "side_effects": "yes"
     }
   ]
 }
