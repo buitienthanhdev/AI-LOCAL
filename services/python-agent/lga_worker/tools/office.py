@@ -50,6 +50,7 @@ class Office:
             app = win32com.client.DispatchEx(prog_id)
             try:
                 app.Visible = False
+                app.AutomationSecurity = 3  # msoAutomationSecurityForceDisable: never run macros of documents opened here (NOT TESTED live)
                 app.DisplayAlerts = False if prog_id != "PowerPoint.Application" else app.DisplayAlerts
             except Exception:
                 pass
@@ -362,6 +363,10 @@ def _table(rows: list[list[Any]], limit: int = 40) -> str:
 
 
 def register(registry: ToolRegistry) -> None:
+    from lga_worker.office import tools as spec_tools
+
+    spec_tools.register(registry)
+
     @registry.handler("office.excel_read")
     async def excel_read(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
         office = await _office(ctx)
