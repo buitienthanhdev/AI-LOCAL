@@ -39,8 +39,9 @@ class Frame:
         return self.pt(x0, y0), self.pt(x1, y1)
 
 
-def doraemon(canvas: Canvas, *, body: str = "#0096E0", belly: str = "#FFFFFF", collar: str = "#E60012",
-             bell: str = "#FFD400") -> list[DrawingObject]:
+def doraemon_v1(canvas: Canvas, *, body: str = "#0096E0", belly: str = "#FFFFFF", collar: str = "#E60012",
+                bell: str = "#FFD400") -> list[DrawingObject]:
+    """Version 1 of the template (free interpretation, 100 x 100 box). Kept as the way back; `doraemon` is version 2."""
     f = Frame.centred(canvas)
     objs: list[DrawingObject] = []
 
@@ -99,7 +100,16 @@ def house(canvas: Canvas, *, wall: str = "#FFC90E", roof: str = "#ED1C24", door:
     return objs
 
 
-TEMPLATES: dict[str, Callable[..., list[DrawingObject]]] = {"doraemon": doraemon, "house": house}
+def doraemon(canvas: Canvas, **options: str) -> list[DrawingObject]:
+    """Version 2 (proportion-checked, occlusion-ordered; see `lga_worker.paint.doraemon`). Colour options: body, belly,
+    collar, bell. Use `doraemon.prepare` directly when the constraint report or a reference is needed."""
+    from lga_worker.paint import doraemon as v2
+
+    return v2.prepare(canvas, options=options).scene.objects
+
+
+TEMPLATES: dict[str, Callable[..., list[DrawingObject]]] = {
+    "doraemon": doraemon, "doraemon_v2": doraemon, "doraemon_v1": doraemon_v1, "house": house}
 
 
 def build_template(name: str, canvas: Canvas, **options: str) -> list[DrawingObject]:

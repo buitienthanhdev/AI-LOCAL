@@ -16,7 +16,8 @@ from typing import Any
 from PIL import Image
 
 from lga_worker.errors import ErrorCode, ToolError
-from lga_worker.paint import geometry, raster, vectorize, verify
+from lga_worker.paint import doraemon, geometry, quality, raster, saving, vectorize, verify
+from lga_worker.paint.template_store import TemplateStore
 from lga_worker.paint.driver import PaintDriver
 from lga_worker.art.gate import run_gated, specification_summary
 from lga_worker.paint.engine import run_plan  # noqa: F401
@@ -40,6 +41,7 @@ class PaintSession:
     offset: tuple[int, int] = (0, 0)
     plan: Any = None  # the plan of the last paint.draw, so paint.inspect can check the canvas against it again
     tolerance: float = 0.0  # share of objects allowed to differ (traced pictures)
+    info: dict | None = None  # what a template drawing knows about itself (paint.quality.character_fidelity needs it)
 
 
 async def _session(ctx: ToolContext) -> PaintSession:
@@ -81,6 +83,34 @@ def _scene_objects(args: dict[str, Any], canvas: Canvas) -> list:
         options = {k: str(v) for k, v in (args.get("options") or {}).items()}
         return build_template(str(args["template"]), canvas, **options)
     return [geometry.object_from_dict(o) for o in args["objects"]]
+
+
+def _template_store(ctx: ToolContext) -> TemplateStore:
+    return TemplateStore(ctx.config.path("paths.memory_dir") / "paint_templates")
+
+
+def _reference_measurement(args: dict[str, Any]) -> dict[str, Any] | None:
+    """Measure `reference_image` when one is given: AVAILABLE only when the picture was really read and analysed."""
+    path = args.get("reference_image")
+    if not path:
+        return None
+    source = Path(str(path))
+    if not source.is_file():
+        raise ToolError(ErrorCode.NOT_FOUND, f"reference image not found: {source}")
+    try:
+        with Image.open(source) as opened:
+            image = opened.convert("RGB")
+    except OSError as exc:
+        raise ToolError(ErrorCode.INVALID_ARGUMENT, f"{source.name} is not an image I can read: {exc}") from exc
+    measured = doraemon.measure_reference(image, url=args.get("reference_url"), retrieved_at=args.get("reference_retrieved_at"),
+                                          source=str(args.get("reference_url") or source))
+    if measured.get("status") != "AVAILABLE":
+        raise ToolError(ErrorCode.INVALID_ARGUMENT, f"the reference picture is unusable: {measured.get('note')}")
+    return measured
+
+
+def _is_doraemon(args: dict[str, Any]) -> bool:
+    return str(args.get("template") or "").strip().lower() in ("doraemon", "doraemon_v2")
 
 
 def _sketch_objects(image: Image.Image, canvas: Canvas, detail: str) -> vectorize.Vectorized:
@@ -126,13 +156,64 @@ def register(registry: ToolRegistry) -> None:
         def work() -> dict[str, Any]:
             driver, transform = open_driver(provider, session, reuse, ctx.cancel_event.is_set)
             canvas = transform.canvas
-            plan = geometry.plan_scene(_scene_objects(args, canvas), canvas)
-            session.plan, session.tolerance = plan, 0.0
+            info: dict[str, Any] | None = None
+            source = {"kind": "template" if args.get("template") else "objects", "name": str(args.get("template") or "objects")}
+            stamp = int(time.time() * 1000)
+            candidate_id = str(args.get("candidate") or "") or None
+            store = _template_store(ctx)
+            if _is_doraemon(args):
+                # preview and constraint check BEFORE the mouse moves: a scene that breaks its own proportions is
+                # corrected here (or refused), never drawn
+                base = store.params("doraemon")
+                if candidate_id:
+                    cand = store.candidate("doraemon", candidate_id)
+                    if cand is None:
+                        raise ToolError(ErrorCode.NOT_FOUND, f"no Doraemon template candidate {candidate_id!r}")
+                    base = doraemon.Params.from_dict(cand["params"])
+                prepared = doraemon.prepare(canvas, base, options={k: str(v) for k, v in (args.get("options") or {}).items()},
+                                            reference=_reference_measurement(args))
+                info = doraemon.scene_info(prepared, reviewed=bool((store.best("doraemon") or {}).get("reviewed")))
+                objects = prepared.scene.objects
+                source.update({"template_version": prepared.scene.version, "name": "doraemon",
+                               "reference_status": prepared.reference.get("status", "OFFLINE_TEMPLATE"),
+                               "reference_source": prepared.reference.get("source"),
+                               "reference_retrieved_at": prepared.reference.get("retrieved_at"),
+                               "measured": prepared.reference.get("measured", []), "object_confidence": 0.8})
+            else:
+                objects = _scene_objects(args, canvas)
+            plan = geometry.plan_scene(objects, canvas)
+            session.plan, session.tolerance, session.info = plan, 0.0, info
+            if info is not None:
+                raster.render_plan(plan).save(shots / f"preview-{stamp}.png", format="PNG")
+                info["preview"] = str(shots / f"preview-{stamp}.png")
+
+            def assess(p, img, res, shot, window_ok):  # noqa: ANN001
+                return quality.assess(p, img, res, info=info, window_ok=window_ok, screenshot=shot)
+
             result, gate = run_gated(
                 plan, driver, request=str(args.get("request") or f"paint.draw {args.get('template') or 'objects'}"),
-                directory=shots, source={"kind": "template" if args.get("template") else "objects",
-                                         "name": str(args.get("template") or "objects")},
-                should_stop=ctx.cancel_event.is_set, user_supplied_plan=True)
+                directory=shots, source=source, should_stop=ctx.cancel_event.is_set, user_supplied_plan=True, assess=assess)
+            q = gate.quality
+            learning = None
+            if q is not None and info is not None and result.ok:
+                try:
+                    shot_path = (gate.spec or {}).get("execution", {}).get("actual_result", {}).get("screenshot")
+                    row = store.record_run("doraemon", version=info["template_version"], params=info["params"], quality=q,
+                                           screenshot=shot_path or "", reference_status=source["reference_status"])
+                    learning = {"run": row["id"], "score": row["score"], "defects": row["defects"]}
+                    if candidate_id:
+                        promoted, why = store.promote("doraemon", candidate_id, quality=q,
+                                                      constraints_ok=all(c["ok"] for c in info["constraints"]))
+                        learning["candidate"] = {"id": candidate_id, "promoted": promoted, "refused_because": why}
+                    else:
+                        proposal = store.propose_candidate("doraemon")
+                        if proposal:
+                            learning["candidate_proposed"] = {"id": proposal["id"], "because": proposal["because"]}
+                except ValueError as exc:
+                    learning = {"not_recorded": str(exc)}
+            if q is not None:
+                q["report_path"] = quality.write_report(shots, f"{stamp}", {**q, "template": info and {
+                    k: info[k] for k in ("template_version", "constraints", "corrections", "reference", "landmarks", "stroke_profile")}})
             stamp = int(time.time() * 1000)
             image_path = shots / f"canvas-{stamp}.png"
             driver.capture().save(image_path, format="PNG")
@@ -142,11 +223,12 @@ def register(registry: ToolRegistry) -> None:
                              "fill": o.fill, "stroke": o.stroke, "points": o.points} for o in plan.objects],
                 "result": result.to_dict(), "warnings": plan.warnings}, ensure_ascii=False, indent=1), encoding="utf-8")
             return {"hwnd": driver.hwnd, "canvas": canvas, "scale": transform.scale, "plan": plan, "result": result,
-                    "image": str(image_path), "gate": gate}
+                    "image": str(image_path), "gate": gate, "info": info, "learning": learning}
 
         out = await provider.executor.run(max(5.0, ctx.remaining_s()), work)
         result, canvas, plan = out["result"], out["canvas"], out["plan"]
         summary = result.final.summary()
+        q = out["gate"].quality
         data = {
             "hwnd": out["hwnd"], "canvas": {"width": canvas.width, "height": canvas.height},
             "units": {"x": 1000, "y": round(canvas.unit_height)}, "scale": out["scale"],
@@ -155,15 +237,35 @@ def register(registry: ToolRegistry) -> None:
             "failed_objects": result.final.failed_ids, "warnings": plan.warnings, "screenshot": out["image"],
             "specification": specification_summary(out["gate"]),
         }
+        if q is not None:
+            data.update({"DRAW_EXECUTION_PASS": q["DRAW_EXECUTION_PASS"], "VISUAL_QUALITY_PASS": q["VISUAL_QUALITY_PASS"],
+                         "quality": q})
+        if out.get("info"):
+            data["template"] = {k: out["info"][k] for k in ("template_version", "corrections", "preview", "reference")}
+            data["template"]["constraints_ok"] = all(c["ok"] for c in out["info"]["constraints"])
+        if out.get("learning"):
+            data["learning"] = out["learning"]
         if not result.ok:
             raise ToolError(ErrorCode.VERIFICATION_FAILED, summary, retryable=False,
                             details={"data": data, "failed": result.final.failed_ids,
                                      "report": result.final.to_dict(), "screenshot": out["image"]})
+        verdict = ""
+        if q is not None:
+            verdict = " " + quality.summary_line(q) + "."
+            problems = (q["visual_quality"]["problems"] + q["character_fidelity"].get("problems", [])
+                        + q["canvas_safety"]["problems"])
+            if problems:
+                verdict += " Problems: " + "; ".join(problems[:4]) + "."
+            verdict += (" Matching the plan is NOT proof of a good picture: look at the screenshot"
+                        + (f" and the preview {out['info']['preview']}" if out.get("info") else "") + " before saying it looks right.")
+            if q["character_fidelity"].get("limitations"):
+                verdict += " Limits: " + "; ".join(q["character_fidelity"]["limitations"]) + "."
         return ToolOutcome(
             data=data, checks=[Check("canvas_matches_plan", True, summary)],
             artifacts=[{"kind": "screenshot", "path": out["image"]}],
             observation=f"Drew {result.drawn} objects in Paint (window {out['hwnd']}, canvas {canvas.width}x"
-                        f"{canvas.height}); {summary}" + (f" Warnings: {'; '.join(plan.warnings)}" if plan.warnings else ""),
+                        f"{canvas.height}); {summary}" + (f" Warnings: {'; '.join(plan.warnings)}" if plan.warnings else "")
+                        + verdict,
             backend=BACKEND)
 
     @registry.handler("paint.draw_image")
@@ -196,7 +298,7 @@ def register(registry: ToolRegistry) -> None:
             else:
                 traced = vectorize.vectorize(image, canvas, detail=detail, outline=bool(args.get("outline", True)))
             plan = geometry.plan_scene(traced.objects, canvas, check_overlaps=False)
-            session.plan, session.tolerance = plan, TRACE_TOLERANCE
+            session.plan, session.tolerance, session.info = plan, TRACE_TOLERANCE, None
             planned = vectorize.fidelity(image, raster.render_plan(plan), canvas)
             result, gate = run_gated(
                 plan, driver, request=f"redraw {source.name} in Paint ({style}, detail {detail})", directory=shots,
@@ -257,6 +359,48 @@ def register(registry: ToolRegistry) -> None:
                         f"likeness of the picture (structural similarity {score}). {summary}",
             backend=BACKEND)
 
+    @registry.handler("paint.save")
+    async def save(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        provider = await ctx.services.desktop()
+        session = await _session(ctx)
+        if session.hwnd is None:
+            raise ToolError(ErrorCode.WINDOW_NOT_FOUND, "no Paint window has been opened by paint.draw yet")
+        from lga_worker.paths import absolute_path
+
+        path = absolute_path(str(args["path"]))
+        saving.format_of(path)  # refuses an extension Paint does not write
+        overwrite = bool(args.get("overwrite"))
+        if path.exists() and not overwrite:
+            raise ToolError(ErrorCode.CONFLICT, f"{path} already exists; pass overwrite=true to replace it (a backup copy is made first)")
+        shots = ctx.artifact_dir("paint")
+
+        def work() -> dict[str, Any]:
+            driver = PaintDriver(provider, should_stop=ctx.cancel_event.is_set)
+            transform = driver.attach(session.hwnd, session.offset)
+            before = driver.capture()  # what the canvas shows right now: the saved file must show the same
+            backup = saving.backup_existing(path) if overwrite else None
+            started = time.time()
+            saved = provider.save_as(session.hwnd, path, overwrite, max(5.0, min(30.0, ctx.remaining_s() - 2)))
+            report = saving.verify_saved_file(path, (transform.canvas.width, transform.canvas.height), before, started_at=started)
+            return {"saved": saved, "report": report, "backup": backup, "canvas": transform.canvas}
+
+        out = await provider.executor.run(max(5.0, ctx.remaining_s()), work)
+        report = out["report"]
+        data = {"path": str(path), "size": path.stat().st_size if path.is_file() else 0, "format": saving.format_of(path),
+                "canvas": {"width": out["canvas"].width, "height": out["canvas"].height},
+                "verification": report.to_dict(), "backup": str(out["backup"]) if out["backup"] else None,
+                "overwritten": out["backup"] is not None}
+        if not report.ok:
+            raise ToolError(ErrorCode.VERIFICATION_FAILED, "the file was not saved correctly: " + "; ".join(report.failed()),
+                            retryable=False, details={"data": data})
+        return ToolOutcome(
+            data=data, checks=[Check("saved_file_verified", True, f"{path} reopened: {data['format']} {data['canvas']['width']}x"
+                                                                 f"{data['canvas']['height']}")],
+            artifacts=[{"kind": "image", "path": str(path)}], backend=BACKEND,
+            observation=f"Saved the canvas to {path} ({data['size']} bytes) and read it back: "
+                        + ", ".join(c.name for c in report.checks) + " all passed."
+                        + (f" The previous file was copied to {out['backup']}." if out["backup"] else ""))
+
     @registry.handler("paint.inspect")
     async def inspect(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
         provider = await ctx.services.desktop()
@@ -272,8 +416,11 @@ def register(registry: ToolRegistry) -> None:
             image = driver.capture()
             image.save(path, format="PNG")
             report = None
+            partial = None
             plan = session.plan
             if plan is not None and (plan.canvas.width, plan.canvas.height) == (image.width, image.height):
+                partial = {"canvas_safety": quality.canvas_safety(plan, image, window_ok=None, screenshot=str(path)),
+                           "character_fidelity": quality.character_fidelity(plan, image, session.info)}
                 report = verify.compare(plan, image, scale=transform.scale,
                                         fill_ok=verify.FILL_TRACED_OK if session.tolerance > 0 else verify.FILL_SAMPLE_OK,
                                         check_strokes=session.tolerance <= 0)
@@ -282,7 +429,7 @@ def register(registry: ToolRegistry) -> None:
                         report.ok = True
                         report.notes.append(f"{len(report.failed_ids)} of {len(plan.objects)} regions differ (within tolerance)")
             return {"canvas": transform.canvas, "scale": transform.scale, "tool": driver._active_tool(),
-                    "image": str(path), "report": report}
+                    "image": str(path), "report": report, "partial": partial}
 
         out = await provider.executor.run(max(5.0, ctx.remaining_s()), work)
         canvas, report = out["canvas"], out["report"]
@@ -291,6 +438,8 @@ def register(registry: ToolRegistry) -> None:
                 "units": {"x": 1000, "y": round(canvas.unit_height)}, "scale": out["scale"], "tool": out["tool"],
                 "screenshot": out["image"], "matches_plan": matches,
                 "failed_objects": [] if report is None else report.failed_ids}
+        if out["partial"] is not None:
+            data["quality"] = out["partial"]  # safety and fidelity only: execution and visual quality need a drawing run
         verdict = ("no drawing has been made yet" if report is None else report.summary())
         return ToolOutcome(
             data=data, artifacts=[{"kind": "screenshot", "path": out["image"]}],

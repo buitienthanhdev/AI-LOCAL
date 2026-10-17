@@ -62,6 +62,9 @@ ENUMS = {
     "medium.opacity_behavior": {"transparent", "translucent", "opaque"},
     "color_lighting.color_temperature": {"warm", "neutral", "cool"},
     "execution.completion_status": {"pending", "running", "verified", "failed"},
+    # `verified` above only says the canvas matches the plan (execution); the picture's quality is a separate verdict
+    "execution.visual_quality_status": {"not_assessed", "passed", "failed"},
+    "metadata.reference_status": {"AVAILABLE", "OFFLINE_TEMPLATE", "NONE"},
 }
 GROUP_FIELDS: dict[str, dict[str, tuple[type | tuple[type, ...], bool]]] = {
     # field -> (type, may be null when listed in admin.not_applicable)
@@ -468,6 +471,7 @@ class ExecutionGate:
     validated: bool = False
     ready: bool = False
     events: list[dict[str, Any]] = field(default_factory=list)
+    quality: dict[str, Any] | None = None  # the four verdicts of `paint.quality.assess` (None: not assessed)
 
     def is_open(self) -> bool:
         return self.validated and self.ready and self.run.state == State.DRAWING
@@ -551,8 +555,14 @@ def specification_summary(gate: ExecutionGate, issues: list[Issue] | None = None
 def run_gated(plan: Plan, driver: Any, *, request: str, directory: Path | None, brief: dict[str, Any] | None = None,
               mode: Mode | None = None, source: dict[str, Any] | None = None, reference: Any = None,
               user_supplied_plan: bool = True, should_stop: Callable[[], bool] = lambda: False,
-              tolerance: float = 0.0, resume: bool = False) -> tuple[engine.DrawResult, ExecutionGate]:
-    """Specification -> validation -> plan -> readiness -> drawing -> result validation. The only way to draw."""
+              tolerance: float = 0.0, resume: bool = False,
+              assess: Callable[[Plan, Any, engine.DrawResult, str | None, bool | None], dict[str, Any]] | None = None
+              ) -> tuple[engine.DrawResult, ExecutionGate]:
+    """Specification -> validation -> plan -> readiness -> drawing -> result validation. The only way to draw.
+
+    `assess(plan, image, result, screenshot_path, window_ok)` measures the picture (execution, fidelity, visual quality
+    and canvas safety are separate verdicts, see `paint.quality`); its result is kept in the specification next to,
+    never inside, the execution status."""
     gate = ExecutionGate()
     run = gate.run
     run.go(State.ANALYZING_REQUEST, request=request[:120])
@@ -603,8 +613,24 @@ def run_gated(plan: Plan, driver: Any, *, request: str, directory: Path | None, 
     spec["execution"]["completion_status"] = "running"
     if hasattr(driver, "gate"):
         driver.gate = gate
+    stage_shots: list[dict[str, Any]] = []
+
+    def on_stage(index: int, stage: engine.Stage, report: Any) -> None:
+        shot_path = None
+        if directory is not None:
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                shot_path = str(directory / f"stage-{index}-{stem}.png")
+                driver.capture().save(shot_path, format="PNG")
+            except Exception:  # noqa: BLE001 - a missing stage screenshot is recorded as such, never invented
+                shot_path = None
+        stage_shots.append({"stage": index, "objects": len(stage.objects), "up_to_layer": stage.up_to_layer, "ok": stage.ok,
+                            "failed": list(stage.failed), "repaired": list(stage.repaired),
+                            "spill_ratio": round(stage.spill_ratio, 4), "screenshot": shot_path})
+
     try:
-        outcome = engine.run_plan(plan, driver, should_stop=should_stop, tolerance=tolerance, resume=resume)
+        outcome = engine.run_plan(plan, driver, should_stop=should_stop, tolerance=tolerance, resume=resume,
+                                  on_stage=on_stage)
     except ToolError as exc:
         run.go(State.RECOVERING, error=exc.message[:200])
         run.go(State.FAILED, reason=exc.message[:200])
@@ -629,7 +655,20 @@ def run_gated(plan: Plan, driver: Any, *, request: str, directory: Path | None, 
         shot = None
     actual = {"ok": bool(outcome.ok), "drawn": outcome.drawn, "failed_objects": outcome.final.failed_ids,
               "spill_ratio": round(outcome.final.spill_ratio, 4), "summary": outcome.final.summary(), "screenshot": shot,
-              "events": outcome.events, "skipped_fills": outcome.skipped_fills}
+              "events": outcome.events, "skipped_fills": outcome.skipped_fills, "stages": stage_shots}
+    spec["execution"]["visual_quality_status"] = "not_assessed"
+    if assess is not None and shot is not None:
+        try:
+            window_ok = None
+            if hasattr(driver, "probe"):
+                window_ok = bool(driver.probe().get("window_ok", True))
+            gate.quality = assess(plan, img, outcome, shot, window_ok)
+            actual["quality"] = gate.quality
+            spec["execution"]["draw_execution_pass"] = gate.quality["DRAW_EXECUTION_PASS"]
+            spec["execution"]["visual_quality_pass"] = gate.quality["VISUAL_QUALITY_PASS"]
+            spec["execution"]["visual_quality_status"] = "passed" if gate.quality["VISUAL_QUALITY_PASS"] else "failed"
+        except Exception as exc:  # noqa: BLE001 - an assessment that could not run is reported, not guessed
+            actual["quality_error"] = f"{type(exc).__name__}: {exc}"
     spec["execution"]["actual_result"] = actual
     spec["admin"]["evidence"] = ([{"kind": "screenshot", "path": shot, "at": spec_mod.datetime.now(spec_mod.timezone.utc).isoformat(timespec="seconds")}]
                                  if shot else [])
