@@ -714,6 +714,660 @@
       "verification": "none",
       "side_effects": "none",
       "policy_category": "office.read"
+    },
+    {
+      "name": "office.word_toc",
+      "description": "Insert or update the table of contents of a Word document through Word (headings up to `levels`), update all fields, save. Verifies that the TOC entries match the document headings (Word read-back + saved file); fails with VERIFICATION_FAILED when the document has no headings or the entries differ.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "action": {
+            "enum": [
+              "insert",
+              "update"
+            ],
+            "default": "insert"
+          },
+          "levels": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9,
+            "default": 3
+          },
+          "location": {
+            "enum": [
+              "start",
+              "end"
+            ],
+            "default": "start"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.write"
+    },
+    {
+      "name": "office.word_review",
+      "description": "Word review through Word: set Track Changes on/off (track), make replacements (replace: {old: new}) with that setting so they are recorded as revisions, add a comment (comment: {text, anchor?, author?}), and always list the tracked revisions and comments. Accepting or rejecting ALL revisions happens only when resolve:{action:'accept'|'reject'} is given explicitly. With no change argument it only lists (nothing is saved).",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "track": {
+            "type": "boolean"
+          },
+          "replace": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "comment": {
+            "type": "object",
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1
+              },
+              "anchor": {
+                "type": "string"
+              },
+              "author": {
+                "type": "string"
+              }
+            }
+          },
+          "resolve": {
+            "type": "object",
+            "required": [
+              "action"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "enum": [
+                  "accept",
+                  "reject"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.write"
+    },
+    {
+      "name": "office.word_layout",
+      "description": "Page layout through Word for every section: page numbers (PAGE field in footer or header, aligned), header text, footer text, margins in cm (margins_cm: {top,bottom,left,right}), orientation. Setting header/footer text or page numbers replaces that header/footer's content. Reads the layout back from Word and from the saved file.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "page_numbers": {
+            "type": "boolean"
+          },
+          "page_number_position": {
+            "enum": [
+              "footer",
+              "header"
+            ],
+            "default": "footer"
+          },
+          "page_number_alignment": {
+            "enum": [
+              "left",
+              "center",
+              "right"
+            ],
+            "default": "center"
+          },
+          "header_text": {
+            "type": "string"
+          },
+          "footer_text": {
+            "type": "string"
+          },
+          "margins_cm": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "top": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 20
+              },
+              "bottom": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 20
+              },
+              "left": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 20
+              },
+              "right": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 20
+              }
+            }
+          },
+          "orientation": {
+            "enum": [
+              "portrait",
+              "landscape"
+            ]
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.write"
+    },
+    {
+      "name": "office.excel_pivot",
+      "description": "Create a PivotTable from a header+data range through Excel (rows, columns, values: [{field, function: sum|count|average|max|min}] or field names = sum) on a new sheet (dest_sheet, default 'Pivot'), save, and read its result back. Verifies the grand total and (single row field) every group against values computed from the source. action 'read' lists the existing pivot tables and their results.",
+      "input_schema": {
+        "type": "object",
+        "required": [],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "action": {
+            "enum": [
+              "create",
+              "read"
+            ],
+            "default": "create"
+          },
+          "sheet": {
+            "type": "string"
+          },
+          "source_range": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "values": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "field"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "field": {
+                      "type": "string"
+                    },
+                    "function": {
+                      "enum": [
+                        "sum",
+                        "count",
+                        "average",
+                        "max",
+                        "min"
+                      ],
+                      "default": "sum"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "dest_sheet": {
+            "type": "string",
+            "default": "Pivot"
+          },
+          "dest_cell": {
+            "type": "string",
+            "default": "A3"
+          },
+          "name": {
+            "type": "string",
+            "default": "PivotTable1"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.write"
+    },
+    {
+      "name": "office.excel_chart",
+      "description": "Create an embedded chart (column|bar|line|pie|scatter|area) from a header+data range through Excel, optional title and top-left cell, save. Reads back chart type, series and points from Excel and from the saved package.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "source_range"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sheet": {
+            "type": "string"
+          },
+          "source_range": {
+            "type": "string",
+            "minLength": 1
+          },
+          "chart_type": {
+            "enum": [
+              "column",
+              "bar",
+              "line",
+              "pie",
+              "scatter",
+              "area"
+            ],
+            "default": "column"
+          },
+          "title": {
+            "type": "string"
+          },
+          "dest_cell": {
+            "type": "string"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.write"
+    },
+    {
+      "name": "office.excel_format",
+      "description": "Format a range through Excel: number_format (e.g. '0.00', '#,##0', 'dd/mm/yyyy'), conditional formatting rules (conditional: [{kind:'cell_value', operator: greater|less|equal|not_equal|greater_equal|less_equal|between|not_between, value, value2?, fill_color?, font_color?} | {kind:'expression', formula, fill_color?, font_color?}]) and data validation (validation: {type: list|whole|decimal|date|text_length|custom, source (list, comma separated) | min/max/value + operator | formula, error_message?, prompt?}). Reads everything back from Excel and the saved sheet XML.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "range"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "sheet": {
+            "type": "string"
+          },
+          "range": {
+            "type": "string",
+            "minLength": 1
+          },
+          "number_format": {
+            "type": "string"
+          },
+          "replace_existing": {
+            "type": "boolean",
+            "default": true
+          },
+          "conditional": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "kind"
+              ],
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "cell_value",
+                    "expression"
+                  ]
+                },
+                "operator": {
+                  "enum": [
+                    "greater",
+                    "less",
+                    "equal",
+                    "not_equal",
+                    "greater_equal",
+                    "less_equal",
+                    "between",
+                    "not_between"
+                  ]
+                },
+                "value": {},
+                "value2": {},
+                "formula": {
+                  "type": "string"
+                },
+                "fill_color": {
+                  "type": "string",
+                  "pattern": "^#[0-9a-fA-F]{6}$"
+                },
+                "font_color": {
+                  "type": "string",
+                  "pattern": "^#[0-9a-fA-F]{6}$"
+                }
+              }
+            }
+          },
+          "validation": {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "enum": [
+                  "list",
+                  "whole",
+                  "decimal",
+                  "date",
+                  "text_length",
+                  "custom"
+                ]
+              },
+              "source": {
+                "type": "string"
+              },
+              "formula": {
+                "type": "string"
+              },
+              "operator": {
+                "enum": [
+                  "greater",
+                  "less",
+                  "equal",
+                  "not_equal",
+                  "greater_equal",
+                  "less_equal",
+                  "between",
+                  "not_between"
+                ]
+              },
+              "min": {},
+              "max": {},
+              "value": {},
+              "error_message": {
+                "type": "string"
+              },
+              "prompt": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.write"
+    },
+    {
+      "name": "office.ppt_create",
+      "description": "Create a new PowerPoint deck through PowerPoint (default Office theme): a title slide (title, subtitle) plus content slides from `slides` [{title, bullets[], notes?}], saved as .pptx. Refuses to overwrite unless overwrite=true. Reads it back from PowerPoint and from the saved file and runs office.verify on every slide.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path",
+          "title"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "(?i)\\.pptx$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "subtitle": {
+            "type": "string"
+          },
+          "slides": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "title"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "bullets": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "notes": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "theme": {
+            "enum": [
+              "default"
+            ],
+            "default": "default"
+          },
+          "overwrite": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.write"
+    },
+    {
+      "name": "office.ppt_read",
+      "description": "Read a PowerPoint deck through PowerPoint (read only): per slide the title, bullet/body paragraphs, speaker notes and layout.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "side_effects": "none",
+      "policy_category": "office.read"
+    },
+    {
+      "name": "office.ppt_edit",
+      "description": "Edit an existing deck through PowerPoint and save: add_slide {title, bullets?, notes?, position?}, replace {old: new} on all slide text, notes {slide, text} (speaker notes). Re-reads the deck from PowerPoint and from the saved file and runs office.verify on every slide.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "replace": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "add_slide": {
+            "type": "object",
+            "required": [
+              "title"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "title": {
+                "type": "string",
+                "minLength": 1
+              },
+              "bullets": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "notes": {
+                "type": "string"
+              },
+              "position": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "notes": {
+            "type": "object",
+            "required": [
+              "slide",
+              "text"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "slide": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "text": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 120000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "yes",
+      "policy_category": "office.write"
     }
   ]
 }
