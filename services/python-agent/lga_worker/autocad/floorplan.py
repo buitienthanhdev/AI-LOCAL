@@ -610,3 +610,12 @@ def opening_shapes(op: Opening, thickness: float) -> list[Shape]:
         start, end = (a_leaf, a_closed) if quarter else (a_closed, a_leaf)
         shapes.append(Shape("arc", (hx, hy, size, start, end)))
     return shapes
+
+
+def expected_entity_count(plan: Plan) -> int:
+    """Entities `provider.draw_plan` creates for this plan: filled walls (outline + hatch), door/window symbols,
+    furniture, porch, room labels, title, area table and dimensions."""
+    count = 2 * len(plan.walls)
+    for op in plan.openings:
+        count += len(opening_shapes(op, plan.wall_thickness.get((op.orient, round(op.line, 4)), INTERIOR_WALL)))
+    return count + len(plan.furniture) + len(plan.porch_shapes) + len(plan.labels) + 2 + len(plan.dimensions)

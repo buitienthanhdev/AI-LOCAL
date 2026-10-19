@@ -193,6 +193,9 @@ def build_report(*, project: str, profile: Mapping[str, Any] | None = None, mode
                  code_review: Mapping[str, Any] | None = None, issue_config: Mapping[str, Any] | None = None,
                  inputs: Sequence[str] = ()) -> dict[str, Any]:
     evidence = dict(evidence or {})
+    reopen = evidence.get("dwg_reopen_check")
+    if isinstance(reopen, Mapping):  # real re-open evidence (autocad.reopen_check) overrides the caller's flag
+        evidence["dwg_opened_in_autocad"] = bool(reopen.get("opened")) and not reopen.get("differences")
     profile_report = check_profile(profile).to_dict() if profile is not None else None
     facts = [file_facts(p) for p in outputs]
     existing = [f for f in facts if f["exists"]]
@@ -235,6 +238,12 @@ def build_report(*, project: str, profile: Mapping[str, Any] | None = None, mode
                    + ", ".join(claimed) + ". File existence and headers were checked by the report itself.")
     if not evidence.get("dwg_opened_in_autocad"):
         lim.append("The DWG was not confirmed to open in AutoCAD in this run.")
+    if isinstance(reopen, Mapping):
+        lim.append("DWG re-open evidence (autocad.reopen_check): the saved file was opened again in AutoCAD and its entity "
+                   f"counts compared with {reopen.get('compared', 'the drawing')}: "
+                   + ("equal." if evidence["dwg_opened_in_autocad"] else f"NOT confirmed ({'; '.join(map(str, reopen.get('differences') or ['could not be opened']))})."))
+    elif evidence.get("dwg_opened_in_autocad"):
+        lim.append("dwg_opened_in_autocad is a caller flag without re-open evidence (autocad.reopen_check was not supplied).")
     if not evidence.get("autocad_session"):
         lim.append("No live AutoCAD session was used as evidence (no AUDIT, no regenerate, no plot test).")
     if not (pdf and evidence.get("pdf_rendered_checked")):

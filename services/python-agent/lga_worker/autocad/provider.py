@@ -45,7 +45,8 @@ import psutil
 from lga_common.config import Config
 
 from lga_worker import inventory
-from lga_worker.autocad import com, floorplan, geometry
+from lga_worker.autocad import com, com_extra, floorplan, geometry
+from lga_worker.autocad.provider_layouts import LayoutMixin
 from lga_worker.errors import ErrorCode, ToolError
 from lga_worker.sta import StaExecutor
 
@@ -198,6 +199,9 @@ class EraseResult:
 class PlanResult:
     document: str
     counts: dict[str, int]
+    skipped: bool = False  # an earlier call with the same marker already drew this; nothing was added
+    reused: int = 0  # entities found carrying the marker
+    replaced: int = 0  # earlier entities erased before drawing again (if_exists="replace")
 
 
 @dataclass
@@ -209,6 +213,9 @@ class PrimsResult:
     entities_after: int
     layers_created: list[str]
     hatch_failures: list[str]
+    skipped: bool = False
+    reused: int = 0
+    replaced: int = 0
 
 
 @dataclass
@@ -261,7 +268,7 @@ def _style_dimension(d: Any, text_height: float) -> None:
             pass
 
 
-class AutoCadProvider:
+class AutoCadProvider(LayoutMixin):
     def __init__(self, config: Config) -> None:
         self.settings = AutoCadSettings.from_config(config)
         self.executor = StaExecutor("autocad")
@@ -796,8 +803,50 @@ class AutoCadProvider:
 
     # ------------------------------------------------------------------ whole drawings
 
+    # ------------------------------------------------------------------ idempotency markers (XData application LGA_OP)
+
+    def _find_marked(self, container: Any, marker: str | None, deadline: float) -> list[Any]:
+        """Entities of a model/paper space whose XData marker equals `marker` (written by an earlier draw call); with
+        marker=None every entity carrying this tool's XData, whatever the marker."""
+
+        def scan() -> list[Any]:
+            found: list[Any] = []
+            for index in range(int(container.Count)):
+                entity = container.call("Item", index)
+                data = com_extra.get_xdata(entity)
+                if data and (marker is None or data[0] == marker):
+                    found.append(entity)
+            return found
+
+        return self._idempotent("scan for entities of an earlier identical call", scan, deadline)
+
+    def _apply_if_exists(self, doc: Any, container: Any, marker: str, if_exists: str, deadline: float,
+                         expect: int | None = None) -> tuple[list[Any], int]:
+        """Register the marker application; return (earlier entities to reuse, number erased).
+
+        if_exists "skip": the earlier entities are returned and nothing must be drawn. "replace": they are erased.
+        "error": a ToolError(CONFLICT). With nothing found both values are empty. When `expect` is given and a "skip" finds
+        a different number of entities, the earlier call was cut short (AutoCAD busy, cancelled): the partial remains are
+        erased like "replace" so the drawing is completed, never left half drawn or doubled.
+        """
+        if if_exists not in ("skip", "replace", "error"):
+            raise ToolError(ErrorCode.INVALID_ARGUMENT, f"if_exists must be skip, replace or error, got {if_exists!r}")
+        self._idempotent("register marker application", lambda: com_extra.register_app(doc), deadline)
+        found = self._find_marked(container, marker, deadline)
+        if not found:
+            return [], 0
+        if if_exists == "skip" and (expect is None or len(found) == expect):
+            return found, 0
+        if if_exists == "error":
+            raise ToolError(ErrorCode.CONFLICT, f"{len(found)} entities of an earlier identical call ({marker}) are in "
+                            "the drawing; use if_exists=skip or replace")
+        for entity in found:
+            self._idempotent("erase an entity of the earlier call", lambda e=entity: e.call("Delete"), deadline)
+        return [], len(found)
+
     def draw_plan(self, plan: floorplan.Plan, new_document: bool, origin: tuple[float, float], *,
-                  deadline: float) -> PlanResult:
+                  deadline: float, marker: str | None = None, if_exists: str = "skip",
+                  expect: int | None = None) -> PlanResult:
         """Draw a computed floor plan (walls filled, doors with swings, windows, furniture, labels, dimensions,
         title, area table) as one undo step, then zoom to it."""
 
@@ -817,6 +866,15 @@ class AutoCadProvider:
             ms = self._idempotent("open model space", lambda: doc.ModelSpace, deadline)
             ox, oy = origin
             counts: dict[str, int] = {}
+            replaced = 0
+            if marker is not None:
+                earlier, replaced = self._apply_if_exists(doc, ms, marker, if_exists, deadline, expect)
+                if earlier:
+                    by_role: dict[str, int] = {}
+                    for entity in earlier:
+                        role_name = next((r for r, (ln, _c) in PLAN_LAYERS.items() if ln == str(entity.Layer)), "other")
+                        by_role[role_name] = by_role.get(role_name, 0) + 1
+                    return PlanResult(document=name, counts=by_role, skipped=True, reused=len(earlier))
 
             def pt(x: float, y: float) -> Any:
                 return com.double_array((x + ox, y + oy, 0.0))
@@ -824,6 +882,8 @@ class AutoCadProvider:
             def put(entity: Any, role: str) -> Any:
                 entity.Layer = PLAN_LAYERS[role][0]
                 counts[role] = counts.get(role, 0) + 1
+                if marker is not None:
+                    com_extra.set_xdata(entity, [marker, role])
                 return entity
 
             def shape(s: floorplan.Shape, role: str) -> None:
@@ -877,12 +937,13 @@ class AutoCadProvider:
             finally:
                 doc.call("EndUndoMark")
             self._idempotent("zoom extents", lambda: app.call("ZoomExtents"), deadline)
-            return PlanResult(document=name, counts=counts)
+            return PlanResult(document=name, counts=counts, replaced=replaced)
 
         return self._guard("draw floor plan", run)
 
     def draw_prims(self, prims: Sequence[Any], layers: Mapping[str, tuple[str, int]], origin: tuple[float, float],
-                   text_height: float, new_document: bool, *, deadline: float) -> PrimsResult:
+                   text_height: float, new_document: bool, *, deadline: float, marker: str | None = None,
+                   if_exists: str = "skip", expect: int | None = None) -> PrimsResult:
         """Draw the primitives of `houseviews` (line, poly, circle, arc, text, dim, cut) in model space at `origin`,
         1:1, every entity on its layer and otherwise ByLayer, as one undo step. `layers` maps the standard layer name of
         each primitive to (layer name in the file, ACI colour); missing layers are created, existing ones are left as
@@ -911,6 +972,19 @@ class AutoCadProvider:
             counts: dict[str, int] = {}
             by_layer: dict[str, int] = {}
             hatch_failures: list[str] = []
+            replaced = 0
+            role_box = [""]
+            if marker is not None:
+                earlier, replaced = self._apply_if_exists(doc, ms, marker, if_exists, deadline, expect)
+                if earlier:
+                    for entity in earlier:
+                        lname = str(entity.Layer)
+                        by_layer[lname] = by_layer.get(lname, 0) + 1
+                    return PrimsResult(document=name, counts={"reused": len(earlier)}, by_layer=by_layer,
+                                       entities_before=before, entities_after=before, layers_created=created_layers,
+                                       hatch_failures=[], skipped=True, reused=len(earlier))
+                if replaced:
+                    before = int(self._idempotent("count model space", lambda: ms.Count, deadline))
 
             def pt(x: float, y: float) -> Any:
                 return com.double_array((x + ox, y + oy, 0.0))
@@ -920,6 +994,8 @@ class AutoCadProvider:
                 entity.Layer = office
                 counts[kind] = counts.get(kind, 0) + 1
                 by_layer[office] = by_layer.get(office, 0) + 1
+                if marker is not None:
+                    com_extra.set_xdata(entity, [marker, role_box[0] or kind])
                 return entity
 
             def polyline(coords: Sequence[float], closed: bool) -> Any:
@@ -934,6 +1010,7 @@ class AutoCadProvider:
             try:
                 for prim in prims:
                     v = prim.pts
+                    role_box[0] = prim.semantic or prim.kind
                     if prim.kind == "line":
                         put(ms.call("AddLine", pt(v[0], v[1]), pt(v[2], v[3])), "line", prim.layer)
                     elif prim.kind == "poly":
@@ -971,7 +1048,8 @@ class AutoCadProvider:
             after = int(self._idempotent("count model space", lambda: ms.Count, deadline))
             self._idempotent("zoom extents", lambda: app.call("ZoomExtents"), deadline)
             return PrimsResult(document=name, counts=counts, by_layer=by_layer, entities_before=before,
-                               entities_after=after, layers_created=created_layers, hatch_failures=hatch_failures)
+                               entities_after=after, layers_created=created_layers, hatch_failures=hatch_failures,
+                               replaced=replaced)
 
         return self._guard("draw view", run)
 

@@ -27,6 +27,10 @@ from lga_worker.autocad.housemodel import (
     SIDES,
     HouseModel,
     Opening,
+    ceiling_level_id,
+    floor_level_id,
+    floor_number,
+    plan_sheet_code,
 )
 
 EPS = 1e-6
@@ -234,6 +238,12 @@ def elevation_view(model: HouseModel, side: str) -> View:
         d.rect("A-WALL-EXT", lo, z_g, hi, z_p, semantic="body")
         d.line("A-ROOF", lo, z_e, hi, z_e, semantic="roof")
         top_level = LEVEL_PARAPET
+    # lines of the floor slabs on a multi-storey facade
+    for n in range(2, model.floors + 1):
+        for lid_ in (ceiling_level_id(n - 1), floor_level_id(n)):
+            zl = model.elevation(lid_)
+            d.line("A-WALL-EXT", lo, zl, hi, zl, semantic="floor_line", ref=lid_)
+    z_post = model.elevation(floor_level_id(2)) if model.floors > 1 else z_e
     # porch posts: visible in the front and the side views
     if side != "rear":
         for x0, x1 in model.porch_columns:
@@ -241,7 +251,7 @@ def elevation_view(model: HouseModel, side: str) -> View:
                 a, b = x0, x1
             else:
                 a, b = sorted((h(0.0, 0.0), h(0.0, 0.3)))
-            d.rect("A-COLUMN-ARCH", a, z_g, b, z_e, semantic="porch_post")
+            d.rect("A-COLUMN-ARCH", a, z_g, b, z_post, semantic="porch_post")
             if side != "front":
                 break
     # openings of this facade, from the same records as the plan symbols and the schedules
@@ -250,22 +260,24 @@ def elevation_view(model: HouseModel, side: str) -> View:
             continue
         a, b = _opening_h(model, o, side)
         layer = "A-WINDOW" if o.etype == "WINDOW" else "A-DOOR"
-        d.rect(layer, a, o.sill, b, o.head, semantic="opening", ref=o.code, data={"type": o.etype})
+        zf = model.elevation(o.level_id)
+        d.rect(layer, a, zf + o.sill, b, zf + o.head, semantic="opening", ref=o.code,
+               data={"type": o.etype, "floor_z": zf, "level_id": o.level_id})
         if o.etype == "WINDOW":
-            d.line("A-GLAZING", (a + b) / 2, o.sill, (a + b) / 2, o.head, semantic="glazing", ref=o.code)
+            d.line("A-GLAZING", (a + b) / 2, zf + o.sill, (a + b) / 2, zf + o.head, semantic="glazing", ref=o.code)
         elif o.kind == "double":
-            d.line("A-DOOR", (a + b) / 2, o.sill, (a + b) / 2, o.head, semantic="leaf_split", ref=o.code)
-        d.text("A-ANNO-TEXT", (a + b) / 2, o.head + 0.1, o.code, d.th * 0.85, BC, semantic="opening_tag", ref=o.code)
+            d.line("A-DOOR", (a + b) / 2, zf + o.sill, (a + b) / 2, zf + o.head, semantic="leaf_split", ref=o.code)
+        d.text("A-ANNO-TEXT", (a + b) / 2, zf + o.head + 0.1, o.code, d.th * 0.85, BC, semantic="opening_tag", ref=o.code)
     # levels, on the left of the building
     x1 = lo - 0.15
     x0 = lo - 3.4
-    for level_id in (LEVEL_GROUND, LEVEL_FLOOR, LEVEL_ROOF, top_level):
+    for level_id in (LEVEL_GROUND, *model.floor_ids, LEVEL_ROOF, top_level):
         _level_mark(d, model, level_id, x0, x1)
     # dimensions
     xd = hi + 1.2
-    z_f = model.elevation(LEVEL_FLOOR)
     z_top = model.elevation(top_level)
-    for za, zb in ((z_g, z_f), (z_f, z_e), (z_e, z_top)):
+    chain = [z_g] + [model.elevation(i) for i in model.floor_ids] + [z_e, z_top]
+    for za, zb in zip(chain, chain[1:]):
         if zb - za > 0.05:
             d.dim(hi + 0.3, za, hi + 0.3, zb, xd, (za + zb) / 2)
     d.dim(lo, z_g, hi, z_g, mid, z_g - 1.1)
@@ -285,7 +297,8 @@ def _measure_openings(prims: Sequence[Prim], side: str) -> list[dict[str, Any]]:
             continue
         x0, z0, x1, z1 = _bbox_of(prim)
         out.append({"code": prim.ref, "type": prim.data.get("type"), "width": round(x1 - x0, 6),
-                    "height": round(z1 - z0, 6), "sill_height": round(z0, 6), "facade": side})
+                    "height": round(z1 - z0, 6), "sill_height": round(z0 - prim.data.get("floor_z", 0.0), 6),
+                    "facade": side, "level_id": prim.data.get("level_id")})
     return out
 
 
@@ -309,6 +322,10 @@ class Cut:
 
 
 def default_cut(model: HouseModel) -> Cut:
+    if model.stairs:  # through the middle of the first flight, parallel to the run: the section shows every floor and the stair
+        st = model.stairs[0]
+        x0, y0, x1, y1 = st.footprint
+        return Cut("x", round(x0 + st.width / 2, 4), 1)
     living = next((r for r in model.rooms if r.kind == "living"), model.rooms[0])
     x0, y0, x1, y1 = living.bbox
     return Cut("y", round((y0 + y1) / 2, 4), 1)
@@ -323,8 +340,11 @@ def check_cut(model: HouseModel, cut: Cut) -> Cut:
     if not cut.letter.strip() or len(cut.letter) > 3:
         raise ValueError("cut letter must be 1 to 3 characters")
     pos = default_cut(model).position if cut.position is None else float(cut.position)
-    if cut.position is None and cut.axis == "x":
+    if cut.position is None and cut.axis == "x" and not model.stairs:
         pos = model.width / 2
+    if cut.position is None and cut.axis == "y" and model.stairs and default_cut(model).axis == "x":
+        x0, y0, x1, y1 = model.stairs[0].footprint
+        pos = round((y0 + y1) / 2, 4)
     limit = model.depth if cut.axis == "y" else model.width
     if not 0.0 < pos < limit:
         raise ValueError(f"cut position {pos:g} must lie inside the house (0 to {limit:g} m)")
@@ -343,6 +363,44 @@ def _u_to_h(model: HouseModel, cut: Cut) -> Callable[[float], float]:
     return (lambda u: dep - u) if cut.direction > 0 else (lambda u: u)
 
 
+def _merge_intervals(items: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    out: list[tuple[float, float]] = []
+    for a, b in sorted(items):
+        if out and a <= out[-1][1] + EPS:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def _opening_intervals(model: HouseModel, cut: Cut, pos: float, to_level: str) -> list[tuple[float, float]]:
+    """Intervals along the cut (plan u coordinate) where the floor slab of `to_level` is open for a stair."""
+    found: list[tuple[float, float]] = []
+    for st in model.stairs:
+        if st.to_level != to_level:
+            continue
+        for x0, y0, x1, y1 in st.opening:
+            if cut.axis == "y" and y0 < pos < y1:
+                found.append((x0, x1))
+            elif cut.axis == "x" and x0 < pos < x1:
+                found.append((y0, y1))
+    return _merge_intervals(found)
+
+
+def _subtract(lo: float, hi: float, holes: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    pieces: list[tuple[float, float]] = []
+    cur = lo
+    for a, b in holes:
+        if b <= cur + EPS or a >= hi - EPS:
+            continue
+        if a > cur + EPS:
+            pieces.append((cur, a))
+        cur = max(cur, b)
+    if hi > cur + EPS:
+        pieces.append((cur, hi))
+    return pieces
+
+
 def section_view(model: HouseModel, cut: Cut) -> View:
     cut = check_cut(model, cut)
     pos = cut.position
@@ -351,14 +409,15 @@ def section_view(model: HouseModel, cut: Cut) -> View:
     H = _u_to_h(model, cut)
     perp = "v" if cut.axis == "y" else "h"
     z_g = model.elevation(LEVEL_GROUND)
-    z_c = model.elevation(LEVEL_CEILING)
+    top_ceiling = ceiling_level_id(model.floors)
+    z_c = model.elevation(top_ceiling)
     z_e = model.elevation(LEVEL_ROOF)
     slab = model.values["slab_thickness"]
     ov = model.roof["overhang"]
     pitched = model.roof["type"] == "pitched"
     d = _Draft(model.text_height * 0.9)
 
-    crossing = [wl for wl in model.walls if wl.orient == perp and wl.a < pos < wl.b]
+    crossing = [wl for wl in model.walls if wl.orient == perp and wl.a < pos < wl.b and wl.level_id == LEVEL_FLOOR]
     if not crossing:
         raise ValueError(f"the cut at {cut.axis}={pos:g} crosses no wall")
     lo_u = min(wl.line - wl.thickness / 2 for wl in crossing)
@@ -368,29 +427,39 @@ def section_view(model: HouseModel, cut: Cut) -> View:
         a, b = H(u0), H(u1)
         return min(a, b), max(a, b)
 
-    # slabs
+    # slabs: ground slab, one slab per upper floor (open where a stair passes), roof slab
     fa, fb = h_range(lo_u, hi_u)
     d.cut("A-SECTION-CUT", [(fa, -slab), (fb, -slab), (fb, 0.0), (fa, 0.0)], SLAB_HATCH, semantic="slab_floor", ref="SLAB-FLOOR")
+    for n in range(2, model.floors + 1):
+        z_below = model.elevation(ceiling_level_id(n - 1))
+        holes = _opening_intervals(model, cut, pos, floor_level_id(n))
+        for u0, u1 in _subtract(lo_u, hi_u, holes):
+            a, b = h_range(u0, u1)
+            d.cut("A-SECTION-CUT", [(a, z_below), (b, z_below), (b, z_below + slab), (a, z_below + slab)], SLAB_HATCH,
+                  semantic="slab_floor", ref=f"SLAB-F{n}")
     d.cut("A-SECTION-CUT", [(fa, z_c), (fb, z_c), (fb, z_e), (fa, z_e)], SLAB_HATCH, semantic="slab_roof", ref="SLAB-ROOF")
-    # cut walls, split around the openings they carry
-    for wl in crossing:
-        a, b = h_range(wl.line - wl.thickness / 2, wl.line + wl.thickness / 2)
-        gaps = sorted((o.sill, o.head, o.code) for o in model.openings
-                      if o.orient == wl.orient and abs(o.line - wl.line) < EPS and o.a < pos < o.b)
-        z_bottom = z_g if wl.exterior else 0.0
-        z = z_bottom
-        pieces: list[tuple[float, float]] = []
-        for sill, head, _code in gaps:
-            if sill > z + EPS:
-                pieces.append((z, sill))
-            z = max(z, head)
-        if z_c > z + EPS:
-            pieces.append((z, z_c))
-        for z0, z1 in pieces:
-            d.cut("A-SECTION-CUT", [(a, z0), (b, z0), (b, z1), (a, z1)], WALL_HATCH, semantic="cut_wall", ref=wl.id)
-        for sill, head, code in gaps:
-            d.line("A-SECTION-PROJ", a, sill, b, sill, semantic="opening_sill", ref=code)
-            d.line("A-SECTION-PROJ", a, head, b, head, semantic="opening_head", ref=code)
+    # cut walls of every floor, split around the openings they carry
+    for n in range(1, model.floors + 1):
+        lid = floor_level_id(n)
+        zf_n, zc_n = model.elevation(lid), model.elevation(ceiling_level_id(n))
+        for wl in [wl for wl in model.walls if wl.orient == perp and wl.a < pos < wl.b and wl.level_id == lid]:
+            a, b = h_range(wl.line - wl.thickness / 2, wl.line + wl.thickness / 2)
+            gaps = sorted((zf_n + o.sill, zf_n + o.head, o.code) for o in model.openings
+                          if o.level_id == lid and o.orient == wl.orient and abs(o.line - wl.line) < EPS and o.a < pos < o.b)
+            z_bottom = z_g if (wl.exterior and n == 1) else zf_n
+            z = z_bottom
+            pieces: list[tuple[float, float]] = []
+            for sill, head, _code in gaps:
+                if sill > z + EPS:
+                    pieces.append((z, sill))
+                z = max(z, head)
+            if zc_n > z + EPS:
+                pieces.append((z, zc_n))
+            for z0, z1 in pieces:
+                d.cut("A-SECTION-CUT", [(a, z0), (b, z0), (b, z1), (a, z1)], WALL_HATCH, semantic="cut_wall", ref=wl.id)
+            for sill, head, code in gaps:
+                d.line("A-SECTION-PROJ", a, sill, b, sill, semantic="opening_sill", ref=code)
+                d.line("A-SECTION-PROJ", a, head, b, head, semantic="opening_head", ref=code)
     # roof outline
     if pitched:
         if cut.axis == "y":
@@ -406,26 +475,26 @@ def section_view(model: HouseModel, cut: Cut) -> View:
         for u_edge, sign in ((lo_u, 1), (hi_u, -1)):
             a, b = h_range(u_edge, u_edge + sign * t0)
             d.cut("A-SECTION-CUT", [(a, z_e), (b, z_e), (b, z_p), (a, z_p)], WALL_HATCH, semantic="parapet")
-    # rooms the plane passes through: name and clear height
+    # rooms the plane passes through: name and clear height, on every floor
     stairs_out = _stairs(d, model, cut, H, pos)
-    clear: list[str] = []
     for room in model.rooms:
         x0, y0, x1, y1 = room.bbox
         inside = (y0 < pos < y1) if cut.axis == "y" else (x0 < pos < x1)
         if not inside:
             continue
+        n = model.floor_of(room.level_id)
+        zf_n, zc_n = model.elevation(room.level_id), model.elevation(ceiling_level_id(n))
         u0, u1 = (x0, x1) if cut.axis == "y" else (y0, y1)
         a, b = h_range(u0, u1)
-        d.text("A-ANNO-TEXT", (a + b) / 2, 0.55, room.name.upper(), d.th, MC, semantic="room_name", ref=room.code)
+        d.text("A-ANNO-TEXT", (a + b) / 2, zf_n + 0.55, room.name.upper(), d.th, MC, semantic="room_name", ref=room.code)
         xd = a + 0.45
-        d.dim(xd, 0.0, xd, z_c, xd, z_c / 2, semantic="clear_height", ref=room.code,
-              data={"from_level": LEVEL_FLOOR, "to_level": LEVEL_CEILING})
-        clear.append(room.code)
+        d.dim(xd, zf_n, xd, zc_n, xd, (zf_n + zc_n) / 2, semantic="clear_height", ref=room.code,
+              data={"from_level": room.level_id, "to_level": ceiling_level_id(n)})
     # levels and dimensions
     ext_lo, ext_hi = h_range(lo_u, hi_u)
     x1 = ext_lo - 0.15
     x0 = ext_lo - 3.4
-    for level_id in (LEVEL_GROUND, LEVEL_FLOOR, LEVEL_CEILING, LEVEL_ROOF):
+    for level_id in (LEVEL_GROUND, *model.floor_ids, top_ceiling, LEVEL_ROOF):
         _level_mark(d, model, level_id, x0, x1)
     d.line("A-SITE-CONTEXT", x0, z_g, ext_hi + 3.4, z_g, semantic="ground")
     d.dim(ext_lo, z_g, ext_hi, z_g, (ext_lo + ext_hi) / 2, z_g - 1.1)
@@ -438,9 +507,19 @@ def section_view(model: HouseModel, cut: Cut) -> View:
               "cut": {"axis": cut.axis, "position": pos, "direction": cut.direction},
               "levels": _measure_levels(d.prims), "clear_heights": _measure_clear(d.prims),
               "cut_walls": sorted({p.ref for p in d.prims if p.semantic == "cut_wall"}),
-              "slabs": [p.ref for p in d.prims if p.semantic.startswith("slab_")],
-              "stairs": stairs_out, "marker": marker.record}
+              "slabs": list(dict.fromkeys(p.ref for p in d.prims if p.semantic.startswith("slab_"))),
+              "slab_pieces": _measure_slabs(d.prims),
+              "stairs": stairs_out, "marker": marker.record, "floors": model.floors}
     return View(cut.view_id, "section", cut.sheet, f"MẶT CẮT {cut.code}", d.prims, record)
+
+
+def _measure_slabs(prims: Sequence[Prim]) -> list[dict[str, Any]]:
+    out = []
+    for p in prims:
+        if p.semantic.startswith("slab_"):
+            x0, z0, x1, z1 = _bbox_of(p)
+            out.append({"ref": p.ref, "u0": round(x0, 6), "u1": round(x1, 6), "z0": round(z0, 6), "z1": round(z1, 6)})
+    return out
 
 
 def _measure_clear(prims: Sequence[Prim]) -> list[dict[str, Any]]:
@@ -451,6 +530,51 @@ def _measure_clear(prims: Sequence[Prim]) -> list[dict[str, Any]]:
                         "from_level": p.data.get("from_level"), "to_level": p.data.get("to_level"),
                         "z_from": round(min(p.pts[1], p.pts[3]), 6)})
     return out
+
+
+def _stair_profiles(model: HouseModel, s: Any) -> dict[str, Any]:
+    """Section profiles of a designed stair in (u, z) with u measured along the run axis (plan metres).
+
+    A: the first flight (from the near end to the landing); B: the return flight of a U stair (landing back towards the
+    near end). Every riser is a vertical segment of the polyline, so the drawing can be counted back.
+    """
+    x0, y0, x1, y1 = s.footprint
+    u_lo, u_hi = (y0, y1) if s.run_axis == "y" else (x0, x1)
+    sign = s.run_sign
+    u_n, u_f = (u_lo, u_hi) if sign > 0 else (u_hi, u_lo)
+    zf, zt = model.elevation(s.from_level), model.elevation(s.to_level)
+    r = (zt - zf) / s.riser_count
+    tread = s.tread
+    parts = s.flights
+    n1 = parts[0]["risers"]
+    pts_a: list[tuple[float, float]] = [(u_n, zf)]
+    for i in range(1, n1 + 1):
+        u_i = u_n + sign * (i - 1) * tread
+        pts_a.append((u_i, zf + i * r))
+        if i < n1:
+            pts_a.append((u_i + sign * tread, zf + i * r))
+    if abs(pts_a[-1][0] - u_f) > EPS:
+        pts_a.append((u_f, zf + n1 * r))
+    out: dict[str, Any] = {"A": pts_a, "u_n": u_n, "u_f": u_f, "zf": zf, "zt": zt, "r": r, "z_land": zf + n1 * r}
+    if len(parts) == 2:
+        n2 = parts[1]["risers"]
+        u_b1 = u_f - sign * s.landing
+        z_l = zf + n1 * r
+        pts_b: list[tuple[float, float]] = [(u_b1, z_l)]
+        for j in range(1, n2 + 1):
+            u_j = u_b1 - sign * (j - 1) * tread
+            pts_b.append((u_j, z_l + j * r))
+            if j < n2:
+                pts_b.append((u_j - sign * tread, z_l + j * r))
+        if abs(pts_b[-1][0] - u_n) > EPS:
+            pts_b.append((u_n, zt))
+        out["B"] = pts_b
+        out["u_b1"] = u_b1
+    return out
+
+
+def _risers_in(pts: Sequence[tuple[float, float]]) -> int:
+    return sum(1 for (xa, za), (xb, zb) in zip(pts, pts[1:]) if abs(xa - xb) < EPS and zb > za + EPS)
 
 
 def _stairs(d: _Draft, model: HouseModel, cut: Cut, H: Callable[[float], float], pos: float) -> list[dict[str, Any]]:
@@ -470,6 +594,9 @@ def _stairs(d: _Draft, model: HouseModel, cut: Cut, H: Callable[[float], float],
             out.append({"id": s.id, "drawn_as": "end view (flight is perpendicular to the cut)",
                         "total_height": round(zt - zf, 6), "riser_count": None})
             continue
+        if s.flights:
+            out.append(_designed_stair_section(d, model, s, H, pos, cut, slab))
+            continue
         n = s.riser_count
         rise = (zt - zf) / n
         run = (u1 - u0) / n
@@ -485,10 +612,49 @@ def _stairs(d: _Draft, model: HouseModel, cut: Cut, H: Callable[[float], float],
         end_u = start_u + s.run_sign * run * (n - 1)
         d.cut("A-STAIR", pts + [(H(end_u), zt - slab), (H(start_u), zf - slab)], SLAB_HATCH, semantic="stair_cut", ref=s.id)
         ys = [p[1] for p in pts]
-        risers = sum(1 for (xa, za), (xb, zb) in zip(pts, pts[1:]) if abs(xa - xb) < EPS and zb > za)
         out.append({"id": s.id, "drawn_as": "profile", "total_height": round(max(ys) - min(ys), 6),
-                    "riser_count": risers})
+                    "riser_count": _risers_in(pts)})
     return out
+
+
+def _designed_stair_section(d: _Draft, model: HouseModel, s: Any, H: Callable[[float], float], pos: float, cut: Cut,
+                            slab: float) -> dict[str, Any]:
+    prof = _stair_profiles(model, s)
+    x0, y0, x1, y1 = s.footprint
+    across0, across1 = (x0, x1) if cut.axis == "x" else (y0, y1)
+    # which flight does the cut pass through? A is the first `width` of the footprint, B the last `width`
+    in_a = pos < across0 + s.width
+    in_b = len(s.flights) == 2 and pos > across1 - s.width
+    if len(s.flights) == 1:
+        in_a, in_b = True, False
+    a_pts = [(H(u), z) for u, z in prof["A"]]
+    b_pts = [(H(u), z) for u, z in prof["B"]] if "B" in prof else []
+    u_n, u_f, zf, zt = prof["u_n"], prof["u_f"], prof["zf"], prof["zt"]
+    if in_a:
+        d.poly("A-STAIR", a_pts, semantic="stair_profile", ref=s.id)
+        d.cut("A-STAIR", a_pts + [(H(u_f), prof["z_land"] - slab), (H(u_n), zf - slab)], SLAB_HATCH,
+              semantic="stair_cut", ref=s.id)
+    else:
+        d.poly("A-STAIR", a_pts, semantic="stair_proj", ref=s.id)
+    if b_pts:
+        if in_b:
+            d.poly("A-STAIR", b_pts, semantic="stair_profile", ref=s.id)
+            d.cut("A-STAIR", b_pts + [(H(u_n), zt - slab), (H(prof["u_b1"]), prof["z_land"] - slab)], SLAB_HATCH,
+                  semantic="stair_cut", ref=s.id)
+        else:
+            d.poly("A-STAIR", b_pts, semantic="stair_proj", ref=s.id)
+        if not in_a:  # the landing spans both flights and is cut wherever the cut passes
+            ua, ub = H(prof["u_b1"]), H(u_f)
+            lo, hi = min(ua, ub), max(ua, ub)
+            zl = prof["z_land"]
+            d.cut("A-STAIR", [(lo, zl - slab), (hi, zl - slab), (hi, zl), (lo, zl)], SLAB_HATCH,
+                  semantic="stair_landing", ref=s.id)
+    risers = _risers_in(a_pts) + _risers_in(b_pts)
+    ys = [p[1] for p in a_pts + b_pts]
+    return {"id": s.id, "drawn_as": "profile" + (" (cut through flight A)" if in_a else " (cut through flight B)" if in_b
+                                                 else " (cut between the flights: both seen beyond)"),
+            "total_height": round(max(ys) - min(ys), 6), "riser_count": risers,
+            "risers_per_flight": [_risers_in(a_pts)] + ([_risers_in(b_pts)] if b_pts else [])}
 
 
 @dataclass
@@ -544,10 +710,10 @@ def section_marker_view(model: HouseModel, cut: Cut) -> View:
 TABLES: dict[str, dict[str, Any]] = {
     "door": {"title": "BẢNG CỬA ĐI", "cols": [("code", "Mã", 1.0), ("type", "Loại", 1.4), ("width", "Rộng (m)", 1.5),
                                               ("height", "Cao (m)", 1.5), ("sill_height", "Bậu (m)", 1.5),
-                                              ("wall_id", "Tường", 1.2), ("facade", "Mặt", 1.4)]},
+                                              ("wall_id", "Tường", 1.9), ("facade", "Mặt", 1.4)]},
     "window": {"title": "BẢNG CỬA SỔ", "cols": [("code", "Mã", 1.0), ("width", "Rộng (m)", 1.5), ("height", "Cao (m)", 1.5),
                                                 ("sill_height", "Bậu (m)", 1.5), ("head_height", "Đỉnh (m)", 1.5),
-                                                ("wall_id", "Tường", 1.2), ("facade", "Mặt", 1.4)]},
+                                                ("wall_id", "Tường", 1.9), ("facade", "Mặt", 1.4)]},
     "room": {"title": "BẢNG PHÒNG VÀ DIỆN TÍCH (tim tường)", "cols": [("code", "Mã", 1.0), ("name", "Phòng", 4.2),
                                                                    ("area", "Diện tích (m²)", 2.4)]},
 }
@@ -555,35 +721,60 @@ NUMERIC_COLS = {"width", "height", "sill_height", "head_height", "area"}
 TOTAL_ROW = "Tổng"
 
 
-def _table_rows(model: HouseModel, kind: str) -> list[dict[str, Any]]:
+def _table_rows(model: HouseModel, kind: str, floor: int | None = None) -> list[dict[str, Any]]:
     if kind == "door":
-        return model.door_rows()
-    if kind == "window":
-        return model.window_rows()
-    return model.room_rows()
+        rows = model.door_rows()
+    elif kind == "window":
+        rows = model.window_rows()
+    else:
+        rows = model.room_rows()
+    if floor is not None:
+        rows = [r for r in rows if r["level_id"] == floor_level_id(floor)]
+    return rows
 
 
 def schedule_views(model: HouseModel) -> list[View]:
-    """Door, window and room tables as lines and text (local coordinates, the first table's top-left at 0,0)."""
+    """Door, window and room tables as lines and text (local coordinates, the first table's top-left at 0,0).
+    A multi-storey model gets one table of each kind per floor (ids SCH-DOOR-F2, ...)."""
     views: list[View] = []
     y = 0.0
     for kind, sheet in (("door", DOOR_SCHEDULE_SHEET), ("window", DOOR_SCHEDULE_SHEET), ("room", ROOM_SCHEDULE_SHEET)):
-        view = _table(model, kind, sheet, y)
-        views.append(view)
-        y = view.bbox[1] - 1.6
+        x = 0.0
+        lowest = y
+        for n in range(1, model.floors + 1):  # the floors side by side, the kinds one below the other
+            view = _table(model, kind, sheet, y, n if model.floors > 1 else None)
+            _shift_view(view, x)
+            views.append(view)
+            x = view.bbox[2] + 1.5
+            lowest = min(lowest, view.bbox[1])
+        y = lowest - 2.6
     return views
 
 
-def _table(model: HouseModel, kind: str, sheet: str, y_top: float) -> View:
+def _shift_view(view: View, dx: float) -> None:
+    """Move a table view right by dx (lines and texts only: that is all a table is made of)."""
+    if not dx:
+        return
+    for prim in view.prims:
+        pts = list(prim.pts)
+        idx = (0, 2) if prim.kind == "line" else (0,) if prim.kind == "text" else ()
+        for i in idx:
+            pts[i] += dx
+        prim.pts = tuple(pts)
+
+
+def _table(model: HouseModel, kind: str, sheet: str, y_top: float, floor: int | None = None) -> View:
     spec = TABLES[kind]
     cols = spec["cols"]
-    rows = _table_rows(model, kind)
+    rows = _table_rows(model, kind, floor)
+    title_text = spec["title"] + (f" - TẦNG {floor}" if floor else "")
+    level_id = floor_level_id(floor or 1)
     d = _Draft(model.text_height * 0.8)
     row_h = 0.62
     pad = 0.12
     widths = [c[2] for c in cols]
     total_w = sum(widths)
-    d.text("A-ANNO-TEXT", 0.0, y_top, spec["title"], model.text_height * 1.2, BL, semantic="table_title", ref=kind)
+    d.text("A-ANNO-TEXT", 0.0, y_top, title_text, model.text_height * 1.2, BL, semantic="table_title", ref=kind)
     top = y_top - 0.2
     body: list[list[str]] = [[c[1] for c in cols]]
     row_ids: list[str] = ["header"]
@@ -609,9 +800,10 @@ def _table(model: HouseModel, kind: str, sheet: str, y_top: float) -> View:
                 d.text("A-ANNO-TEXT", x + pad, top - i * row_h - row_h / 2, text, d.th, ML, semantic="cell", ref=kind,
                        data={"row": rid, "col": key})
             x += wcol
-    record = {"id": f"SCH-{kind.upper()}", "kind": "schedule", "schedule": kind, "sheet": sheet,
-              "label": spec["title"], "rows": _measure_table(d.prims, kind)}
-    return View(record["id"], "schedule", sheet, spec["title"], d.prims, record)
+    rid_ = f"SCH-{kind.upper()}" + (f"-F{floor}" if floor else "")
+    record = {"id": rid_, "kind": "schedule", "schedule": kind, "sheet": sheet,
+              "label": title_text, "level_id": level_id, "rows": _measure_table(d.prims, kind, level_id)}
+    return View(record["id"], "schedule", sheet, title_text, d.prims, record)
 
 
 def _cell_text(value: Any, key: str) -> str:
@@ -622,7 +814,7 @@ def _cell_text(value: Any, key: str) -> str:
     return str(value)
 
 
-def _measure_table(prims: Sequence[Prim], kind: str) -> list[dict[str, Any]]:
+def _measure_table(prims: Sequence[Prim], kind: str, level_id: str = "LV-F1") -> list[dict[str, Any]]:
     """Rows read back from the cell texts that were drawn (numbers parsed, decimal comma accepted)."""
     rows: dict[str, dict[str, Any]] = {}
     order: list[str] = []
@@ -644,13 +836,174 @@ def _measure_table(prims: Sequence[Prim], kind: str) -> list[dict[str, Any]]:
     for rid in order:
         row = dict(rows[rid])
         if rid == "total":
-            out.append({"code": row.get("code", TOTAL_ROW), "total": True, "area": row.get("area")})
+            out.append({"code": row.get("code", TOTAL_ROW), "total": True, "area": row.get("area"),
+                        "level_id": level_id})
         else:
+            row["level_id"] = level_id
             out.append(row)
     return out
 
 
+# --------------------------------------------------------------------------- stair symbol, slab opening and roof plan
+
+def _rect_union_outline(d: _Draft, layer: str, rects: Sequence[tuple[float, float, float, float]], **kw: Any) -> None:
+    for x0, y0, x1, y1 in rects:
+        d.rect(layer, x0, y0, x1, y1, **kw)
+
+
+def stair_plan_view(model: HouseModel, floor: int) -> View | None:
+    """The stair symbol and the slab opening on the plan of `floor` (plan metres, same origin as the plan itself).
+
+    * the stair that starts on this floor: outline, one line per riser face, landing edge, walking line with an arrow
+      and the text LÊN (not on the top floor);
+    * the stair that arrives on this floor (floor >= 2): the outline of the slab opening and the text XUỐNG at the
+      arrival end. On the top floor the arriving flights are drawn too, because nothing climbs further.
+    Returns None for a single-storey model.
+    """
+    if not model.stairs:
+        return None
+    lid = floor_level_id(floor)
+    up = next((s for s in model.stairs if s.from_level == lid), None)
+    arriving = next((s for s in model.stairs if s.to_level == lid), None)
+    th = model.text_height
+    d = _Draft(th * 0.8)
+
+    def draw_flights(s: Any, role: str) -> None:
+        x0, y0, x1, y1 = s.footprint
+        d.rect("A-STAIR", x0, y0, x1, y1, semantic="stair_outline", ref=s.id, data={"role": role})
+        if not s.flights:
+            return
+        sign = s.run_sign
+        near, far = (y0, y1) if sign > 0 else (y1, y0)
+        tread = s.tread
+        n1 = s.flights[0]["risers"]
+        xa0, xa1 = x0, (x0 + s.width if len(s.flights) == 2 else x1)
+        for i in range(n1):  # riser faces of the first flight (face i is where riser i+1 stands)
+            yy = near + sign * i * tread
+            d.line("A-STAIR", xa0, yy, xa1, yy, semantic="stair_riser", ref=s.id, data={"role": role, "flight": 1})
+        if len(s.flights) == 2:
+            n2 = s.flights[1]["risers"]
+            xb0, xb1 = x1 - s.width, x1
+            y_b1 = far - sign * s.landing
+            for j in range(n2):
+                yy = y_b1 - sign * j * tread
+                d.line("A-STAIR", xb0, yy, xb1, yy, semantic="stair_riser", ref=s.id, data={"role": role, "flight": 2})
+            d.line("A-STAIR", x0, y_b1, x1, y_b1, semantic="stair_landing_edge", ref=s.id, data={"role": role})
+            d.line("A-STAIR", x0 + s.width, near, x0 + s.width, far, semantic="stair_well", ref=s.id, data={"role": role})
+
+    def arrow(s: Any, x: float, y_from: float, y_to: float, text: str, role: str, tx: float, ty: float) -> None:
+        d.line("A-STAIR", x, y_from, x, y_to, semantic="stair_walkline", ref=s.id, data={"role": role})
+        sg = 1 if y_to > y_from else -1
+        d.poly("A-STAIR", [(x - 0.12, y_to - sg * 0.3), (x + 0.12, y_to - sg * 0.3), (x, y_to)], True,
+               semantic="stair_arrow", ref=s.id, data={"role": role})
+        d.text("A-ANNO-TEXT", tx, ty, text, th * 0.8, MC, semantic="stair_text", ref=s.id, data={"role": role, "text": text})
+
+    if up is not None:
+        draw_flights(up, "up")
+        x0, y0, x1, y1 = up.footprint
+        near, far = (y0, y1) if up.run_sign > 0 else (y1, y0)
+        xa = x0 + up.width / 2
+        end = far - up.run_sign * up.landing / 2 if len(up.flights) == 2 else far
+        arrow(up, xa, near, end, "LÊN", "up", xa, near - up.run_sign * 0.35)
+    if arriving is not None:
+        x0, y0, x1, y1 = arriving.footprint
+        near, far = (y0, y1) if arriving.run_sign > 0 else (y1, y0)
+        if up is None:
+            draw_flights(arriving, "arriving")
+        if floor_number(arriving.to_level) == floor:  # slab opening of this floor
+            _rect_union_outline(d, "A-HIDDEN", arriving.opening, semantic="slab_opening", ref=arriving.id)
+        xb = x1 - arriving.width / 2 if len(arriving.flights) == 2 else x0 + arriving.width / 2
+        d.line("A-STAIR", xb, near, xb, far - arriving.run_sign * (arriving.landing / 2 if len(arriving.flights) == 2 else 0.0),
+               semantic="stair_walkline", ref=arriving.id, data={"role": "down"})
+        d.text("A-ANNO-TEXT", xb, near - arriving.run_sign * 0.35, "XUỐNG", th * 0.8, MC, semantic="stair_text",
+               ref=arriving.id, data={"role": "down", "text": "XUỐNG"})
+    sheet = plan_sheet_code(floor)
+    record = _stair_plan_record(d.prims, floor, lid, sheet)
+    return View(f"STAIRPLAN-F{floor}", "plan_stair", sheet, f"Cầu thang tầng {floor}", d.prims, record)
+
+
+def _stair_plan_record(prims: Sequence[Prim], floor: int, level_id: str, sheet: str) -> dict[str, Any]:
+    stairs: dict[str, dict[str, Any]] = {}
+    for p in prims:
+        if p.semantic == "stair_outline":
+            x0, y0, x1, y1 = _bbox_of(p)
+            stairs.setdefault(p.ref, {"id": p.ref})["footprint"] = [round(x0, 6), round(y0, 6), round(x1, 6), round(y1, 6)]
+            stairs[p.ref]["role"] = p.data.get("role")
+        elif p.semantic == "stair_riser":
+            stairs.setdefault(p.ref, {"id": p.ref}).setdefault("riser_lines", 0)
+            stairs[p.ref]["riser_lines"] += 1
+        elif p.semantic == "stair_text":
+            stairs.setdefault(p.ref, {"id": p.ref}).setdefault("texts", []).append(p.data.get("text"))
+    openings: dict[str, list[list[float]]] = {}
+    for p in prims:
+        if p.semantic == "slab_opening":
+            x0, y0, x1, y1 = _bbox_of(p)
+            openings.setdefault(p.ref, []).append([round(x0, 6), round(y0, 6), round(x1, 6), round(y1, 6)])
+    return {"id": f"PLAN-F{floor}", "kind": "plan", "code": sheet, "level_id": level_id, "floor": floor,
+            "stairs": list(stairs.values()),
+            "slab_openings": [{"stair_id": k, "rects": v} for k, v in openings.items()]}
+
+
+ROOF_PLAN_ID = "PLAN-ROOF"
+
+
+def roof_plan_sheet_code(model: HouseModel) -> str:
+    return plan_sheet_code(model.floors + 1)
+
+
+def roof_plan_view(model: HouseModel) -> View:
+    """Roof plan: eaves outline, ridge and fall arrows (pitched) or parapet outline (flat). Plan metres."""
+    w, dep, p = model.width, model.depth, model.porch
+    ov = model.roof["overhang"]
+    d = _Draft(model.text_height * 0.9)
+    x0, y0, x1, y1 = -ov, p - ov, w + ov, dep + ov
+    d.rect("A-ROOF", x0, y0, x1, y1, semantic="roof_outline")
+    d.rect("A-WALL-EXT", 0.0, p, w, dep, semantic="wall_below")
+    sheet = roof_plan_sheet_code(model)
+    if model.roof["type"] == "pitched":
+        d.line("A-ROOF", w / 2, y0, w / 2, y1, semantic="roof_ridge")
+        slope = model.roof["slope_deg"]
+        for xa, xb in ((w * 0.25, 0.0), (w * 0.75, w)):
+            ym = (p + dep) / 2
+            d.line("A-ROOF", xa, ym, xb, ym, semantic="roof_fall")
+            sg = -1 if xb < xa else 1
+            d.poly("A-ROOF", [(xb - sg * 0.35, ym - 0.12), (xb - sg * 0.35, ym + 0.12), (xb, ym)], True, semantic="roof_arrow")
+        d.text("A-ANNO-TEXT", w / 2, (p + dep) / 2 + 0.6, f"i = {slope:g}°", model.text_height * 0.9, BC, semantic="roof_slope")
+        kind_text = f"MÁI DỐC, ĐỈNH NÓC {level_label(model.elevation(LEVEL_RIDGE))}"
+    else:
+        d.rect("A-ROOF", 0.1, p + 0.1, w - 0.1, dep - 0.1, semantic="roof_parapet")
+        kind_text = f"MÁI BẰNG, LAN CAN {level_label(model.elevation(LEVEL_PARAPET))}"
+    d.text("A-ANNO-TEXT", w / 2, y0 - 1.2, f"MẶT BẰNG MÁI\\P{kind_text} - {sheet}", model.text_height * 1.4, TC,
+           semantic="title")
+    ex0, ey0, ex1, ey1 = _bbox_of(next(q for q in d.prims if q.semantic == "roof_outline"))
+    record = {"id": ROOF_PLAN_ID, "kind": "roof_plan", "code": sheet, "sheet": sheet, "roof_type": model.roof["type"],
+              "eaves": [round(ex0, 6), round(ey0, 6), round(ex1, 6), round(ey1, 6)],
+              "ridge_x": next((q.pts[0] for q in d.prims if q.semantic == "roof_ridge"), None),
+              "slope_deg": model.roof["slope_deg"] if model.roof["type"] == "pitched" else None}
+    return View(ROOF_PLAN_ID, "roof_plan", sheet, "Mặt bằng mái", d.prims, record)
+
+
+def floor_plan_origin(model: HouseModel, floor: int, plan_origin: tuple[float, float] = (0.0, 0.0)) -> tuple[float, float]:
+    """Floor 1 at the plan origin, higher floors (and the roof plan) to its left, one plan-width + 22 m apart."""
+    ox, oy = plan_origin
+    return ox - (floor - 1) * (model.width + 22.0), oy
+
+
 # --------------------------------------------------------------------------- placement
+
+def _elevation_row(model: HouseModel) -> tuple[float, float]:
+    """How far below the plan origin the elevations and the section are placed. A single-storey house keeps the original
+    16 m / 38 m; a taller house is pushed down so that the top of its elevations (ridge) stays 6 m below the plan origin
+    and the section stays 8 m below the lowest elevation."""
+    if model.floors == 1:
+        return 16.0, 38.0
+    boxes = [elevation_view(model, side).bbox for side in SIDES]
+    top, bottom = max(b[3] for b in boxes), min(b[1] for b in boxes)
+    sec = section_view(model, check_cut(model, default_cut(model))).bbox
+    elevations_y = 6.0 + top  # origin y offset: the elevation's local top lands 6 m below the plan origin
+    section_y = 6.0 + (top - bottom) + 8.0 + sec[3]
+    return elevations_y, section_y
+
 
 def default_origin(model: HouseModel, view: str, plan_origin: tuple[float, float] = (0.0, 0.0)) -> tuple[float, float]:
     """Where a view goes when the caller gives no origin: below the plan (elevations, then sections), tables to its right.
@@ -666,9 +1019,9 @@ def default_origin(model: HouseModel, view: str, plan_origin: tuple[float, float
             if side == view:
                 break
             x += (w if side in ("front", "rear") else dep) + gap
-        return ox + x, oy - 16.0
+        return ox + x, oy - _elevation_row(model)[0]
     if view == "section":
-        return ox + 4.0, oy - 38.0
+        return ox + 4.0, oy - _elevation_row(model)[1]
     if view == "schedule":
         return ox + w + 14.0, oy + dep
     raise ValueError(f"unknown view {view!r}")

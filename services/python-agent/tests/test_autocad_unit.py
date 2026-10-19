@@ -319,7 +319,7 @@ def test_every_autocad_tool_has_a_handler(config: Config) -> None:
     registry = build_registry(config.path("paths.tools_dir"))
     contract = json.loads((config.path("paths.tools_dir") / "autocad.json").read_text("utf-8"))
     names = {t["name"] for t in contract["tools"]}
-    assert len(names) == 27  # + autocad.draw_image, + 5 spec tools (profile_check, validate_model, compare_revisions, plan_operation, report), + 4 view tools (house_model, draw_elevation, draw_section, draw_schedules)
+    assert len(names) == 31  # + autocad.draw_image, + 5 spec tools (profile_check, validate_model, compare_revisions, plan_operation, report), + 4 view tools (house_model, draw_elevation, draw_section, draw_schedules), + 4 multi-storey/sheet tools (draw_stair, create_layout, plot_sheets, reopen_check)
     assert not [t for t in registry.unbound_tools() if t.startswith("autocad.")]
     assert names <= set(registry.available_tools())
 
