@@ -48,6 +48,7 @@ STANDARD_LAYERS: dict[str, str] = {
     "A-ANNO-GRID": "Grid annotations",
     "A-ANNO-KEYNOTE": "Material keynotes",
     "A-DETAIL-MARKER": "Detail reference markers",
+    "A-ANNO-TTLB": "Sheet frame and title block",
     "A-AREA": "Area boundaries",
     "A-OVERHEAD": "Objects above the cut plane",
     "A-NPLT": "Controlled non-plotting objects",

@@ -513,7 +513,7 @@ def rule_duplicates(ctx: RuleContext) -> Outcome:
         g = e.geometry
         if g:
             n = len(g.get("points", [])) if g.get("type") == "polyline" else 0
-            buckets[(e.entity_type, e.layer, g.get("type"), n)].append(e)
+            buckets[(e.entity_type, e.layer, e.level_id, g.get("type"), n)].append(e)  # one storey's wall is not a duplicate of the next storey's
     pairs = sum(len(b) * (len(b) - 1) // 2 for b in buckets.values())
     limit = int(ctx.params.get("max_pairs", 2_000_000))
     if pairs > limit:
@@ -913,13 +913,44 @@ def rule_stairs(ctx: RuleContext) -> Outcome:
                 issues.append(Issue(f"stair {s.entity_id}: total height {total:g} vs level difference "
                                     f"{to.elevation - frm.elevation:g}", [s.entity_id, frm.entity_id, to.entity_id]))
         actual_riser = riser if riser is not None else total / count
-        if max_riser is not None and actual_riser > max_riser:
-            issues.append(Issue(f"stair {s.entity_id}: riser {actual_riser:g} exceeds the supplied limit {max_riser:g}",
-                                [s.entity_id]))
+        if frm is not None and to is not None and frm.elevation is not None and to.elevation is not None:
+            by_levels = (to.elevation - frm.elevation) / count  # recomputed from the levels, not from the stated riser
+            if riser is not None and abs(by_levels - riser) * count > tols["riser_total"]:
+                issues.append(Issue(f"stair {s.entity_id}: stated riser {riser:g} but the level difference over "
+                                    f"{int(count)} risers is {by_levels:g}", [s.entity_id], kind="CONFLICT"))
+        flights = s.prop("flights")
+        if isinstance(flights, list) and flights:
+            risers_sum = sum(int(f.get("risers", 0)) for f in flights)
+            if risers_sum != int(count):
+                issues.append(Issue(f"stair {s.entity_id}: the flights have {risers_sum} risers but the stair says "
+                                    f"{int(count)}", [s.entity_id], kind="CONFLICT"))
+            for i, f in enumerate(flights, 1):
+                if int(f.get("treads", -1)) != int(f.get("risers", 0)) - 1:
+                    issues.append(Issue(f"stair {s.entity_id}: flight {i} has {f.get('risers')} risers and "
+                                        f"{f.get('treads')} treads (a flight has one tread fewer than risers)", [s.entity_id]))
+        applied = (s.prop("limits") or {}).get("applied", {}) if isinstance(s.prop("limits"), Mapping) else {}
+        v_max = _num((applied.get("max_riser_height") or {}).get("value")) if applied else None
+        v_tread = _num((applied.get("min_tread_depth") or {}).get("value")) if applied else None
+        v_width = _num((applied.get("min_stair_width") or {}).get("value")) if applied else None
+        for limit, label in ((max_riser, "supplied"), (v_max, "verified-profile")):
+            if limit is not None and actual_riser > limit + 1e-9:
+                issues.append(Issue(f"stair {s.entity_id}: riser {actual_riser:g} exceeds the {label} limit {limit:g}",
+                                    [s.entity_id]))
         tread = _num(s.prop("tread_depth"))
-        if min_tread is not None and tread is not None and tread < min_tread:
-            issues.append(Issue(f"stair {s.entity_id}: tread {tread:g} below the supplied limit {min_tread:g}",
+        for limit, label in ((min_tread, "supplied"), (v_tread, "verified-profile")):
+            if limit is not None and tread is not None and tread < limit - 1e-9:
+                issues.append(Issue(f"stair {s.entity_id}: tread {tread:g} below the {label} limit {limit:g}",
+                                    [s.entity_id]))
+        width = _num(s.prop("width"))
+        if v_width is not None and width is not None and width < v_width - 1e-9:
+            issues.append(Issue(f"stair {s.entity_id}: width {width:g} below the verified-profile limit {v_width:g}",
                                 [s.entity_id]))
+        assumed = sorted(k for k, how in (s.prop("setting_status") or {}).items() if how == "ASSUMED") \
+            if isinstance(s.prop("setting_status"), Mapping) else []
+        if assumed:
+            issues.append(Issue(f"stair {s.entity_id}: {', '.join(assumed)} are ASSUMED working defaults, not code limits; "
+                                f"{'verified-profile limits applied: ' + ', '.join(sorted(applied)) if applied else 'no verified limit was applied'}",
+                                [s.entity_id], severity=Severity.INFO, kind="ASSUMED"))
     limits = "limits applied: " + (", ".join(k for k in ("max_riser_height", "min_tread_depth")
                                              if ctx.params.get(k) is not None) or "none (no verified profile limit given)")
     return Outcome(issues, f"{len(stairs)} stairs: riser arithmetic and level heights; {limits}"
@@ -1055,9 +1086,9 @@ def rule_elevation_matches_plan(ctx: RuleContext) -> Outcome:
 
 
 def _schedule_rows(ctx: RuleContext, kind: str) -> tuple[list[Mapping[str, Any]] | None, str]:
-    for rec in _view_records(ctx, "schedule") or []:
-        if rec.get("schedule") == kind and rec.get("rows") is not None:
-            return list(rec["rows"]), "drawn table"
+    drawn = [rec for rec in (_view_records(ctx, "schedule") or []) if rec.get("schedule") == kind and rec.get("rows") is not None]
+    if drawn:
+        return [row for rec in drawn for row in rec["rows"]], "drawn table" if len(drawn) == 1 else f"{len(drawn)} drawn tables"
     rows = ctx.model.schedules.get(kind)
     return (list(rows), "schedule data") if rows is not None else (None, "")
 
@@ -1222,6 +1253,8 @@ def rule_room_table_area(ctx: RuleContext) -> Outcome:
     issues: list[Issue] = []
     listed: set[str] = set()
     recomputed_total = 0.0
+    recomputed_by_level: dict[Any, float] = {}
+    listed_by_level: dict[Any, int] = {}
     checked = 0
     abs_tol = 0.0051  # the table is printed to 0.01 m2
     for row in rows:
@@ -1241,17 +1274,24 @@ def rule_room_table_area(ctx: RuleContext) -> Outcome:
         else:
             value = _area_m2(poly, unit_mm)  # type: ignore[arg-type]
             recomputed_total += value
+            recomputed_by_level[row.get("level_id")] = recomputed_by_level.get(row.get("level_id"), 0.0) + value
+            listed_by_level[row.get("level_id")] = listed_by_level.get(row.get("level_id"), 0) + 1
             if not math.isclose(value, area, rel_tol=rel, abs_tol=abs_tol):
                 issues.append(Issue(f"area table {code}: {area:g} m2 but the boundary gives {value:.4g} m2 (relative "
                                     f"tolerance {rel:g}, table printed to 0.01)", [code], kind="CONFLICT",
                                     detail={"table": area, "recomputed": value}))
+    per_table = len({r.get("level_id") for r in rows if r.get("level_id") is not None}) > 1
     for row in rows:
         if row.get("total"):
             total = _num(row.get("area"))
-            if total is not None and not math.isclose(recomputed_total, total, rel_tol=rel,
-                                                       abs_tol=abs_tol * max(1, len(listed))):
-                issues.append(Issue(f"area table total {total:g} m2 vs the sum of the listed boundaries "
-                                    f"{recomputed_total:.4g} m2", [], kind="CONFLICT"))
+            level = row.get("level_id")
+            expected_total = recomputed_by_level.get(level, 0.0) if per_table else recomputed_total
+            count = listed_by_level.get(level, 0) if per_table else len(listed)
+            if total is not None and not math.isclose(expected_total, total, rel_tol=rel,
+                                                       abs_tol=abs_tol * max(1, count)):
+                where = f" of {level}" if per_table else ""
+                issues.append(Issue(f"area table total{where} {total:g} m2 vs the sum of the listed boundaries "
+                                    f"{expected_total:.4g} m2", [], kind="CONFLICT"))
     for rid, room in rooms.items():
         if room.prop("listed") is True and rid not in listed:
             issues.append(Issue(f"room {rid} ({room.prop('name')}) is missing from the area table", [rid]))
@@ -1291,6 +1331,402 @@ def rule_pdf_rendered(ctx: RuleContext) -> Outcome:
         return Outcome([Issue(f"rendered PDF check failed: {state.get('note', 'no detail')}")],
                        "rendered PDF has problems", 1)
     return Outcome(evidence=f"PDF rendered and inspected ({state.get('note', 'no note')})", checked=1)
+
+
+# --------------------------------------------------------------------------- multi-storey, stairs, sheets, plot (spec 8-13, 18)
+
+def _rect_inside(rect: Sequence[float], outer: Sequence[float], tol: float) -> bool:
+    return (rect[0] >= outer[0] - tol and rect[1] >= outer[1] - tol and rect[2] <= outer[2] + tol
+            and rect[3] <= outer[3] + tol)
+
+
+def _rect_area(rect: Sequence[float]) -> float:
+    return max(0.0, rect[2] - rect[0]) * max(0.0, rect[3] - rect[1])
+
+
+def _same_rects(a: Sequence[Sequence[float]], b: Sequence[Sequence[float]], tol: float) -> bool:
+    if len(a) != len(b):
+        return False
+    left = sorted(tuple(r) for r in a)
+    right = sorted(tuple(r) for r in b)
+    return all(all(abs(x - y) <= tol for x, y in zip(p, q)) for p, q in zip(left, right))
+
+
+def rule_stair_opening(ctx: RuleContext) -> Outcome:
+    tols, skip = _need_tol(ctx, "opening_offset", "elevation")
+    if skip:
+        return skip
+    stairs = [s for s in ctx.model.of_type(EntityType.STAIR) if s.prop("to_level")]
+    if not stairs:
+        return Outcome.skipped("no STAIR entities")
+    tol = tols["opening_offset"]
+    slabs = {(s.level_id, str(s.prop("role"))): s for s in ctx.model.of_type(EntityType.SLAB)}
+    if not slabs:
+        return Outcome.skipped("no SLAB entities in the model: floor slabs are not modelled, so no opening can be checked")
+    plans = [v for v in (_view_records(ctx, "plan") or []) if v.get("slab_openings") is not None and v.get("stairs") is not None]
+    issues: list[Issue] = []
+    for st in stairs:
+        slab = slabs.get((str(st.prop("to_level")), "floor"))
+        foot = st.prop("footprint")
+        if slab is None:
+            issues.append(Issue(f"stair {st.entity_id}: there is no floor slab on {st.prop('to_level')} to open", [st.entity_id]))
+            continue
+        opening = slab.prop("stair_opening") or []
+        if not opening:
+            issues.append(Issue(f"stair {st.entity_id}: slab {slab.entity_id} on {st.prop('to_level')} has no stair opening",
+                                [st.entity_id, slab.entity_id]))
+            continue
+        if not isinstance(foot, (list, tuple)) or len(foot) != 4:
+            issues.append(Issue(f"stair {st.entity_id}: no footprint to compare the slab opening with", [st.entity_id],
+                                kind="INCOMPLETE", severity=Severity.WARNING))
+            continue
+        outside = [r for r in opening if not _rect_inside(r, foot, tol)]
+        if outside:
+            issues.append(Issue(f"stair {st.entity_id}: slab opening {outside[0]} lies outside the stair footprint {list(foot)}",
+                                [st.entity_id, slab.entity_id], kind="CONFLICT"))
+        covered = sum(_rect_area(r) for r in opening)
+        ratio = covered / _rect_area(foot) if _rect_area(foot) > 0 else 0.0
+        if ratio < 0.4:
+            issues.append(Issue(f"stair {st.entity_id}: the slab opening covers only {ratio:.0%} of the stair footprint "
+                                "(the arrival flight cannot pass the slab)", [st.entity_id, slab.entity_id]))
+        model_open = st.prop("slab_opening")
+        if model_open and not _same_rects(model_open, opening, tol):
+            issues.append(Issue(f"stair {st.entity_id}: slab {slab.entity_id} opening differs from the stair's own opening",
+                                [st.entity_id, slab.entity_id], kind="CONFLICT"))
+        # drawn evidence on the plan of the upper floor
+        for plan in plans:
+            if plan.get("level_id") != st.prop("to_level"):
+                continue
+            drawn = [r for item in plan["slab_openings"] if item.get("stair_id") == st.entity_id for r in item.get("rects", [])]
+            if not drawn:
+                issues.append(Issue(f"stair {st.entity_id}: the plan of {st.prop('to_level')} ({plan.get('id')}) shows no "
+                                    "slab opening above it", [st.entity_id]))
+            elif not _same_rects(drawn, opening, tol):
+                issues.append(Issue(f"stair {st.entity_id}: the opening drawn on {plan.get('id')} differs from the slab "
+                                    f"opening of the model ({drawn} vs {opening})", [st.entity_id, slab.entity_id],
+                                    kind="CONFLICT"))
+    return Outcome(issues, f"{len(stairs)} stairs: opening present in the slab above, inside the footprint, "
+                           f"{len(plans)} drawn plan(s) compared (tolerance {tol:g})", len(stairs))
+
+
+def rule_stair_plan(ctx: RuleContext) -> Outcome:
+    tols, skip = _need_tol(ctx, "opening_offset")
+    if skip:
+        return skip
+    plans = [v for v in (_view_records(ctx, "plan") or []) if v.get("stairs") is not None]
+    if not plans:
+        return Outcome.skipped("no drawn plan view carries stair symbols (meta.views kind 'plan' with 'stairs')")
+    stairs = {s.entity_id: s for s in ctx.model.of_type(EntityType.STAIR)}
+    if not stairs:
+        return Outcome.skipped("no STAIR entities in the model")
+    tol = tols["opening_offset"]
+    issues: list[Issue] = []
+    checked = 0
+    for plan in plans:
+        lid = plan.get("level_id")
+        for item in plan["stairs"]:
+            sid = str(item.get("id"))
+            entity = stairs.get(sid)
+            if entity is None:
+                issues.append(Issue(f"{plan.get('id')}: draws a stair {sid!r} that is not in the model", []))
+                continue
+            checked += 1
+            lines = item.get("riser_lines")
+            if lines is not None and entity.prop("riser_count") is not None and int(lines) != int(entity.prop("riser_count")):
+                issues.append(Issue(f"{plan.get('id')}: stair {sid} has {lines} riser lines but the model has "
+                                    f"{entity.prop('riser_count')} risers", [sid], kind="CONFLICT"))
+            foot, mfoot = item.get("footprint"), entity.prop("footprint")
+            if foot and mfoot and any(abs(a - b) > tol for a, b in zip(foot, mfoot)):
+                issues.append(Issue(f"{plan.get('id')}: stair {sid} footprint {foot} differs from the model {list(mfoot)}",
+                                    [sid], kind="CONFLICT"))
+        for sid, entity in stairs.items():
+            if entity.prop("from_level") == lid and not any(str(i.get("id")) == sid for i in plan["stairs"]):
+                issues.append(Issue(f"{plan.get('id')}: stair {sid} starts on {lid} but is not drawn on its plan", [sid]))
+    return Outcome(issues, f"{checked} stair symbols on {len(plans)} plans compared with the model", max(checked, 1))
+
+
+def rule_floor_levels(ctx: RuleContext) -> Outcome:
+    tols, skip = _need_tol(ctx, "elevation")
+    if skip:
+        return skip
+    floors = ctx.model.meta.get("floors")
+    if not isinstance(floors, list) or not floors:
+        return Outcome.skipped("no floor list (meta.floors)")
+    tol = tols["elevation"]
+    levels = {l.entity_id: l for l in ctx.model.of_type(EntityType.LEVEL)}
+    if not levels:
+        return Outcome.skipped("no LEVEL entities")
+    slabs = {s.level_id: s for s in ctx.model.of_type(EntityType.SLAB) if s.prop("role") == "floor"}
+    issues: list[Issue] = []
+    checked = 0
+    prev_ceiling: Entity | None = None
+    for f in floors:
+        checked += 1
+        lid, cid = str(f.get("level_id")), str(f.get("ceiling_id"))
+        floor, ceiling = levels.get(lid), levels.get(cid)
+        if floor is None or ceiling is None or floor.elevation is None or ceiling.elevation is None:
+            issues.append(Issue(f"floor {lid}: floor or ceiling level missing or without elevation", [lid, cid]))
+            continue
+        clear = _num(f.get("clear_height"))
+        if clear is not None and abs((ceiling.elevation - floor.elevation) - clear) > tol:
+            issues.append(Issue(f"floor {lid}: clear height {clear:g} but the levels give {ceiling.elevation - floor.elevation:g}",
+                                [lid, cid], kind="CONFLICT"))
+        if ceiling.elevation <= floor.elevation + tol:
+            issues.append(Issue(f"floor {lid}: ceiling {ceiling.elevation:g} is not above the floor {floor.elevation:g}", [lid, cid]))
+        if prev_ceiling is not None:
+            slab = slabs.get(lid)
+            thick = _num(slab.prop("thickness")) if slab is not None else None
+            gap = floor.elevation - prev_ceiling.elevation  # type: ignore[operator]
+            if thick is None:
+                issues.append(Issue(f"floor {lid}: no slab with a thickness between {prev_ceiling.entity_id} and the floor",
+                                    [lid], severity=Severity.WARNING, kind="INCOMPLETE"))
+            elif abs(gap - thick) > tol:
+                issues.append(Issue(f"floor {lid}: {gap:g} m between the ceiling below and this floor but the slab is "
+                                    f"{thick:g} m thick", [lid, prev_ceiling.entity_id], kind="CONFLICT"))
+        prev_ceiling = ceiling
+        owned = [e for e in ctx.model.entities if e.level_id == lid]
+        types = {e.entity_type for e in owned}
+        for needed in (EntityType.WALL, EntityType.ROOM):
+            if needed not in types:
+                issues.append(Issue(f"floor {lid}: no {needed.value} entity belongs to this floor", [lid]))
+        for e in owned:
+            if e.entity_type in (EntityType.DOOR, EntityType.WINDOW):
+                head = _num(e.prop("head_height"))
+                if head is not None and head >= ceiling.elevation - floor.elevation - 1e-9:
+                    issues.append(Issue(f"{e.entity_id}: head {head:g} reaches the ceiling of {lid}", [e.entity_id]))
+    top = levels.get(str(floors[-1].get("ceiling_id")))
+    roof = levels.get("LV-ROOF")
+    if top is not None and roof is not None and top.elevation is not None and roof.elevation is not None \
+            and roof.elevation <= top.elevation + tol:
+        issues.append(Issue(f"roof level {roof.elevation:g} is not above the top ceiling {top.elevation:g}", ["LV-ROOF"]))
+    if len(floors) > 1 and not ctx.model.of_type(EntityType.STAIR):
+        issues.append(Issue(f"{len(floors)} floors but no stair connects them", []))
+    # every elevation and section must mark every floor level
+    wanted = [str(f.get("level_id")) for f in floors]
+    for v in ctx.model.meta.get("views") or []:
+        if isinstance(v, Mapping) and v.get("kind") in ("elevation", "section") and v.get("levels"):
+            checked += 1
+            seen = {str(m.get("level_id")) for m in v["levels"]}
+            lacking = [w for w in wanted if w not in seen]
+            if lacking:
+                issues.append(Issue(f"{v.get('id')}: does not mark the floor level(s) {lacking}", lacking))
+            if v.get("kind") == "section" and v.get("floors") not in (None, len(floors)):
+                issues.append(Issue(f"{v.get('id')}: section drawn for {v.get('floors')} floors, model has {len(floors)}", []))
+    views = ctx.model.meta.get("views")
+    if len(floors) > 1 and isinstance(views, list):
+        drawn_plans = [v for v in views if isinstance(v, Mapping) and v.get("kind") == "plan" and v.get("stairs") is not None]
+        if drawn_plans:
+            for w in wanted:
+                if not any(v.get("level_id") == w for v in drawn_plans):
+                    issues.append(Issue(f"no plan was drawn for floor {w}", [w], severity=Severity.WARNING))
+        if drawn_plans and not any(isinstance(v, Mapping) and v.get("kind") == "roof_plan" for v in views):
+            issues.append(Issue("no roof plan was drawn", [], severity=Severity.WARNING))
+    return Outcome(issues, f"{len(floors)} floors: heights, slab gaps, ownership, level marks in the views (tolerance {tol:g})",
+                   checked)
+
+
+def _sheet_index(ctx: RuleContext) -> list[Mapping[str, Any]] | None:
+    raw = ctx.model.meta.get("sheet_index")
+    return [s for s in raw if isinstance(s, Mapping)] if isinstance(raw, list) else None
+
+
+def _layout_of(ctx: RuleContext, sheet: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    want = str(sheet.get("layout") or sheet.get("code") or "").casefold()
+    for lay in ctx.model.meta.get("layouts") or []:
+        if isinstance(lay, Mapping) and str(lay.get("name", "")).casefold() == want:
+            return lay
+    return None
+
+
+def _our_viewports(layout: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    vps = [v for v in layout.get("viewports") or [] if isinstance(v, Mapping)]
+    marked = [v for v in vps if v.get("role") == "viewport" or v.get("marked")]
+    return marked or [v for v in vps if v.get("scale_custom")]
+
+
+def rule_sheet_layouts(ctx: RuleContext) -> Outcome:
+    index = _sheet_index(ctx)
+    if index is None or ctx.model.meta.get("layouts") is None:
+        return Outcome.skipped("sheet index (meta.sheet_index) or measured layouts (meta.layouts) not provided")
+    issues: list[Issue] = []
+    names = {str(l.get("name", "")).casefold(): l for l in ctx.model.meta["layouts"] if isinstance(l, Mapping)}
+    codes = [str(s.get("code")) for s in index]
+    for code in sorted({c for c in codes if codes.count(c) > 1}):
+        issues.append(Issue(f"sheet code {code} appears more than once in the sheet index", [code]))
+    for s in index:
+        if _layout_of(ctx, s) is None:
+            issues.append(Issue(f"sheet {s.get('code')} ({s.get('title')}) has no layout named {s.get('layout') or s.get('code')!r}",
+                                [str(s.get("code"))]))
+    listed = {str(s.get("layout") or s.get("code")).casefold() for s in index}
+    for n, lay in names.items():
+        if n not in listed:
+            issues.append(Issue(f"layout {lay.get('name')!r} is not in the sheet index", [], severity=Severity.INFO))
+    return Outcome(issues, f"{len(index)} sheets of the index resolved against {len(names)} layouts", len(index))
+
+
+def rule_viewport_scale(ctx: RuleContext) -> Outcome:
+    index = _sheet_index(ctx)
+    if index is None or ctx.model.meta.get("layouts") is None:
+        return Outcome.skipped("sheet index (meta.sheet_index) or measured layouts (meta.layouts) not provided")
+    rel = ctx.tol.relative("scale_rel")
+    issues: list[Issue] = []
+    checked = 0
+    for s in index:
+        lay = _layout_of(ctx, s)
+        declared = _num(s.get("scale_denominator"))
+        if lay is None or declared is None:
+            continue
+        vps = _our_viewports(lay)
+        checked += 1
+        if not vps:
+            issues.append(Issue(f"sheet {s.get('code')}: the layout has no viewport", [str(s.get("code"))]))
+            continue
+        for vp in vps:
+            measured = _num(vp.get("scale_denominator"))
+            if measured is None:
+                issues.append(Issue(f"sheet {s.get('code')}: viewport scale could not be read", [str(s.get("code"))],
+                                    kind="INCOMPLETE"))
+            elif abs(measured - declared) > rel * declared:
+                issues.append(Issue(f"sheet {s.get('code')}: viewport scale is 1:{measured:g} but the sheet declares "
+                                    f"1:{declared:g}", [str(s.get("code"))], kind="CONFLICT",
+                                    detail={"measured": measured, "declared": declared}))
+    if not checked:
+        return Outcome.skipped("no sheet with both a layout and a declared scale")
+    return Outcome(issues, f"{checked} sheets: viewport scale equals the declared scale (relative tolerance {rel:g})", checked)
+
+
+def rule_viewport_locked(ctx: RuleContext) -> Outcome:
+    index = _sheet_index(ctx)
+    if index is None or ctx.model.meta.get("layouts") is None:
+        return Outcome.skipped("sheet index (meta.sheet_index) or measured layouts (meta.layouts) not provided")
+    issues: list[Issue] = []
+    checked = 0
+    for s in index:
+        lay = _layout_of(ctx, s)
+        if lay is None:
+            continue
+        for vp in _our_viewports(lay):
+            checked += 1
+            if vp.get("locked") is not True:
+                issues.append(Issue(f"sheet {s.get('code')}: viewport is not locked (DisplayLocked={vp.get('locked')!r})",
+                                    [str(s.get("code"))]))
+    if not checked:
+        return Outcome.skipped("no viewport to check")
+    return Outcome(issues, f"{checked} viewports checked for the lock", checked)
+
+
+def rule_title_block(ctx: RuleContext) -> Outcome:
+    index = _sheet_index(ctx)
+    if index is None or ctx.model.meta.get("layouts") is None:
+        return Outcome.skipped("sheet index (meta.sheet_index) or measured layouts (meta.layouts) not provided")
+    required = ("project", "client", "designer", "prepared_by", "checked_by", "approved_by", "sheet_code", "sheet_title",
+                "scale", "date", "revision", "status")
+    must_fill = {"sheet_code", "sheet_title", "scale"}
+    people = {"prepared_by", "checked_by", "approved_by"}
+    issues: list[Issue] = []
+    checked = 0
+    for s in index:
+        lay = _layout_of(ctx, s)
+        if lay is None:
+            continue
+        code = str(s.get("code"))
+        block = lay.get("title_block")
+        checked += 1
+        if not isinstance(block, Mapping) or not block:
+            issues.append(Issue(f"sheet {code}: no title block", [code]))
+            continue
+        for key in required:
+            entry = block.get(key)
+            if not isinstance(entry, Mapping) or not str(entry.get("label", "")).strip():
+                issues.append(Issue(f"sheet {code}: title block field {key!r} is missing", [code]))
+                continue
+            value = str(entry.get("value", "")).strip()
+            if key in must_fill and not value:
+                issues.append(Issue(f"sheet {code}: title block field {key!r} is empty", [code]))
+            elif key == "project" and not value:
+                issues.append(Issue(f"sheet {code}: project name is blank (not supplied)", [code], severity=Severity.WARNING))
+            elif key in people and value:
+                issues.append(Issue(f"sheet {code}: {key} is filled in ({value!r}); this tool never writes names or "
+                                    "signatures, check that the responsible person entered it", [code],
+                                    severity=Severity.WARNING))
+            elif key in ("client", "designer", "date", "revision") and not value:
+                issues.append(Issue(f"sheet {code}: {key} is blank (left for the responsible person)", [code],
+                                    severity=Severity.INFO))
+        if isinstance(block.get("sheet_code"), Mapping) and str(block["sheet_code"].get("value", "")).strip() not in ("", code):
+            issues.append(Issue(f"sheet {code}: the title block says {block['sheet_code'].get('value')!r}", [code],
+                                kind="CONFLICT"))
+        declared = str(s.get("scale") or "")
+        if declared and isinstance(block.get("scale"), Mapping) and str(block["scale"].get("value", "")).strip() \
+                not in ("", declared):
+            issues.append(Issue(f"sheet {code}: the title block scale {block['scale'].get('value')!r} differs from the "
+                                f"declared {declared!r}", [code], kind="CONFLICT"))
+    if not checked:
+        return Outcome.skipped("no sheet with a layout")
+    return Outcome(issues, f"{checked} title blocks: fields present, sheet code and scale equal the sheet index, people "
+                           "fields untouched", checked)
+
+
+def rule_paper(ctx: RuleContext) -> Outcome:
+    index = _sheet_index(ctx)
+    if index is None or ctx.model.meta.get("layouts") is None:
+        return Outcome.skipped("sheet index (meta.sheet_index) or measured layouts (meta.layouts) not provided")
+    issues: list[Issue] = []
+    checked = 0
+    for s in index:
+        lay = _layout_of(ctx, s)
+        want = s.get("paper_mm")
+        if lay is None or not isinstance(want, (list, tuple)) or len(want) != 2:
+            continue
+        got = lay.get("paper_mm")
+        checked += 1
+        if not isinstance(got, (list, tuple)) or len(got) != 2:
+            issues.append(Issue(f"sheet {s.get('code')}: paper size of the layout could not be read", [str(s.get("code"))],
+                                kind="INCOMPLETE"))
+        elif abs(got[0] - want[0]) > 1.0 or abs(got[1] - want[1]) > 1.0:
+            issues.append(Issue(f"sheet {s.get('code')}: paper is {got[0]:g} x {got[1]:g} mm but {want[0]:g} x {want[1]:g} "
+                                f"({s.get('paper')} {s.get('orientation')}) was declared", [str(s.get("code"))],
+                                kind="CONFLICT"))
+    if not checked:
+        return Outcome.skipped("no sheet declares a paper size")
+    return Outcome(issues, f"{checked} layouts: paper size and orientation equal the declared sheet paper", checked)
+
+
+def rule_pdf_pages(ctx: RuleContext) -> Outcome:
+    state = ctx.model.meta.get("pdf_render_check")
+    index = _sheet_index(ctx)
+    if not isinstance(state, Mapping) or not state.get("page_checks"):
+        return Outcome.skipped("no per-page PDF check (meta.pdf_render_check.page_checks): the PDF was not rendered page by page")
+    issues: list[Issue] = []
+    pages = state["page_checks"]
+    expected = _num(state.get("expected_pages"))
+    if expected is None and index is not None:
+        expected = float(len(index))
+    if expected is not None and len(pages) != int(expected):
+        issues.append(Issue(f"the PDF has {len(pages)} pages but {int(expected)} sheets were plotted", []))
+    for i, page in enumerate(pages, 1):
+        if (_num(page.get("nonwhite_ratio")) or 0.0) < 0.0005:
+            issues.append(Issue(f"PDF page {i} looks blank when rendered (non-white ratio {page.get('nonwhite_ratio')})", []))
+        if not (_num(page.get("text_chars")) or 0):
+            issues.append(Issue(f"PDF page {i} has no text layer", [], severity=Severity.WARNING))
+        if page.get("sheet_code") and page.get("codes_found") is not None and page["sheet_code"] not in page["codes_found"]:
+            issues.append(Issue(f"PDF page {i}: the sheet code {page['sheet_code']} was not found in its text", []))
+        want = page.get("paper_mm")
+        got = page.get("size_mm")
+        if want and got and (abs(want[0] - got[0]) > 2.0 or abs(want[1] - got[1]) > 2.0):
+            issues.append(Issue(f"PDF page {i}: size {got} mm differs from the layout paper {want} mm", [], kind="CONFLICT"))
+    return Outcome(issues, f"{len(pages)} PDF pages: count, non-blank, text layer, sheet codes, page size", len(pages))
+
+
+def rule_reopen(ctx: RuleContext) -> Outcome:
+    state = ctx.model.meta.get("reopen_check")
+    if not isinstance(state, Mapping):
+        return Outcome.skipped("the saved DWG was not re-opened in AutoCAD (meta.reopen_check)")
+    issues: list[Issue] = []
+    if not state.get("opened"):
+        issues.append(Issue("the saved DWG could not be re-opened in AutoCAD", []))
+    for diff in state.get("differences") or []:
+        issues.append(Issue(f"re-opened DWG differs from the drawing that was saved: {diff}", [], kind="CONFLICT"))
+    return Outcome(issues, f"saved DWG re-opened in AutoCAD; counts compared ({state.get('compared', 'n/a')})", 1)
 
 
 DEFAULT_RULES: tuple[Rule, ...] = (
@@ -1354,8 +1790,29 @@ DEFAULT_RULES: tuple[Rule, ...] = (
          "COORDINATION", Severity.ERROR, rule_section_marker_view, tolerance_purposes=("opening_offset",)),
     Rule("COORD.ROOM_TABLE_AREA", "Area table rows and total equal the area recomputed from the room boundaries",
          "COORDINATION", Severity.ERROR, rule_room_table_area, tolerance_purposes=("closure_gap", "area_rel")),
+    Rule("COORD.STAIR_OPENING_IN_SLAB", "Each stair has an opening in the slab it arrives at, inside its footprint and equal to the "
+         "opening drawn on that floor's plan", "COORDINATION", Severity.ERROR, rule_stair_opening,
+         tolerance_purposes=("opening_offset", "elevation")),
+    Rule("COORD.STAIR_PLAN_MATCHES_MODEL", "Stair symbols on the plans have the model's riser count and footprint and every stair is "
+         "drawn on the floor it starts on", "COORDINATION", Severity.ERROR, rule_stair_plan,
+         tolerance_purposes=("opening_offset",)),
+    Rule("COORD.FLOOR_LEVELS_ALL_FLOORS", "Floor/ceiling levels, slab gaps, floor contents and the level marks of every view are "
+         "consistent for all floors", "COORDINATION", Severity.ERROR, rule_floor_levels, tolerance_purposes=("elevation",)),
     Rule("PLOT.LAYOUT_SETUP", "Layouts have the profile paper size, a viewport scale and a title block", "PLOT",
          Severity.ERROR, rule_layouts),
+    Rule("PLOT.SHEET_LAYOUT_EXISTS", "Every sheet code of the sheet index has a layout (and codes are unique)", "PLOT",
+         Severity.ERROR, rule_sheet_layouts),
+    Rule("PLOT.VIEWPORT_SCALE", "Each sheet's viewport scale equals the scale declared in the sheet index", "PLOT",
+         Severity.ERROR, rule_viewport_scale),
+    Rule("PLOT.VIEWPORT_LOCKED", "Every sheet viewport is locked", "PLOT", Severity.ERROR, rule_viewport_locked),
+    Rule("PLOT.TITLE_BLOCK_FIELDS", "Title block has all fields; sheet code and scale equal the index; people fields are not "
+         "filled by the tool", "PLOT", Severity.ERROR, rule_title_block),
+    Rule("PLOT.PAPER_ORIENTATION", "Layout paper size and orientation equal the declared sheet paper", "PLOT", Severity.ERROR,
+         rule_paper),
+    Rule("PLOT.PDF_PAGES_MATCH_SHEETS", "The plotted PDF has one non-blank page per sheet, the right size, text and sheet codes",
+         "PLOT", Severity.ERROR, rule_pdf_pages),
+    Rule("FILE.REOPEN_COUNTS", "The saved DWG re-opens in AutoCAD with the same entity counts", "FILE", Severity.ERROR,
+         rule_reopen),
     Rule("PLOT.PDF_RENDER_CHECKED", "The PDF was rendered to an image and inspected", "PLOT", Severity.ERROR,
          rule_pdf_rendered),
 )

@@ -430,7 +430,8 @@ class FakeProvider:
         self.total = 0
 
     def draw_prims(self, prims: Any, layers_: Any, origin: Any, text_height: float, new_document: bool, *,
-                   deadline: float) -> PrimsResult:
+                   deadline: float, marker: str | None = None, if_exists: str = "skip",
+                   expect: int | None = None) -> PrimsResult:
         counts: dict[str, int] = {}
         by_layer: dict[str, int] = {}
         for p in prims:

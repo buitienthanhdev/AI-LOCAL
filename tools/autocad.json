@@ -792,7 +792,7 @@
     },
     {
       "name": "autocad.draw_floor_plan",
-      "description": "Draw a complete, professional single-storey house floor plan (mặt bằng nhà cấp 4) in ONE call: the layout is computed for you (porch, living room, corridor, bedrooms with en-suite bathrooms, shared bathroom, laundry, kitchen-dining, altar room, study, storage as the size allows), walls with real thickness (filled), doors with swing arcs, windows, furniture, room names with areas, dimensions, title and an area table, on layers KT-*. Units are metres. Give width and depth of the footprint (or the area). Use this for ANY request to draw a house / floor plan / mặt bằng instead of drawing walls with lines; afterwards add details with the other autocad.* tools if asked. AutoCAD must be running (autocad.launch). new_document=true (default) draws in a fresh drawing.",
+      "description": "Draw a complete, professional single-storey house floor plan (mặt bằng nhà cấp 4) in ONE call: the layout is computed for you (porch, living room, corridor, bedrooms with en-suite bathrooms, shared bathroom, laundry, kitchen-dining, altar room, study, storage as the size allows), walls with real thickness (filled), doors with swing arcs, windows, furniture, room names with areas, dimensions, title and an area table, on layers KT-*. Units are metres. Give width and depth of the footprint (or the area). Use this for ANY request to draw a house / floor plan / mặt bằng instead of drawing walls with lines; afterwards add details with the other autocad.* tools if asked. AutoCAD must be running (autocad.launch). new_document=true (default) draws in a fresh drawing. floors=1 (default) draws the single-storey plan exactly as before. floors 2-4: one plan per floor (floor n to the left of floor 1, 22 m + width apart) with the stair symbol, riser lines, walking line (LEN/XUONG), the slab opening on the floors above and a roof plan; floors above repeat the ground-floor walls (ASSUMED), exterior doors become windows. Stair sizes not given are ASSUMED working defaults; limits are applied only from a verified profile. Idempotent: every entity carries XData (application LGA_OP) with a marker derived from the operation inputs (or idempotency_key); an identical second call in the same drawing finds them and adds nothing (if_exists=skip, default) or erases and redraws them (replace). (a repeat in the SAME drawing, i.e. new_document=false.)",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -834,12 +834,200 @@
             "maximum": 5,
             "description": "front porch depth, m"
           },
+          "floors": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4,
+            "default": 1,
+            "description": "number of floors, 1 to 4 (default 1 = the single-storey house exactly as before). Pass the SAME value to every tool of the set."
+          },
+          "floor_heights": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "type": "number",
+              "minimum": 2.2,
+              "maximum": 6
+            },
+            "description": "clear floor-to-ceiling height of each floor, m (one per floor; default storey_height for all, ASSUMED). Floor n is at the previous ceiling + slab_thickness."
+          },
+          "stair": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "stair settings for floors >= 2. Riser count = ceil(floor-to-floor height / riser_target), riser height = height / count (recomputed, never typed). Anything not given is an ASSUMED working default, not a code limit.",
+            "properties": {
+              "riser_target": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "target riser height, m (default 0.17, ASSUMED)"
+              },
+              "tread": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "tread depth, m (default 0.25, ASSUMED)"
+              },
+              "width": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "flight width, m (default 0.9, ASSUMED)"
+              },
+              "landing": {
+                "type": "number",
+                "minimum": 0.3,
+                "maximum": 4,
+                "description": "landing depth between the two flights, m (default = width)"
+              },
+              "flights": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2
+                ],
+                "description": "2 = U stair with a landing (default; stacks over 2-4 floors); 1 = straight (2 floors only)"
+              },
+              "headroom": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "clear height assumed above the flight to size the slab opening, m (default 2.0, ASSUMED)"
+              },
+              "room": {
+                "type": "string",
+                "description": "kind of room that gets the stair (default living)"
+              },
+              "position": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "from": {
+                    "type": "string",
+                    "enum": [
+                      "front",
+                      "rear"
+                    ]
+                  }
+                },
+                "description": "lower-left corner of the stair footprint in plan metres; default: first clear corner of the room"
+              }
+            }
+          },
+          "profile": {
+            "type": "object",
+            "description": "limits from the Project Standards Profile: {max_riser_height | min_tread_depth | min_stair_width: {value, verified_by, source}}. A limit is applied (and checked by COORD.STAIR_RISERS) ONLY when verified_by names who verified it; otherwise it is reported as ASSUMED and not applied."
+          },
           "new_document": {
             "type": "boolean",
             "default": true
           },
           "origin": {
             "$ref": "#/$defs/point"
+          },
+          "storey_height": {
+            "type": "number",
+            "minimum": 2.2,
+            "maximum": 6,
+            "description": "clear floor-to-ceiling height, m (default 3.3, ASSUMED working default, not a code value)"
+          },
+          "plinth_height": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1.5,
+            "description": "floor level above the outside ground, m (default 0.45, ASSUMED)"
+          },
+          "slab_thickness": {
+            "type": "number",
+            "minimum": 0.05,
+            "maximum": 0.4,
+            "description": "graphic ceiling/roof slab thickness, m (default 0.1, ASSUMED; no structural design)"
+          },
+          "roof_type": {
+            "type": "string",
+            "enum": [
+              "pitched",
+              "flat"
+            ],
+            "description": "default pitched (ASSUMED)"
+          },
+          "roof_slope_deg": {
+            "type": "number",
+            "minimum": 5,
+            "maximum": 60,
+            "description": "pitched roof slope in degrees (default 30, ASSUMED)"
+          },
+          "roof_overhang": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "eaves overhang, m (default 0.6, ASSUMED)"
+          },
+          "parapet_height": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "flat roof parapet, m (default 0.6, ASSUMED)"
+          },
+          "door_height": {
+            "type": "number",
+            "minimum": 1.8,
+            "maximum": 3,
+            "description": "single door height, m (default 2.1, ASSUMED)"
+          },
+          "double_door_height": {
+            "type": "number",
+            "minimum": 1.8,
+            "maximum": 3.5,
+            "description": "double door height, m (default 2.4, ASSUMED)"
+          },
+          "window_height": {
+            "type": "number",
+            "minimum": 0.3,
+            "maximum": 2.4,
+            "description": "window height, m (default 1.2, ASSUMED)"
+          },
+          "window_sill": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "window sill height above the floor, m (default 0.9, ASSUMED)"
+          },
+          "roof_plan": {
+            "type": "boolean",
+            "default": true,
+            "description": "floors >= 2: also draw the roof plan to the left of the top floor plan"
+          },
+          "layer_map": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "office layer names: {\"A-WALL-EXT\": \"MY-WALL\", ...}; standard A-* names are used for any layer not listed"
+          },
+          "if_exists": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "replace",
+              "error"
+            ],
+            "default": "skip",
+            "description": "what to do when entities of an identical earlier call are already in the drawing (found by their LGA_OP XData marker): skip = draw nothing and verify they are all there (default), replace = erase them and draw again, error = refuse"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "optional operation id used as the marker instead of the hash of the inputs: calls with the same key share their entities"
           }
         }
       },
@@ -1502,9 +1690,12 @@
           "evidence": {
             "type": "object",
             "additionalProperties": {
-              "type": "boolean"
+              "type": [
+                "boolean",
+                "object"
+              ]
             },
-            "description": "dwg_opened_in_autocad, pdf_rendered_checked, autocad_session: true only when a prior tool result proved it."
+            "description": "dwg_opened_in_autocad, pdf_rendered_checked, autocad_session: true only when a prior tool result proved it. dwg_reopen_check: the object data.reopen_check of autocad.reopen_check (the saved DWG was closed and opened again in AutoCAD and entity counts compared); when present, dwg_opened_in_autocad is DERIVED from it, not taken from the flag."
           },
           "drawing_plan": {
             "type": "array",
@@ -1600,7 +1791,7 @@
     },
     {
       "name": "autocad.house_model",
-      "description": "Build the shared house data model (levels, wall runs with thickness and centre line, doors and windows with unique codes, sizes, sill heights and host walls, rooms with boundary and area, roof, assumptions) WITHOUT touching AutoCAD, and return it in the intermediate-model format of autocad.validate_model / autocad.report (data.model). The model is computed from the SAME parameters as autocad.draw_floor_plan (width, depth/area, bedrooms, altar, study, porch), so pass the same values to every view tool: plan, elevations, sections and schedules then agree (codes D1.., W1.., sizes, levels, areas). Vertical numbers that are not given (storey height, plinth, sill, door/window heights, roof) are working defaults flagged ASSUMED; nothing here checks any building code. Pass `views` (the data.views / data.view records returned by autocad.draw_elevation, draw_section, draw_schedules) to include what was actually drawn, so the cross-view rules can compare plan, elevations, sections and schedule tables; without them those rules report NOT_RUN. export_path writes the model as .json (backup before overwrite).",
+      "description": "Build the shared house data model (levels, wall runs with thickness and centre line, doors and windows with unique codes, sizes, sill heights and host walls, rooms with boundary and area, roof, assumptions) WITHOUT touching AutoCAD, and return it in the intermediate-model format of autocad.validate_model / autocad.report (data.model). The model is computed from the SAME parameters as autocad.draw_floor_plan (width, depth/area, bedrooms, altar, study, porch), so pass the same values to every view tool: plan, elevations, sections and schedules then agree (codes D1.., W1.., sizes, levels, areas). Vertical numbers that are not given (storey height, plinth, sill, door/window heights, roof) are working defaults flagged ASSUMED; nothing here checks any building code. Pass `views` (the data.views / data.view records returned by autocad.draw_elevation, draw_section, draw_schedules) to include what was actually drawn, so the cross-view rules can compare plan, elevations, sections and schedule tables; without them those rules report NOT_RUN. export_path writes the model as .json (backup before overwrite). Floors 1-4 (floors, floor_heights, stair, profile): levels per floor, stairs with risers recomputed from the floor-to-floor height, slab openings, per-floor codes; limits are applied only from a verified profile, everything else is flagged ASSUMED. layouts/sheet_index/pdf_render_check/reopen_check carry the measured sheet and plot evidence for the PLOT.* and FILE.REOPEN_COUNTS rules.",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1708,12 +1899,125 @@
             "maximum": 2,
             "description": "window sill height above the floor, m (default 0.9, ASSUMED)"
           },
+          "floors": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4,
+            "default": 1,
+            "description": "number of floors, 1 to 4 (default 1 = the single-storey house exactly as before). Pass the SAME value to every tool of the set."
+          },
+          "floor_heights": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "type": "number",
+              "minimum": 2.2,
+              "maximum": 6
+            },
+            "description": "clear floor-to-ceiling height of each floor, m (one per floor; default storey_height for all, ASSUMED). Floor n is at the previous ceiling + slab_thickness."
+          },
+          "stair": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "stair settings for floors >= 2. Riser count = ceil(floor-to-floor height / riser_target), riser height = height / count (recomputed, never typed). Anything not given is an ASSUMED working default, not a code limit.",
+            "properties": {
+              "riser_target": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "target riser height, m (default 0.17, ASSUMED)"
+              },
+              "tread": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "tread depth, m (default 0.25, ASSUMED)"
+              },
+              "width": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "flight width, m (default 0.9, ASSUMED)"
+              },
+              "landing": {
+                "type": "number",
+                "minimum": 0.3,
+                "maximum": 4,
+                "description": "landing depth between the two flights, m (default = width)"
+              },
+              "flights": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2
+                ],
+                "description": "2 = U stair with a landing (default; stacks over 2-4 floors); 1 = straight (2 floors only)"
+              },
+              "headroom": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "clear height assumed above the flight to size the slab opening, m (default 2.0, ASSUMED)"
+              },
+              "room": {
+                "type": "string",
+                "description": "kind of room that gets the stair (default living)"
+              },
+              "position": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "from": {
+                    "type": "string",
+                    "enum": [
+                      "front",
+                      "rear"
+                    ]
+                  }
+                },
+                "description": "lower-left corner of the stair footprint in plan metres; default: first clear corner of the room"
+              }
+            }
+          },
+          "profile": {
+            "type": "object",
+            "description": "limits from the Project Standards Profile: {max_riser_height | min_tread_depth | min_stair_width: {value, verified_by, source}}. A limit is applied (and checked by COORD.STAIR_RISERS) ONLY when verified_by names who verified it; otherwise it is reported as ASSUMED and not applied."
+          },
           "views": {
             "type": "array",
             "items": {
               "type": "object"
             },
             "description": "view records returned by the draw_* tools"
+          },
+          "layouts": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "measured layouts (data.layouts of autocad.create_layout) for the sheet/plot rules"
+          },
+          "sheet_index": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "declared sheet list (data.sheet_index of autocad.create_layout)"
+          },
+          "pdf_render_check": {
+            "type": "object",
+            "description": "data.pdf_render_check of autocad.plot_sheets (per-page render result)"
+          },
+          "reopen_check": {
+            "type": "object",
+            "description": "data.reopen_check of autocad.reopen_check (the saved DWG re-opened in AutoCAD)"
           },
           "export_path": {
             "type": "string",
@@ -1761,7 +2065,7 @@
     },
     {
       "name": "autocad.draw_elevation",
-      "description": "Draw one or more elevations (front, rear, left, right) of the house in AutoCAD from the shared house model: ground line, floor levels with +0.000 datum labels, walls, roof, porch posts, every door and window of that facade (same codes, sizes and sills as the plan and the schedules) with code tags, level marks and dimensions, on the standard layers A-* (A-WALL-EXT, A-DOOR, A-WINDOW, A-GLAZING, A-ROOF, A-ANNO-LEVEL, A-DIMS ...), model space 1:1, everything ByLayer. The model is computed from the SAME parameters as autocad.draw_floor_plan (width, depth/area, bedrooms, altar, study, porch), so pass the same values to every view tool: plan, elevations, sections and schedules then agree (codes D1.., W1.., sizes, levels, areas). Vertical numbers that are not given (storey height, plinth, sill, door/window heights, roof) are working defaults flagged ASSUMED; nothing here checks any building code. Draws into the ACTIVE drawing unless new_document=true. The result's data.views are records measured from what was drawn; give them to autocad.house_model (views) and then autocad.validate_model. Not idempotent: calling twice draws twice.",
+      "description": "Draw one or more elevations (front, rear, left, right) of the house in AutoCAD from the shared house model: ground line, floor levels with +0.000 datum labels, walls, roof, porch posts, every door and window of that facade (same codes, sizes and sills as the plan and the schedules) with code tags, level marks and dimensions, on the standard layers A-* (A-WALL-EXT, A-DOOR, A-WINDOW, A-GLAZING, A-ROOF, A-ANNO-LEVEL, A-DIMS ...), model space 1:1, everything ByLayer. The model is computed from the SAME parameters as autocad.draw_floor_plan (width, depth/area, bedrooms, altar, study, porch), so pass the same values to every view tool: plan, elevations, sections and schedules then agree (codes D1.., W1.., sizes, levels, areas). Vertical numbers that are not given (storey height, plinth, sill, door/window heights, roof) are working defaults flagged ASSUMED; nothing here checks any building code. Draws into the ACTIVE drawing unless new_document=true. The result's data.views are records measured from what was drawn; give them to autocad.house_model (views) and then autocad.validate_model. Idempotent: every entity carries XData (application LGA_OP) with a marker derived from the operation inputs (or idempotency_key); an identical second call in the same drawing finds them and adds nothing (if_exists=skip, default) or erases and redraws them (replace). Multi-storey: floors 2-4 repeat the ground-floor walls on every floor (ASSUMED layout, exterior doors become windows) and add a stair per floor pair (U-shaped, risers recomputed from the floor-to-floor height), a slab opening above it, a roof plan and per-floor codes (D1-T2 = door 1 of floor 2, rooms T2-R01).",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -1868,6 +2172,97 @@
             "minimum": 0,
             "maximum": 2,
             "description": "window sill height above the floor, m (default 0.9, ASSUMED)"
+          },
+          "floors": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4,
+            "default": 1,
+            "description": "number of floors, 1 to 4 (default 1 = the single-storey house exactly as before). Pass the SAME value to every tool of the set."
+          },
+          "floor_heights": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "type": "number",
+              "minimum": 2.2,
+              "maximum": 6
+            },
+            "description": "clear floor-to-ceiling height of each floor, m (one per floor; default storey_height for all, ASSUMED). Floor n is at the previous ceiling + slab_thickness."
+          },
+          "stair": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "stair settings for floors >= 2. Riser count = ceil(floor-to-floor height / riser_target), riser height = height / count (recomputed, never typed). Anything not given is an ASSUMED working default, not a code limit.",
+            "properties": {
+              "riser_target": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "target riser height, m (default 0.17, ASSUMED)"
+              },
+              "tread": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "tread depth, m (default 0.25, ASSUMED)"
+              },
+              "width": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "flight width, m (default 0.9, ASSUMED)"
+              },
+              "landing": {
+                "type": "number",
+                "minimum": 0.3,
+                "maximum": 4,
+                "description": "landing depth between the two flights, m (default = width)"
+              },
+              "flights": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2
+                ],
+                "description": "2 = U stair with a landing (default; stacks over 2-4 floors); 1 = straight (2 floors only)"
+              },
+              "headroom": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "clear height assumed above the flight to size the slab opening, m (default 2.0, ASSUMED)"
+              },
+              "room": {
+                "type": "string",
+                "description": "kind of room that gets the stair (default living)"
+              },
+              "position": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "from": {
+                    "type": "string",
+                    "enum": [
+                      "front",
+                      "rear"
+                    ]
+                  }
+                },
+                "description": "lower-left corner of the stair footprint in plan metres; default: first clear corner of the room"
+              }
+            }
+          },
+          "profile": {
+            "type": "object",
+            "description": "limits from the Project Standards Profile: {max_riser_height | min_tread_depth | min_stair_width: {value, verified_by, source}}. A limit is applied (and checked by COORD.STAIR_RISERS) ONLY when verified_by names who verified it; otherwise it is reported as ASSUMED and not applied."
           },
           "sides": {
             "type": "array",
@@ -1904,6 +2299,22 @@
               "minLength": 1
             },
             "description": "office layer names: {\"A-WALL-EXT\": \"MY-WALL\", ...}; standard A-* names are used for any layer not listed"
+          },
+          "if_exists": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "replace",
+              "error"
+            ],
+            "default": "skip",
+            "description": "what to do when entities of an identical earlier call are already in the drawing (found by their LGA_OP XData marker): skip = draw nothing and verify they are all there (default), replace = erase them and draw again, error = refuse"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "optional operation id used as the marker instead of the hash of the inputs: calls with the same key share their entities"
           }
         }
       },
@@ -1933,7 +2344,7 @@
       "timeout_ms": 300000,
       "risk_level": "medium",
       "requires_confirmation": false,
-      "idempotent": false,
+      "idempotent": true,
       "supports_rollback": false,
       "verification": "self",
       "policy_category": "autocad.write",
@@ -1941,7 +2352,7 @@
     },
     {
       "name": "autocad.draw_section",
-      "description": "Draw a building section of the house from the shared house model and, by default, its cut line with arrows and a lettered bubble (marker A-A, sheet A-301) on the plan: floor and roof/ceiling slabs and every cut wall with its door/window openings (cut hatch), the stair if the model has one, ground and floor/ceiling/roof levels with +0.000 datum labels, room names and clear-height dimensions, on A-SECTION-CUT, A-HATCH, A-SECTION-PROJ, A-ROOF, A-ANNO-LEVEL, A-DIMS, A-DETAIL-MARKER, model space 1:1, ByLayer. cut = {axis: y (cut line along x) or x, position (metres; default through the living room), direction +1/-1, letter, sheet}; a cut that runs inside a wall or crosses no wall is refused. The model is computed from the SAME parameters as autocad.draw_floor_plan (width, depth/area, bedrooms, altar, study, porch), so pass the same values to every view tool: plan, elevations, sections and schedules then agree (codes D1.., W1.., sizes, levels, areas). Vertical numbers that are not given (storey height, plinth, sill, door/window heights, roof) are working defaults flagged ASSUMED; nothing here checks any building code. The hatch is a graphic symbol, not a material statement; no structural design is implied. data.view is the record measured from the drawing; give it to autocad.house_model (views). Not idempotent.",
+      "description": "Draw a building section of the house from the shared house model and, by default, its cut line with arrows and a lettered bubble (marker A-A, sheet A-301) on the plan: floor and roof/ceiling slabs and every cut wall with its door/window openings (cut hatch), the stair if the model has one, ground and floor/ceiling/roof levels with +0.000 datum labels, room names and clear-height dimensions, on A-SECTION-CUT, A-HATCH, A-SECTION-PROJ, A-ROOF, A-ANNO-LEVEL, A-DIMS, A-DETAIL-MARKER, model space 1:1, ByLayer. cut = {axis: y (cut line along x) or x, position (metres; default through the living room), direction +1/-1, letter, sheet}; a cut that runs inside a wall or crosses no wall is refused. The model is computed from the SAME parameters as autocad.draw_floor_plan (width, depth/area, bedrooms, altar, study, porch), so pass the same values to every view tool: plan, elevations, sections and schedules then agree (codes D1.., W1.., sizes, levels, areas). Vertical numbers that are not given (storey height, plinth, sill, door/window heights, roof) are working defaults flagged ASSUMED; nothing here checks any building code. The hatch is a graphic symbol, not a material statement; no structural design is implied. data.view is the record measured from the drawing; give it to autocad.house_model (views). Idempotent: every entity carries XData (application LGA_OP) with a marker derived from the operation inputs (or idempotency_key); an identical second call in the same drawing finds them and adds nothing (if_exists=skip, default) or erases and redraws them (replace). Multi-storey: floors 2-4 repeat the ground-floor walls on every floor (ASSUMED layout, exterior doors become windows) and add a stair per floor pair (U-shaped, risers recomputed from the floor-to-floor height), a slab opening above it, a roof plan and per-floor codes (D1-T2 = door 1 of floor 2, rooms T2-R01).",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -2048,6 +2459,97 @@
             "minimum": 0,
             "maximum": 2,
             "description": "window sill height above the floor, m (default 0.9, ASSUMED)"
+          },
+          "floors": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4,
+            "default": 1,
+            "description": "number of floors, 1 to 4 (default 1 = the single-storey house exactly as before). Pass the SAME value to every tool of the set."
+          },
+          "floor_heights": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "type": "number",
+              "minimum": 2.2,
+              "maximum": 6
+            },
+            "description": "clear floor-to-ceiling height of each floor, m (one per floor; default storey_height for all, ASSUMED). Floor n is at the previous ceiling + slab_thickness."
+          },
+          "stair": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "stair settings for floors >= 2. Riser count = ceil(floor-to-floor height / riser_target), riser height = height / count (recomputed, never typed). Anything not given is an ASSUMED working default, not a code limit.",
+            "properties": {
+              "riser_target": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "target riser height, m (default 0.17, ASSUMED)"
+              },
+              "tread": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "tread depth, m (default 0.25, ASSUMED)"
+              },
+              "width": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "flight width, m (default 0.9, ASSUMED)"
+              },
+              "landing": {
+                "type": "number",
+                "minimum": 0.3,
+                "maximum": 4,
+                "description": "landing depth between the two flights, m (default = width)"
+              },
+              "flights": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2
+                ],
+                "description": "2 = U stair with a landing (default; stacks over 2-4 floors); 1 = straight (2 floors only)"
+              },
+              "headroom": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "clear height assumed above the flight to size the slab opening, m (default 2.0, ASSUMED)"
+              },
+              "room": {
+                "type": "string",
+                "description": "kind of room that gets the stair (default living)"
+              },
+              "position": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "from": {
+                    "type": "string",
+                    "enum": [
+                      "front",
+                      "rear"
+                    ]
+                  }
+                },
+                "description": "lower-left corner of the stair footprint in plan metres; default: first clear corner of the room"
+              }
+            }
+          },
+          "profile": {
+            "type": "object",
+            "description": "limits from the Project Standards Profile: {max_riser_height | min_tread_depth | min_stair_width: {value, verified_by, source}}. A limit is applied (and checked by COORD.STAIR_RISERS) ONLY when verified_by names who verified it; otherwise it is reported as ASSUMED and not applied."
           },
           "cut": {
             "type": "object",
@@ -2111,6 +2613,22 @@
               "minLength": 1
             },
             "description": "office layer names: {\"A-WALL-EXT\": \"MY-WALL\", ...}; standard A-* names are used for any layer not listed"
+          },
+          "if_exists": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "replace",
+              "error"
+            ],
+            "default": "skip",
+            "description": "what to do when entities of an identical earlier call are already in the drawing (found by their LGA_OP XData marker): skip = draw nothing and verify they are all there (default), replace = erase them and draw again, error = refuse"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "optional operation id used as the marker instead of the hash of the inputs: calls with the same key share their entities"
           }
         }
       },
@@ -2143,7 +2661,7 @@
       "timeout_ms": 300000,
       "risk_level": "medium",
       "requires_confirmation": false,
-      "idempotent": false,
+      "idempotent": true,
       "supports_rollback": false,
       "verification": "self",
       "policy_category": "autocad.write",
@@ -2151,7 +2669,7 @@
     },
     {
       "name": "autocad.draw_schedules",
-      "description": "Draw the door schedule, window schedule and room/area table as lines and text on A-ANNO-KEYNOTE / A-ANNO-TEXT from the same model as the plan symbols and elevations (codes, widths, heights, sill heights, host wall, facade; room code, name, area by the centre-line rule and the total), and return the rows in data.schedules. The model is computed from the SAME parameters as autocad.draw_floor_plan (width, depth/area, bedrooms, altar, study, porch), so pass the same values to every view tool: plan, elevations, sections and schedules then agree (codes D1.., W1.., sizes, levels, areas). Vertical numbers that are not given (storey height, plinth, sill, door/window heights, roof) are working defaults flagged ASSUMED; nothing here checks any building code. data.views[].rows are re-read from the text that was drawn; give them to autocad.house_model (views) so the validation compares the drawn table with the plan and the elevations. export_path writes schedules as .json (backup before overwrite). Not idempotent.",
+      "description": "Draw the door schedule, window schedule and room/area table as lines and text on A-ANNO-KEYNOTE / A-ANNO-TEXT from the same model as the plan symbols and elevations (codes, widths, heights, sill heights, host wall, facade; room code, name, area by the centre-line rule and the total), and return the rows in data.schedules. The model is computed from the SAME parameters as autocad.draw_floor_plan (width, depth/area, bedrooms, altar, study, porch), so pass the same values to every view tool: plan, elevations, sections and schedules then agree (codes D1.., W1.., sizes, levels, areas). Vertical numbers that are not given (storey height, plinth, sill, door/window heights, roof) are working defaults flagged ASSUMED; nothing here checks any building code. data.views[].rows are re-read from the text that was drawn; give them to autocad.house_model (views) so the validation compares the drawn table with the plan and the elevations. export_path writes schedules as .json (backup before overwrite). Idempotent: every entity carries XData (application LGA_OP) with a marker derived from the operation inputs (or idempotency_key); an identical second call in the same drawing finds them and adds nothing (if_exists=skip, default) or erases and redraws them (replace). Multi-storey: floors 2-4 repeat the ground-floor walls on every floor (ASSUMED layout, exterior doors become windows) and add a stair per floor pair (U-shaped, risers recomputed from the floor-to-floor height), a slab opening above it, a roof plan and per-floor codes (D1-T2 = door 1 of floor 2, rooms T2-R01).",
       "input_schema": {
         "type": "object",
         "additionalProperties": false,
@@ -2259,6 +2777,97 @@
             "maximum": 2,
             "description": "window sill height above the floor, m (default 0.9, ASSUMED)"
           },
+          "floors": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4,
+            "default": 1,
+            "description": "number of floors, 1 to 4 (default 1 = the single-storey house exactly as before). Pass the SAME value to every tool of the set."
+          },
+          "floor_heights": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "type": "number",
+              "minimum": 2.2,
+              "maximum": 6
+            },
+            "description": "clear floor-to-ceiling height of each floor, m (one per floor; default storey_height for all, ASSUMED). Floor n is at the previous ceiling + slab_thickness."
+          },
+          "stair": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "stair settings for floors >= 2. Riser count = ceil(floor-to-floor height / riser_target), riser height = height / count (recomputed, never typed). Anything not given is an ASSUMED working default, not a code limit.",
+            "properties": {
+              "riser_target": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "target riser height, m (default 0.17, ASSUMED)"
+              },
+              "tread": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "tread depth, m (default 0.25, ASSUMED)"
+              },
+              "width": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "flight width, m (default 0.9, ASSUMED)"
+              },
+              "landing": {
+                "type": "number",
+                "minimum": 0.3,
+                "maximum": 4,
+                "description": "landing depth between the two flights, m (default = width)"
+              },
+              "flights": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2
+                ],
+                "description": "2 = U stair with a landing (default; stacks over 2-4 floors); 1 = straight (2 floors only)"
+              },
+              "headroom": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "clear height assumed above the flight to size the slab opening, m (default 2.0, ASSUMED)"
+              },
+              "room": {
+                "type": "string",
+                "description": "kind of room that gets the stair (default living)"
+              },
+              "position": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "from": {
+                    "type": "string",
+                    "enum": [
+                      "front",
+                      "rear"
+                    ]
+                  }
+                },
+                "description": "lower-left corner of the stair footprint in plan metres; default: first clear corner of the room"
+              }
+            }
+          },
+          "profile": {
+            "type": "object",
+            "description": "limits from the Project Standards Profile: {max_riser_height | min_tread_depth | min_stair_width: {value, verified_by, source}}. A limit is applied (and checked by COORD.STAIR_RISERS) ONLY when verified_by names who verified it; otherwise it is reported as ASSUMED and not applied."
+          },
           "origin": {
             "$ref": "#/$defs/point",
             "description": "top-left corner of the first table (default: right of the plan)"
@@ -2288,6 +2897,22 @@
               "minLength": 1
             },
             "description": "office layer names: {\"A-WALL-EXT\": \"MY-WALL\", ...}; standard A-* names are used for any layer not listed"
+          },
+          "if_exists": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "replace",
+              "error"
+            ],
+            "default": "skip",
+            "description": "what to do when entities of an identical earlier call are already in the drawing (found by their LGA_OP XData marker): skip = draw nothing and verify they are all there (default), replace = erase them and draw again, error = refuse"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "optional operation id used as the marker instead of the hash of the inputs: calls with the same key share their entities"
           }
         }
       },
@@ -2318,6 +2943,789 @@
           },
           "export_path": {
             "type": "string"
+          }
+        }
+      },
+      "timeout_ms": 300000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "self",
+      "policy_category": "autocad.write",
+      "side_effects": "yes"
+    },
+    {
+      "name": "autocad.draw_stair",
+      "description": "Draw the stair symbol of one floor of a multi-storey house from the shared house model: outline, one line per riser face, landing edge, walking line with arrow and the text LEN (stair that starts on this floor) or XUONG (stair that arrives), and on floors >= 2 the outline of the slab opening above the stair below (layers A-STAIR, A-HIDDEN, A-ANNO-TEXT, model space 1:1, ByLayer). The same parameters as autocad.house_model (width, depth/area, bedrooms ..., floors >= 2, floor_heights, stair, profile) give the same stair: riser count = ceil(floor-to-floor height / riser_target), riser height recomputed = height / count, tread, width, landing, headroom from the arguments or ASSUMED working defaults; a limit (max_riser_height, min_tread_depth, min_stair_width) is applied only from a profile entry with verified_by. The symbol is placed at the origin of that floor's plan (floor n is drawn to the left of floor 1 by autocad.draw_floor_plan, which already calls this for every floor). data.view is the record measured from the drawing (riser lines counted, openings read back); give it to autocad.house_model (views). Idempotent: every entity carries XData (application LGA_OP) with a marker derived from the operation inputs (or idempotency_key); an identical second call in the same drawing finds them and adds nothing (if_exists=skip, default) or erases and redraws them (replace).",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "floors",
+          "floor"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "width": {
+            "type": "number",
+            "minimum": 4,
+            "maximum": 60,
+            "description": "footprint width along the street, m (same as autocad.draw_floor_plan)"
+          },
+          "depth": {
+            "type": "number",
+            "minimum": 8,
+            "maximum": 80,
+            "description": "footprint depth, m"
+          },
+          "area": {
+            "type": "number",
+            "minimum": 40,
+            "maximum": 3000,
+            "description": "footprint area in m², when width/depth are not both given"
+          },
+          "bedrooms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          },
+          "altar": {
+            "type": "boolean"
+          },
+          "study": {
+            "type": "boolean"
+          },
+          "porch": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 5,
+            "description": "front porch depth, m"
+          },
+          "storey_height": {
+            "type": "number",
+            "minimum": 2.2,
+            "maximum": 6,
+            "description": "clear floor-to-ceiling height, m (default 3.3, ASSUMED working default, not a code value)"
+          },
+          "plinth_height": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1.5,
+            "description": "floor level above the outside ground, m (default 0.45, ASSUMED)"
+          },
+          "slab_thickness": {
+            "type": "number",
+            "minimum": 0.05,
+            "maximum": 0.4,
+            "description": "graphic ceiling/roof slab thickness, m (default 0.1, ASSUMED; no structural design)"
+          },
+          "roof_type": {
+            "type": "string",
+            "enum": [
+              "pitched",
+              "flat"
+            ],
+            "description": "default pitched (ASSUMED)"
+          },
+          "roof_slope_deg": {
+            "type": "number",
+            "minimum": 5,
+            "maximum": 60,
+            "description": "pitched roof slope in degrees (default 30, ASSUMED)"
+          },
+          "roof_overhang": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "eaves overhang, m (default 0.6, ASSUMED)"
+          },
+          "parapet_height": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "flat roof parapet, m (default 0.6, ASSUMED)"
+          },
+          "door_height": {
+            "type": "number",
+            "minimum": 1.8,
+            "maximum": 3,
+            "description": "single door height, m (default 2.1, ASSUMED)"
+          },
+          "double_door_height": {
+            "type": "number",
+            "minimum": 1.8,
+            "maximum": 3.5,
+            "description": "double door height, m (default 2.4, ASSUMED)"
+          },
+          "window_height": {
+            "type": "number",
+            "minimum": 0.3,
+            "maximum": 2.4,
+            "description": "window height, m (default 1.2, ASSUMED)"
+          },
+          "window_sill": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "window sill height above the floor, m (default 0.9, ASSUMED)"
+          },
+          "floors": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4,
+            "default": 1,
+            "description": "number of floors, 1 to 4 (default 1 = the single-storey house exactly as before). Pass the SAME value to every tool of the set."
+          },
+          "floor_heights": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "type": "number",
+              "minimum": 2.2,
+              "maximum": 6
+            },
+            "description": "clear floor-to-ceiling height of each floor, m (one per floor; default storey_height for all, ASSUMED). Floor n is at the previous ceiling + slab_thickness."
+          },
+          "stair": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "stair settings for floors >= 2. Riser count = ceil(floor-to-floor height / riser_target), riser height = height / count (recomputed, never typed). Anything not given is an ASSUMED working default, not a code limit.",
+            "properties": {
+              "riser_target": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "target riser height, m (default 0.17, ASSUMED)"
+              },
+              "tread": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "tread depth, m (default 0.25, ASSUMED)"
+              },
+              "width": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "flight width, m (default 0.9, ASSUMED)"
+              },
+              "landing": {
+                "type": "number",
+                "minimum": 0.3,
+                "maximum": 4,
+                "description": "landing depth between the two flights, m (default = width)"
+              },
+              "flights": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2
+                ],
+                "description": "2 = U stair with a landing (default; stacks over 2-4 floors); 1 = straight (2 floors only)"
+              },
+              "headroom": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "clear height assumed above the flight to size the slab opening, m (default 2.0, ASSUMED)"
+              },
+              "room": {
+                "type": "string",
+                "description": "kind of room that gets the stair (default living)"
+              },
+              "position": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "from": {
+                    "type": "string",
+                    "enum": [
+                      "front",
+                      "rear"
+                    ]
+                  }
+                },
+                "description": "lower-left corner of the stair footprint in plan metres; default: first clear corner of the room"
+              }
+            }
+          },
+          "profile": {
+            "type": "object",
+            "description": "limits from the Project Standards Profile: {max_riser_height | min_tread_depth | min_stair_width: {value, verified_by, source}}. A limit is applied (and checked by COORD.STAIR_RISERS) ONLY when verified_by names who verified it; otherwise it is reported as ASSUMED and not applied."
+          },
+          "floor": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4,
+            "description": "floor whose plan gets the symbol"
+          },
+          "origin": {
+            "$ref": "#/$defs/point",
+            "description": "plan origin of that floor (default: where autocad.draw_floor_plan puts it)"
+          },
+          "plan_origin": {
+            "$ref": "#/$defs/point",
+            "description": "origin of floor 1 (default 0,0)"
+          },
+          "new_document": {
+            "type": "boolean",
+            "default": false
+          },
+          "layer_map": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "office layer names: {\"A-WALL-EXT\": \"MY-WALL\", ...}; standard A-* names are used for any layer not listed"
+          },
+          "if_exists": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "replace",
+              "error"
+            ],
+            "default": "skip",
+            "description": "what to do when entities of an identical earlier call are already in the drawing (found by their LGA_OP XData marker): skip = draw nothing and verify they are all there (default), replace = erase them and draw again, error = refuse"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "optional operation id used as the marker instead of the hash of the inputs: calls with the same key share their entities"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "view",
+          "stairs"
+        ],
+        "properties": {
+          "view": {
+            "type": "object"
+          },
+          "stairs": {
+            "type": "array"
+          },
+          "floor": {
+            "type": "integer"
+          },
+          "assumptions": {
+            "type": "array"
+          },
+          "operation_id": {
+            "type": "string"
+          }
+        }
+      },
+      "timeout_ms": 300000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "self",
+      "policy_category": "autocad.write",
+      "side_effects": "yes"
+    },
+    {
+      "name": "autocad.create_layout",
+      "description": "Create the paper-space layouts of the drawing set of a house, one per sheet, named by sheet code (spec section 12: A-101 plan floor 1, A-102.. further floors, next code roof plan, A-201..A-204 elevations, A-301 section, A-501 door/window tables, A-503 room tables; the codes are configurable with sheet_codes). Each layout gets the paper size and orientation (A4-A1, landscape/portrait, PDF plot device, mm), a frame, a title block and ONE viewport at an exact 1:N scale (requested per kind or sheet code in scales, default 1:100, tables 1:50; the largest standard scale that fits is used and reported when the content does not fit), centred on the sheet's model-space window and LOCKED. Title block fields: project, client, designer, date, revision, status come only from title_block; sheet code, sheet name and scale are written by the tool; prepared / checked / approved and signatures are NEVER written (drawn as empty cells; asking for them is refused). Everything is read back from AutoCAD (paper, rotation, viewport scale, lock, title block texts) into data.layouts / data.sheet_index for autocad.house_model and the PLOT.* rules. Draw the views first (autocad.draw_floor_plan, draw_elevation, draw_section, draw_schedules; pass their data.views as views to use the real extents). The model is in metres, so 1:100 means 10 mm of paper per drawing unit. Idempotent: every entity carries XData (application LGA_OP) with a marker derived from the operation inputs (or idempotency_key); an identical second call in the same drawing finds them and adds nothing (if_exists=skip, default) or erases and redraws them (replace).",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "width": {
+            "type": "number",
+            "minimum": 4,
+            "maximum": 60,
+            "description": "footprint width along the street, m (same as autocad.draw_floor_plan)"
+          },
+          "depth": {
+            "type": "number",
+            "minimum": 8,
+            "maximum": 80,
+            "description": "footprint depth, m"
+          },
+          "area": {
+            "type": "number",
+            "minimum": 40,
+            "maximum": 3000,
+            "description": "footprint area in m², when width/depth are not both given"
+          },
+          "bedrooms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          },
+          "altar": {
+            "type": "boolean"
+          },
+          "study": {
+            "type": "boolean"
+          },
+          "porch": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 5,
+            "description": "front porch depth, m"
+          },
+          "storey_height": {
+            "type": "number",
+            "minimum": 2.2,
+            "maximum": 6,
+            "description": "clear floor-to-ceiling height, m (default 3.3, ASSUMED working default, not a code value)"
+          },
+          "plinth_height": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1.5,
+            "description": "floor level above the outside ground, m (default 0.45, ASSUMED)"
+          },
+          "slab_thickness": {
+            "type": "number",
+            "minimum": 0.05,
+            "maximum": 0.4,
+            "description": "graphic ceiling/roof slab thickness, m (default 0.1, ASSUMED; no structural design)"
+          },
+          "roof_type": {
+            "type": "string",
+            "enum": [
+              "pitched",
+              "flat"
+            ],
+            "description": "default pitched (ASSUMED)"
+          },
+          "roof_slope_deg": {
+            "type": "number",
+            "minimum": 5,
+            "maximum": 60,
+            "description": "pitched roof slope in degrees (default 30, ASSUMED)"
+          },
+          "roof_overhang": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "eaves overhang, m (default 0.6, ASSUMED)"
+          },
+          "parapet_height": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "flat roof parapet, m (default 0.6, ASSUMED)"
+          },
+          "door_height": {
+            "type": "number",
+            "minimum": 1.8,
+            "maximum": 3,
+            "description": "single door height, m (default 2.1, ASSUMED)"
+          },
+          "double_door_height": {
+            "type": "number",
+            "minimum": 1.8,
+            "maximum": 3.5,
+            "description": "double door height, m (default 2.4, ASSUMED)"
+          },
+          "window_height": {
+            "type": "number",
+            "minimum": 0.3,
+            "maximum": 2.4,
+            "description": "window height, m (default 1.2, ASSUMED)"
+          },
+          "window_sill": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "window sill height above the floor, m (default 0.9, ASSUMED)"
+          },
+          "floors": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 4,
+            "default": 1,
+            "description": "number of floors, 1 to 4 (default 1 = the single-storey house exactly as before). Pass the SAME value to every tool of the set."
+          },
+          "floor_heights": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "items": {
+              "type": "number",
+              "minimum": 2.2,
+              "maximum": 6
+            },
+            "description": "clear floor-to-ceiling height of each floor, m (one per floor; default storey_height for all, ASSUMED). Floor n is at the previous ceiling + slab_thickness."
+          },
+          "stair": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "stair settings for floors >= 2. Riser count = ceil(floor-to-floor height / riser_target), riser height = height / count (recomputed, never typed). Anything not given is an ASSUMED working default, not a code limit.",
+            "properties": {
+              "riser_target": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "target riser height, m (default 0.17, ASSUMED)"
+              },
+              "tread": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "tread depth, m (default 0.25, ASSUMED)"
+              },
+              "width": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "flight width, m (default 0.9, ASSUMED)"
+              },
+              "landing": {
+                "type": "number",
+                "minimum": 0.3,
+                "maximum": 4,
+                "description": "landing depth between the two flights, m (default = width)"
+              },
+              "flights": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2
+                ],
+                "description": "2 = U stair with a landing (default; stacks over 2-4 floors); 1 = straight (2 floors only)"
+              },
+              "headroom": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 3,
+                "description": "clear height assumed above the flight to size the slab opening, m (default 2.0, ASSUMED)"
+              },
+              "room": {
+                "type": "string",
+                "description": "kind of room that gets the stair (default living)"
+              },
+              "position": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "from": {
+                    "type": "string",
+                    "enum": [
+                      "front",
+                      "rear"
+                    ]
+                  }
+                },
+                "description": "lower-left corner of the stair footprint in plan metres; default: first clear corner of the room"
+              }
+            }
+          },
+          "profile": {
+            "type": "object",
+            "description": "limits from the Project Standards Profile: {max_riser_height | min_tread_depth | min_stair_width: {value, verified_by, source}}. A limit is applied (and checked by COORD.STAIR_RISERS) ONLY when verified_by names who verified it; otherwise it is reported as ASSUMED and not applied."
+          },
+          "paper": {
+            "type": "string",
+            "enum": [
+              "A4",
+              "A3",
+              "A2",
+              "A1"
+            ],
+            "default": "A3"
+          },
+          "orientation": {
+            "type": "string",
+            "enum": [
+              "landscape",
+              "portrait"
+            ],
+            "default": "landscape"
+          },
+          "scales": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^1:[0-9]+$"
+            },
+            "description": "requested scale per sheet kind (plan, roof_plan, elevation, section, schedule) or sheet code, e.g. {\"plan\": \"1:100\", \"A-501\": \"1:50\"}"
+          },
+          "sheet_codes": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "office sheet codes by default code, e.g. {\"A-301\": \"KT-05\"}"
+          },
+          "sheets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "only these sheet codes (default: all)"
+          },
+          "title_block": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "project": {
+                "type": "string"
+              },
+              "client": {
+                "type": "string"
+              },
+              "designer": {
+                "type": "string"
+              },
+              "date": {
+                "type": "string",
+                "description": "text, or 'today'"
+              },
+              "revision": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "description": "default DRAFT"
+              }
+            },
+            "description": "values for the title block fields the caller may supply (never names of people or signatures)"
+          },
+          "views": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "view records returned by the draw tools (their extent places the viewport windows)"
+          },
+          "plan_origin": {
+            "$ref": "#/$defs/point"
+          },
+          "style_sheet": {
+            "type": "string",
+            "default": "monochrome.ctb"
+          },
+          "layer_map": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "office layer names: {\"A-WALL-EXT\": \"MY-WALL\", ...}; standard A-* names are used for any layer not listed"
+          },
+          "if_exists": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "replace",
+              "error"
+            ],
+            "default": "skip",
+            "description": "what to do when entities of an identical earlier call are already in the drawing (found by their LGA_OP XData marker): skip = draw nothing and verify they are all there (default), replace = erase them and draw again, error = refuse"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80,
+            "description": "optional operation id used as the marker instead of the hash of the inputs: calls with the same key share their entities"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "layouts",
+          "sheet_index"
+        ],
+        "properties": {
+          "layouts": {
+            "type": "array"
+          },
+          "sheet_index": {
+            "type": "array"
+          },
+          "paper": {
+            "type": "string"
+          },
+          "orientation": {
+            "type": "string"
+          },
+          "scale_adjusted": {
+            "type": "array"
+          },
+          "operation_id": {
+            "type": "string"
+          }
+        }
+      },
+      "timeout_ms": 600000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "self",
+      "policy_category": "autocad.write",
+      "side_effects": "yes"
+    },
+    {
+      "name": "autocad.plot_sheets",
+      "description": "Plot the layouts made by autocad.create_layout to ONE multi-page PDF (the PDF plot device, one page per sheet, in the order given by sheets or by sheet code), then check the PDF: PyMuPDF in a SYSTEM Python renders every page to an image (non-blank), counts the pages against the sheets, checks the page size against the layout paper and looks for the sheet code in each page's text. If AutoCAD wrote a different number of pages the sheets are plotted one by one and merged. When no Python with PyMuPDF is found the PDF is NOT rendered and data.pdf_render_check is null: say so, do not claim the PDF was checked. An existing file needs overwrite=true (backup first, restored if the plot fails); the operation is recorded. Plot settings changed for the plot (BACKGROUNDPLOT, QuietErrorMode) are restored. Give data.pdf_render_check to autocad.house_model for PLOT.PDF_PAGES_MATCH_SHEETS.",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "(?i)\\.pdf$",
+            "description": "Absolute path ending in .pdf."
+          },
+          "overwrite": {
+            "type": "boolean",
+            "default": false
+          },
+          "sheets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "layout (sheet) names in page order; default: every layout made by autocad.create_layout, in natural order"
+          },
+          "render_check": {
+            "type": "boolean",
+            "default": true,
+            "description": "render and inspect the PDF with PyMuPDF (system Python)"
+          },
+          "png_dir": {
+            "type": "string",
+            "description": "folder for one PNG per page (optional)"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "path",
+          "size",
+          "sheets"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "sheets": {
+            "type": "array"
+          },
+          "pages": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "method": {
+            "type": "string"
+          },
+          "pdf_render_check": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "page_images": {
+            "type": "array"
+          },
+          "device": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "backup": {
+            "type": "object"
+          }
+        }
+      },
+      "timeout_ms": 900000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "policy_category": "autocad.write",
+      "side_effects": "yes"
+    },
+    {
+      "name": "autocad.reopen_check",
+      "description": "Evidence that a saved DWG opens: count the entities of the open drawing at path (model space by object type, marked entities, layouts with entity counts, paper size and viewport scale/lock), close it (refused with CONFLICT while it has unsaved changes: save first), open the DWG from disk in AutoCAD again, count again and compare. Only the drawing at path is closed, and only after a save; with keep_open=false (default) the re-opened drawing is closed again (read-only), with keep_open=true it stays open for editing. If the drawing was not open, expected_counts (a previous data.after) is compared instead. data.evidence goes to autocad.report: dwg_opened_in_autocad becomes true only when the re-open succeeded AND every count is equal. data.reopen_check goes to autocad.house_model (FILE.REOPEN_COUNTS).",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "type": "string",
+            "pattern": "(?i)\\.dwg$",
+            "description": "Absolute path of a saved .dwg."
+          },
+          "keep_open": {
+            "type": "boolean",
+            "default": false
+          },
+          "expected_counts": {
+            "type": "object",
+            "description": "counts to compare with when the drawing is not open (data.after of an earlier call)"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "reopen_check",
+          "after"
+        ],
+        "properties": {
+          "reopen_check": {
+            "type": "object"
+          },
+          "after": {
+            "type": "object"
+          },
+          "before": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "was_open_before": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "type": "object"
           }
         }
       },

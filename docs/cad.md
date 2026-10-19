@@ -58,14 +58,14 @@ restore it if the write fails; the result carries `operation_id` and `backup`.
 ## Honest limits
 
 * The spec layer was verified by unit tests (`tests/test_autocad_spec_unit.py`); the view tools also had a live run (below). No code compliance is checked,
-  and no DWG was re-opened from disk.
+  and (before the multi-storey work) no DWG was re-opened from disk; `autocad.reopen_check` now does that.
 * `dwg_opened_in_autocad` / `pdf_rendered_checked` are flags the caller sets from earlier tool results; the report checks file
   existence and DWG/PDF header bytes itself and lists these flags as unverified. Code review and issue approval come only from
   human-written JSON files; an issue status is impossible without both and without CODE_REVIEWED.
 * Default tolerances are working defaults (mm per purpose), not standards; set them per project. Stair/riser limits are applied
   only when passed from a verified profile. No legal, structural, fire or accessibility compliance is checked.
 * Not implemented: reading DWG/PDF/IFC directly into the model (only `autocad.get_entities` output, types inferred from layer
-  names), (elevation/section generation now exists for generated houses, see below), idempotency markers written into AutoCAD entities (journal-level only), PDF visual checks,
+  names), (elevation/section generation now exists for generated houses, see below), (idempotency markers in the entities and PDF rendering now exist, see the multi-storey section),
   block/attribute, CTB/STB and plot-setting inspection beyond the supplied `meta` inventory.
 
 # House views from one shared model (autocad.house_model / draw_elevation / draw_section / draw_schedules)
@@ -87,7 +87,7 @@ Code: `lga_worker/autocad/housemodel.py` (pure model), `houseviews.py` (pure vie
   `COORD.SCHEDULE_MATCHES_ELEVATION`, `COORD.LEVELS_ELEVATION_SECTION`, `COORD.SECTION_MARKER_VIEW` (a section without a marker is a
   WARNING), `COORD.ROOM_TABLE_AREA`. 36 rules in all. `COORD.AREA_RECOMPUTED` now ignores a table total line.
 * Safety: the draw tools write an operation record (`operations.jsonl`); `export_path` writes go through the backup-before-overwrite
-  guard; a drawing call fails with VERIFICATION_FAILED when AutoCAD's entity count differs from what was sent. Not idempotent.
+  guard; a drawing call fails with VERIFICATION_FAILED when AutoCAD's entity count differs from what was sent. See the idempotency section below.
 * Working defaults (storey 3.3 m, plinth 0.45, slab 0.1, door 2.1/2.4, window 1.2 at sill 0.9, narrow window 0.6 at 1.5, roof 30 deg,
   overhang 0.6, parapet 0.6, wall 0.2/0.1 m, datum +0.000 = floor 1) are flagged ASSUMED with a source note in the model and
   `data.assumptions`; arguments of the caller become PROVIDED. They are not code requirements; no structural design, no
@@ -102,7 +102,98 @@ Unit tests: `tests/test_autocad_views_unit.py`.
 
 ## Not done
 
-Multi-storey houses and stairs from `plan_house` (the section draws a stair only if one is added to the model), layouts/viewports/
-title blocks, balcony/railing/material notes on elevations, beyond-the-cut projection lines in sections, door swing
-conflict checks, reading existing DWG into the model, idempotency markers in the drawing, FINAL_STATUS above DRAFT (needs a DWG
-reopened in AutoCAD and human review).
+Balcony/railing/material notes on elevations, beyond-the-cut projection lines in sections, door swing conflict checks, reading an
+existing DWG into the model, stair railings, per-floor room layouts that differ from the ground floor, code compliance of anything,
+FINAL_STATUS CODE_REVIEWED (needs a human review record and a verified profile). Multi-storey, stairs, layouts, plotting, idempotency
+and the re-open check are described next.
+
+# Multi-storey houses, stairs, layouts, plotting, idempotency (autocad.draw_stair / create_layout / plot_sheets / reopen_check)
+
+Code: `housemodel.py` (levels per floor, `design_stairs`, `floor_plan`), `houseviews.py` (`stair_plan_view`, `roof_plan_view`,
+multi-floor elevation / section / schedules), `layouts.py` (sheet list, paper, title block, viewport geometry, `compare_counts`),
+`provider_layouts.py` (paper space, viewports, plot, re-open; STA thread), `com_extra.py` (XData marker), `pdfcheck.py` (PyMuPDF in a
+system Python), rules in `validation.py`, handlers in `tools/autocad.py`, contract in `tools/autocad.json`.
+
+## Floors and stairs
+
+* `floors` 1-4 (+ `floor_heights`, `stair`, `profile`) on `autocad.house_model`, `draw_floor_plan`, `draw_elevation`, `draw_section`,
+  `draw_schedules`, `draw_stair`, `create_layout`. `floors=1` (default) is the single-storey house exactly as before.
+* Levels: `LV-F1`.. at the previous ceiling + slab, `LV-CEIL`, `LV-CEIL2`.., `LV-ROOF`, ridge/parapet. Upper floors repeat the ground-floor
+  walls and room rectangles (an ASSUMED layout: `plan_house` is a single-storey generator); exterior doors become windows; codes
+  carry the floor (`D1-T2`, rooms `T2-R01`, walls `WL01-F2`). Elevations mark every floor level; the section (default: through the middle
+  of the first flight, axis x) shows every floor, slabs cut around the stair opening, clear heights per floor and the stair profile.
+* Stair: one per floor pair, all in one footprint inside the living room (first corner clear of door swings). Riser count =
+  ceil(floor-to-floor height / riser target), riser height = height / count (recomputed, not typed), flights (U with landing by default;
+  straight = two floors only), treads = risers - 1 per flight, width, landing, up direction, slab opening above it (arrival flight
+  open from the floor edge, the other side from where the assumed headroom is reached). Plan symbol per floor: outline, one line per
+  riser face, landing edge, walking line, LEN / XUONG, opening outline; roof plan (`PLAN-ROOF`, sheet after the last floor).
+* Limits: `profile` entries `max_riser_height`, `min_tread_depth`, `min_stair_width` with `verified_by` are applied (the stair is sized
+  to them, conflicting explicit values are refused, `COORD.STAIR_RISERS` checks them). Without `verified_by` they are reported ASSUMED
+  and not applied. Every other stair number (target riser 0.17, tread 0.25, width 0.9, landing = width, headroom 2.0, gap 0.1) is an
+  ASSUMED working default listed in `assumptions` (`ASM-stair-*`); there is no code limit behind them. Headroom/clearance, handrails
+  and the walking route between flights are NOT checked.
+* Schedules: one door / window / room table per floor (floors side by side), room totals per floor.
+
+## Layouts and plot
+
+* `autocad.create_layout`: one paper-space layout per sheet named by sheet code (default `A-101` plan floor 1, `A-102`.. further floors,
+  the next code the roof plan, `A-201..A-204` elevations, `A-301` section, `A-501` door/window tables, `A-503` room tables; override
+  with `sheet_codes`). A4-A1, landscape/portrait, PDF plot device with the full-bleed media, mm; frame; title block; one viewport on
+  layer `A-NPLT` (non-plotting) exactly the size of the content window, scale set with `CustomScale` (model in metres: 1:100 = 10 mm per
+  unit), `DisplayLocked = True`. The scale requested per kind/code (default 1:100, tables 1:50) is used when the content fits, else the
+  next coarser standard scale is used and reported (`scale_adjusted`; the schedules of a 3-storey house come out 1:125). AutoCAD's own
+  default viewport of a new layout is deleted so nothing plots over the sheet. Everything is read back (paper, rotation, viewport
+  scale/lock, title block texts) into `data.layouts` / `data.sheet_index`.
+* Title block: project, client, designer, date, revision, status come only from `title_block` (status defaults to DRAFT); sheet code,
+  sheet name and scale are written by the tool; prepared / checked / approved and signatures are NEVER written (drawn as empty
+  cells; the schema refuses them). Blank fields stay visibly blank.
+* `autocad.plot_sheets`: plots each layout to its own PDF (`PlotToFile` of the active layout; a single `PlotToFile` of several layouts
+  wrote no file with this device, verified live), merges them in order into ONE multi-page PDF with PyMuPDF (system Python), then
+  renders every page to an image and checks: pages == sheets, not blank, text layer, sheet code in the page text, page size equals the
+  layout paper. No Python with PyMuPDF (or `render_check=false`) means `data.pdf_render_check` is null and the observation says the PDF
+  was NOT rendered; several sheets then fail with EXECUTION_FAILED because they cannot be merged. Existing file: overwrite + backup.
+
+## Idempotency
+
+Every entity a draw tool creates carries XData (registered application `LGA_OP`) with a marker = hash of what is drawn (house
+parameters, view id, origin, layer map; NOT the tool name, `new_document`, `if_exists`), or `idempotency_key` when given. A second
+identical call finds its entities and adds nothing (`if_exists=skip`, default; the check compares the found count with the expected
+one), `replace` erases them and draws again, `error` refuses. If the earlier call was cut short (found count differs from the expected
+one) the remains are erased and the view is drawn completely, never left half drawn or doubled. Two tools drawing the same view in the
+same place share entities (`draw_floor_plan` and `draw_stair`). Layouts: the same marker on their entities; a layout of the same name
+made with different content is a CONFLICT unless `if_exists=replace`; a layout left half built by a failed call is removed/rebuilt.
+Every tool still writes its operation record (`operations.jsonl`); `autocad.save` / `export_*` / `plot_sheets` keep the backup guard.
+
+## Validation (44 rules now, 10 added)
+
+`COORD.STAIR_RISERS` (extended: flights sum, treads, riser recomputed from the levels, verified limits from the stair's profile, INFO
+that ASSUMED settings are not code limits), `COORD.STAIR_OPENING_IN_SLAB` (opening in the slab the stair arrives at, inside the footprint,
+at least 40 % of it, equal to the opening drawn on that plan; NOT_RUN when no slab is modelled), `COORD.STAIR_PLAN_MATCHES_MODEL`,
+`COORD.FLOOR_LEVELS_ALL_FLOORS` (floor/ceiling levels, slab gaps, contents of each floor, door heads, roof above the top ceiling,
+every elevation and section marks every floor, a stair exists), `PLOT.SHEET_LAYOUT_EXISTS`, `PLOT.VIEWPORT_SCALE`,
+`PLOT.VIEWPORT_LOCKED`, `PLOT.TITLE_BLOCK_FIELDS` (fields present, sheet code and scale equal the index, a filled people field is a
+WARNING), `PLOT.PAPER_ORIENTATION`, `PLOT.PDF_PAGES_MATCH_SHEETS`, `FILE.REOPEN_COUNTS`. Severities BLOCKER/ERROR/WARNING/INFO as
+before; no data means NOT_RUN. `GEOM.DUPLICATE_ENTITIES` no longer compares entities of different levels; per-floor room tables are
+totalled per floor. The measured evidence goes into the model with `autocad.house_model` (`layouts`, `sheet_index`, `pdf_render_check`,
+`reopen_check`).
+
+## Re-open evidence and FINAL_STATUS
+
+`autocad.reopen_check` counts the entities of the open, saved drawing (model space by object type, marked entities, layouts with paper,
+viewport scale and lock), closes it (refused with CONFLICT while it has unsaved changes; plotting touches plot settings, so save again
+after plotting), opens the DWG from disk again (read-only unless `keep_open`) and compares. `data.evidence.dwg_reopen_check` given to
+`autocad.report` OVERRIDES the caller's `dwg_opened_in_autocad` flag: true only if the re-open worked and every count is equal; a bare
+flag is listed as unverified. FINAL_STATUS stays computed from evidence and never reaches CODE_REVIEWED without a human review.
+
+## Live check
+
+`logs/dev/autocad_multistorey_live.py` (3-storey 8 x 18 m house in a NEW document): 55 PASS, 0 FAIL on AutoCAD 2024 in the last run:
+3 plans + stairs + openings + roof plan, 4 elevations, section through the stair, 9 per-floor tables (1496 entities, all marked);
+every draw tool called a second time adds 0 entities (also draw_stair; `replace` redraws the same count; explicit key adds once);
+11 layouts (A3 landscape, viewport scale read back 100.0, locked, people fields empty); 11-page PDF (1.18 MB) rendered with PyMuPDF
+(all pages 420 x 297 mm, non-blank, sheet codes found), re-rendered at 110 dpi and looked at; DWG saved, closed and re-opened from disk:
+1540 model-space entities and 13 layouts before and after; validation without open ERROR; FINAL_STATUS COORDINATED (CODE_REVIEWED
+blocked: no human review record, profile not verified). Outputs in `artifacts/autocad-spec-live/` (`multistorey.dwg`, `.pdf`,
+`multistorey_hi/page_NN.png`, `multistorey_model.json`, `multistorey_report.md`). Unit tests: `tests/test_autocad_multistorey_unit.py`.
+Known live quirks: AutoCAD sometimes answers BUSY in the middle of a drawing call (the partial remains are completed on the retry, see
+Idempotency); tools work on the ACTIVE drawing, so the script re-activates its own drawing before each write.
