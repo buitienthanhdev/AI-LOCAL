@@ -1597,6 +1597,738 @@
       "verification": "self",
       "policy_category": "autocad.write",
       "side_effects": "possible"
+    },
+    {
+      "name": "autocad.house_model",
+      "description": "Build the shared house data model (levels, wall runs with thickness and centre line, doors and windows with unique codes, sizes, sill heights and host walls, rooms with boundary and area, roof, assumptions) WITHOUT touching AutoCAD, and return it in the intermediate-model format of autocad.validate_model / autocad.report (data.model). The model is computed from the SAME parameters as autocad.draw_floor_plan (width, depth/area, bedrooms, altar, study, porch), so pass the same values to every view tool: plan, elevations, sections and schedules then agree (codes D1.., W1.., sizes, levels, areas). Vertical numbers that are not given (storey height, plinth, sill, door/window heights, roof) are working defaults flagged ASSUMED; nothing here checks any building code. Pass `views` (the data.views / data.view records returned by autocad.draw_elevation, draw_section, draw_schedules) to include what was actually drawn, so the cross-view rules can compare plan, elevations, sections and schedule tables; without them those rules report NOT_RUN. export_path writes the model as .json (backup before overwrite).",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "width": {
+            "type": "number",
+            "minimum": 4,
+            "maximum": 60,
+            "description": "footprint width along the street, m (same as autocad.draw_floor_plan)"
+          },
+          "depth": {
+            "type": "number",
+            "minimum": 8,
+            "maximum": 80,
+            "description": "footprint depth, m"
+          },
+          "area": {
+            "type": "number",
+            "minimum": 40,
+            "maximum": 3000,
+            "description": "footprint area in m², when width/depth are not both given"
+          },
+          "bedrooms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          },
+          "altar": {
+            "type": "boolean"
+          },
+          "study": {
+            "type": "boolean"
+          },
+          "porch": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 5,
+            "description": "front porch depth, m"
+          },
+          "storey_height": {
+            "type": "number",
+            "minimum": 2.2,
+            "maximum": 6,
+            "description": "clear floor-to-ceiling height, m (default 3.3, ASSUMED working default, not a code value)"
+          },
+          "plinth_height": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1.5,
+            "description": "floor level above the outside ground, m (default 0.45, ASSUMED)"
+          },
+          "slab_thickness": {
+            "type": "number",
+            "minimum": 0.05,
+            "maximum": 0.4,
+            "description": "graphic ceiling/roof slab thickness, m (default 0.1, ASSUMED; no structural design)"
+          },
+          "roof_type": {
+            "type": "string",
+            "enum": [
+              "pitched",
+              "flat"
+            ],
+            "description": "default pitched (ASSUMED)"
+          },
+          "roof_slope_deg": {
+            "type": "number",
+            "minimum": 5,
+            "maximum": 60,
+            "description": "pitched roof slope in degrees (default 30, ASSUMED)"
+          },
+          "roof_overhang": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "eaves overhang, m (default 0.6, ASSUMED)"
+          },
+          "parapet_height": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "flat roof parapet, m (default 0.6, ASSUMED)"
+          },
+          "door_height": {
+            "type": "number",
+            "minimum": 1.8,
+            "maximum": 3,
+            "description": "single door height, m (default 2.1, ASSUMED)"
+          },
+          "double_door_height": {
+            "type": "number",
+            "minimum": 1.8,
+            "maximum": 3.5,
+            "description": "double door height, m (default 2.4, ASSUMED)"
+          },
+          "window_height": {
+            "type": "number",
+            "minimum": 0.3,
+            "maximum": 2.4,
+            "description": "window height, m (default 1.2, ASSUMED)"
+          },
+          "window_sill": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "window sill height above the floor, m (default 0.9, ASSUMED)"
+          },
+          "views": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            },
+            "description": "view records returned by the draw_* tools"
+          },
+          "export_path": {
+            "type": "string",
+            "pattern": "(?i)\\.json$",
+            "description": "absolute path ending in .json"
+          },
+          "overwrite": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "summary",
+          "model"
+        ],
+        "properties": {
+          "summary": {
+            "type": "object"
+          },
+          "model": {
+            "type": "object"
+          },
+          "assumptions": {
+            "type": "array"
+          },
+          "export_path": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          }
+        }
+      },
+      "timeout_ms": 60000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "self",
+      "policy_category": "autocad.write",
+      "side_effects": "possible"
+    },
+    {
+      "name": "autocad.draw_elevation",
+      "description": "Draw one or more elevations (front, rear, left, right) of the house in AutoCAD from the shared house model: ground line, floor levels with +0.000 datum labels, walls, roof, porch posts, every door and window of that facade (same codes, sizes and sills as the plan and the schedules) with code tags, level marks and dimensions, on the standard layers A-* (A-WALL-EXT, A-DOOR, A-WINDOW, A-GLAZING, A-ROOF, A-ANNO-LEVEL, A-DIMS ...), model space 1:1, everything ByLayer. The model is computed from the SAME parameters as autocad.draw_floor_plan (width, depth/area, bedrooms, altar, study, porch), so pass the same values to every view tool: plan, elevations, sections and schedules then agree (codes D1.., W1.., sizes, levels, areas). Vertical numbers that are not given (storey height, plinth, sill, door/window heights, roof) are working defaults flagged ASSUMED; nothing here checks any building code. Draws into the ACTIVE drawing unless new_document=true. The result's data.views are records measured from what was drawn; give them to autocad.house_model (views) and then autocad.validate_model. Not idempotent: calling twice draws twice.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "width": {
+            "type": "number",
+            "minimum": 4,
+            "maximum": 60,
+            "description": "footprint width along the street, m (same as autocad.draw_floor_plan)"
+          },
+          "depth": {
+            "type": "number",
+            "minimum": 8,
+            "maximum": 80,
+            "description": "footprint depth, m"
+          },
+          "area": {
+            "type": "number",
+            "minimum": 40,
+            "maximum": 3000,
+            "description": "footprint area in m², when width/depth are not both given"
+          },
+          "bedrooms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          },
+          "altar": {
+            "type": "boolean"
+          },
+          "study": {
+            "type": "boolean"
+          },
+          "porch": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 5,
+            "description": "front porch depth, m"
+          },
+          "storey_height": {
+            "type": "number",
+            "minimum": 2.2,
+            "maximum": 6,
+            "description": "clear floor-to-ceiling height, m (default 3.3, ASSUMED working default, not a code value)"
+          },
+          "plinth_height": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1.5,
+            "description": "floor level above the outside ground, m (default 0.45, ASSUMED)"
+          },
+          "slab_thickness": {
+            "type": "number",
+            "minimum": 0.05,
+            "maximum": 0.4,
+            "description": "graphic ceiling/roof slab thickness, m (default 0.1, ASSUMED; no structural design)"
+          },
+          "roof_type": {
+            "type": "string",
+            "enum": [
+              "pitched",
+              "flat"
+            ],
+            "description": "default pitched (ASSUMED)"
+          },
+          "roof_slope_deg": {
+            "type": "number",
+            "minimum": 5,
+            "maximum": 60,
+            "description": "pitched roof slope in degrees (default 30, ASSUMED)"
+          },
+          "roof_overhang": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "eaves overhang, m (default 0.6, ASSUMED)"
+          },
+          "parapet_height": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "flat roof parapet, m (default 0.6, ASSUMED)"
+          },
+          "door_height": {
+            "type": "number",
+            "minimum": 1.8,
+            "maximum": 3,
+            "description": "single door height, m (default 2.1, ASSUMED)"
+          },
+          "double_door_height": {
+            "type": "number",
+            "minimum": 1.8,
+            "maximum": 3.5,
+            "description": "double door height, m (default 2.4, ASSUMED)"
+          },
+          "window_height": {
+            "type": "number",
+            "minimum": 0.3,
+            "maximum": 2.4,
+            "description": "window height, m (default 1.2, ASSUMED)"
+          },
+          "window_sill": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "window sill height above the floor, m (default 0.9, ASSUMED)"
+          },
+          "sides": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "front",
+                "rear",
+                "left",
+                "right"
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 4,
+            "description": "default [\"front\"]"
+          },
+          "origin": {
+            "$ref": "#/$defs/point",
+            "description": "origin of the first view; the others follow in a row (default: below the plan)"
+          },
+          "new_document": {
+            "type": "boolean",
+            "default": false,
+            "description": "true draws in a fresh drawing; the default draws in the ACTIVE drawing (after autocad.draw_floor_plan)"
+          },
+          "plan_origin": {
+            "$ref": "#/$defs/point",
+            "description": "origin used for autocad.draw_floor_plan (default 0,0); places the default view positions and the section marker"
+          },
+          "layer_map": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "office layer names: {\"A-WALL-EXT\": \"MY-WALL\", ...}; standard A-* names are used for any layer not listed"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "views"
+        ],
+        "properties": {
+          "views": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "levels": {
+            "type": "array"
+          },
+          "assumptions": {
+            "type": "array"
+          },
+          "operation_id": {
+            "type": "string"
+          }
+        }
+      },
+      "timeout_ms": 300000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "policy_category": "autocad.write",
+      "side_effects": "yes"
+    },
+    {
+      "name": "autocad.draw_section",
+      "description": "Draw a building section of the house from the shared house model and, by default, its cut line with arrows and a lettered bubble (marker A-A, sheet A-301) on the plan: floor and roof/ceiling slabs and every cut wall with its door/window openings (cut hatch), the stair if the model has one, ground and floor/ceiling/roof levels with +0.000 datum labels, room names and clear-height dimensions, on A-SECTION-CUT, A-HATCH, A-SECTION-PROJ, A-ROOF, A-ANNO-LEVEL, A-DIMS, A-DETAIL-MARKER, model space 1:1, ByLayer. cut = {axis: y (cut line along x) or x, position (metres; default through the living room), direction +1/-1, letter, sheet}; a cut that runs inside a wall or crosses no wall is refused. The model is computed from the SAME parameters as autocad.draw_floor_plan (width, depth/area, bedrooms, altar, study, porch), so pass the same values to every view tool: plan, elevations, sections and schedules then agree (codes D1.., W1.., sizes, levels, areas). Vertical numbers that are not given (storey height, plinth, sill, door/window heights, roof) are working defaults flagged ASSUMED; nothing here checks any building code. The hatch is a graphic symbol, not a material statement; no structural design is implied. data.view is the record measured from the drawing; give it to autocad.house_model (views). Not idempotent.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "width": {
+            "type": "number",
+            "minimum": 4,
+            "maximum": 60,
+            "description": "footprint width along the street, m (same as autocad.draw_floor_plan)"
+          },
+          "depth": {
+            "type": "number",
+            "minimum": 8,
+            "maximum": 80,
+            "description": "footprint depth, m"
+          },
+          "area": {
+            "type": "number",
+            "minimum": 40,
+            "maximum": 3000,
+            "description": "footprint area in m², when width/depth are not both given"
+          },
+          "bedrooms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          },
+          "altar": {
+            "type": "boolean"
+          },
+          "study": {
+            "type": "boolean"
+          },
+          "porch": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 5,
+            "description": "front porch depth, m"
+          },
+          "storey_height": {
+            "type": "number",
+            "minimum": 2.2,
+            "maximum": 6,
+            "description": "clear floor-to-ceiling height, m (default 3.3, ASSUMED working default, not a code value)"
+          },
+          "plinth_height": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1.5,
+            "description": "floor level above the outside ground, m (default 0.45, ASSUMED)"
+          },
+          "slab_thickness": {
+            "type": "number",
+            "minimum": 0.05,
+            "maximum": 0.4,
+            "description": "graphic ceiling/roof slab thickness, m (default 0.1, ASSUMED; no structural design)"
+          },
+          "roof_type": {
+            "type": "string",
+            "enum": [
+              "pitched",
+              "flat"
+            ],
+            "description": "default pitched (ASSUMED)"
+          },
+          "roof_slope_deg": {
+            "type": "number",
+            "minimum": 5,
+            "maximum": 60,
+            "description": "pitched roof slope in degrees (default 30, ASSUMED)"
+          },
+          "roof_overhang": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "eaves overhang, m (default 0.6, ASSUMED)"
+          },
+          "parapet_height": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "flat roof parapet, m (default 0.6, ASSUMED)"
+          },
+          "door_height": {
+            "type": "number",
+            "minimum": 1.8,
+            "maximum": 3,
+            "description": "single door height, m (default 2.1, ASSUMED)"
+          },
+          "double_door_height": {
+            "type": "number",
+            "minimum": 1.8,
+            "maximum": 3.5,
+            "description": "double door height, m (default 2.4, ASSUMED)"
+          },
+          "window_height": {
+            "type": "number",
+            "minimum": 0.3,
+            "maximum": 2.4,
+            "description": "window height, m (default 1.2, ASSUMED)"
+          },
+          "window_sill": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "window sill height above the floor, m (default 0.9, ASSUMED)"
+          },
+          "cut": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "axis": {
+                "type": "string",
+                "enum": [
+                  "x",
+                  "y"
+                ],
+                "default": "y"
+              },
+              "position": {
+                "type": "number",
+                "description": "metres from the plan origin; default: middle of the living room"
+              },
+              "direction": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  -1
+                ],
+                "default": 1
+              },
+              "letter": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 3,
+                "default": "A"
+              },
+              "sheet": {
+                "type": "string",
+                "minLength": 1,
+                "default": "A-301"
+              }
+            }
+          },
+          "draw_marker": {
+            "type": "boolean",
+            "default": true,
+            "description": "draw the cut line and bubbles on the plan"
+          },
+          "origin": {
+            "$ref": "#/$defs/point",
+            "description": "origin of the section view (default: below the elevations)"
+          },
+          "new_document": {
+            "type": "boolean",
+            "default": false,
+            "description": "true draws in a fresh drawing; the default draws in the ACTIVE drawing (after autocad.draw_floor_plan)"
+          },
+          "plan_origin": {
+            "$ref": "#/$defs/point",
+            "description": "origin used for autocad.draw_floor_plan (default 0,0); places the default view positions and the section marker"
+          },
+          "layer_map": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "office layer names: {\"A-WALL-EXT\": \"MY-WALL\", ...}; standard A-* names are used for any layer not listed"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "view"
+        ],
+        "properties": {
+          "view": {
+            "type": "object"
+          },
+          "marker": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "cut": {
+            "type": "object"
+          },
+          "assumptions": {
+            "type": "array"
+          },
+          "operation_id": {
+            "type": "string"
+          }
+        }
+      },
+      "timeout_ms": 300000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "policy_category": "autocad.write",
+      "side_effects": "yes"
+    },
+    {
+      "name": "autocad.draw_schedules",
+      "description": "Draw the door schedule, window schedule and room/area table as lines and text on A-ANNO-KEYNOTE / A-ANNO-TEXT from the same model as the plan symbols and elevations (codes, widths, heights, sill heights, host wall, facade; room code, name, area by the centre-line rule and the total), and return the rows in data.schedules. The model is computed from the SAME parameters as autocad.draw_floor_plan (width, depth/area, bedrooms, altar, study, porch), so pass the same values to every view tool: plan, elevations, sections and schedules then agree (codes D1.., W1.., sizes, levels, areas). Vertical numbers that are not given (storey height, plinth, sill, door/window heights, roof) are working defaults flagged ASSUMED; nothing here checks any building code. data.views[].rows are re-read from the text that was drawn; give them to autocad.house_model (views) so the validation compares the drawn table with the plan and the elevations. export_path writes schedules as .json (backup before overwrite). Not idempotent.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "width": {
+            "type": "number",
+            "minimum": 4,
+            "maximum": 60,
+            "description": "footprint width along the street, m (same as autocad.draw_floor_plan)"
+          },
+          "depth": {
+            "type": "number",
+            "minimum": 8,
+            "maximum": 80,
+            "description": "footprint depth, m"
+          },
+          "area": {
+            "type": "number",
+            "minimum": 40,
+            "maximum": 3000,
+            "description": "footprint area in m², when width/depth are not both given"
+          },
+          "bedrooms": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 8
+          },
+          "altar": {
+            "type": "boolean"
+          },
+          "study": {
+            "type": "boolean"
+          },
+          "porch": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 5,
+            "description": "front porch depth, m"
+          },
+          "storey_height": {
+            "type": "number",
+            "minimum": 2.2,
+            "maximum": 6,
+            "description": "clear floor-to-ceiling height, m (default 3.3, ASSUMED working default, not a code value)"
+          },
+          "plinth_height": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1.5,
+            "description": "floor level above the outside ground, m (default 0.45, ASSUMED)"
+          },
+          "slab_thickness": {
+            "type": "number",
+            "minimum": 0.05,
+            "maximum": 0.4,
+            "description": "graphic ceiling/roof slab thickness, m (default 0.1, ASSUMED; no structural design)"
+          },
+          "roof_type": {
+            "type": "string",
+            "enum": [
+              "pitched",
+              "flat"
+            ],
+            "description": "default pitched (ASSUMED)"
+          },
+          "roof_slope_deg": {
+            "type": "number",
+            "minimum": 5,
+            "maximum": 60,
+            "description": "pitched roof slope in degrees (default 30, ASSUMED)"
+          },
+          "roof_overhang": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "eaves overhang, m (default 0.6, ASSUMED)"
+          },
+          "parapet_height": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "flat roof parapet, m (default 0.6, ASSUMED)"
+          },
+          "door_height": {
+            "type": "number",
+            "minimum": 1.8,
+            "maximum": 3,
+            "description": "single door height, m (default 2.1, ASSUMED)"
+          },
+          "double_door_height": {
+            "type": "number",
+            "minimum": 1.8,
+            "maximum": 3.5,
+            "description": "double door height, m (default 2.4, ASSUMED)"
+          },
+          "window_height": {
+            "type": "number",
+            "minimum": 0.3,
+            "maximum": 2.4,
+            "description": "window height, m (default 1.2, ASSUMED)"
+          },
+          "window_sill": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 2,
+            "description": "window sill height above the floor, m (default 0.9, ASSUMED)"
+          },
+          "origin": {
+            "$ref": "#/$defs/point",
+            "description": "top-left corner of the first table (default: right of the plan)"
+          },
+          "export_path": {
+            "type": "string",
+            "pattern": "(?i)\\.json$",
+            "description": "absolute path ending in .json"
+          },
+          "overwrite": {
+            "type": "boolean",
+            "default": false
+          },
+          "new_document": {
+            "type": "boolean",
+            "default": false,
+            "description": "true draws in a fresh drawing; the default draws in the ACTIVE drawing (after autocad.draw_floor_plan)"
+          },
+          "plan_origin": {
+            "$ref": "#/$defs/point",
+            "description": "origin used for autocad.draw_floor_plan (default 0,0); places the default view positions and the section marker"
+          },
+          "layer_map": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "office layer names: {\"A-WALL-EXT\": \"MY-WALL\", ...}; standard A-* names are used for any layer not listed"
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "views",
+          "schedules"
+        ],
+        "properties": {
+          "views": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "schedules": {
+            "type": "object"
+          },
+          "room_total_area_m2": {
+            "type": "number"
+          },
+          "assumptions": {
+            "type": "array"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "export_path": {
+            "type": "string"
+          }
+        }
+      },
+      "timeout_ms": 300000,
+      "risk_level": "medium",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "policy_category": "autocad.write",
+      "side_effects": "yes"
     }
   ],
   "$defs": {

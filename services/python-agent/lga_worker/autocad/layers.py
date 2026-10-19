@@ -294,3 +294,24 @@ def import_autocad_entities(raw: Sequence[Mapping[str, Any]], layer_map: LayerMa
                                         note="imported from AutoCAD"),
                           status=SourceStatus.IMPORTED))
     return out
+
+
+# --------------------------------------------------------------------------- layers of generated views
+
+# ACI colour for each standard layer the elevation / section / schedule generators use (layer colour only: entities stay ByLayer).
+VIEW_LAYER_COLORS: dict[str, int] = {
+    "A-WALL-EXT": 7, "A-WALL-INT": 7, "A-DOOR": 1, "A-WINDOW": 4, "A-GLAZING": 5, "A-ROOF": 30, "A-COLUMN-ARCH": 2,
+    "A-STAIR": 6, "A-SECTION-CUT": 7, "A-SECTION-PROJ": 8, "A-HATCH": 8, "A-DIMS": 3, "A-ANNO-TEXT": 2,
+    "A-ANNO-LEVEL": 3, "A-ANNO-KEYNOTE": 7, "A-DETAIL-MARKER": 6, "A-SITE-CONTEXT": 8,
+}
+
+
+def view_layers(standard_names: Sequence[str], layer_map: LayerMap | None = None) -> dict[str, tuple[str, int]]:
+    """standard name -> (layer name in the file, ACI colour), through the office mapping. Unknown names are an error."""
+    layer_map = layer_map or LayerMap()
+    out: dict[str, tuple[str, int]] = {}
+    for std in standard_names:
+        if std not in STANDARD_LAYERS:
+            raise LayerMapError(f"{std!r} is not a standard layer name")
+        out[std] = (layer_map.to_office(std), VIEW_LAYER_COLORS.get(std, 7))
+    return out

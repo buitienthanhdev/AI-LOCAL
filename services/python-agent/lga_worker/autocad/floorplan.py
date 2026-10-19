@@ -396,19 +396,49 @@ def _merge(intervals: list[tuple[float, float]]) -> list[tuple[float, float]]:
     return [(a, b) for a, b in out]
 
 
-def _walls(rooms: list[Room], openings: list[Opening], w: float, d: float, p: float
-           ) -> tuple[list[tuple[float, float, float, float]], dict[tuple[str, float], float]]:
+def _wall_lines(rooms: list[Room]) -> dict[tuple[str, float], list[tuple[float, float]]]:
     lines: dict[tuple[str, float], list[tuple[float, float]]] = {}
     for r in rooms:
         for key, iv in ((("v", r.x0), (r.y0, r.y1)), (("v", r.x1), (r.y0, r.y1)),
                         (("h", r.y0), (r.x0, r.x1)), (("h", r.y1), (r.x0, r.x1))):
             lines.setdefault((key[0], round(key[1], 4)), []).append(iv)
+    return lines
+
+
+def is_exterior(orient: str, line: float, w: float, d: float, p: float) -> bool:
+    return (abs(line) < EPS or abs(line - w) < EPS) if orient == "v" else (abs(line - p) < EPS or abs(line - d) < EPS)
+
+
+@dataclass
+class WallRun:
+    """One whole wall between two junctions (before the door/window gaps are cut out): the unit openings belong to."""
+
+    orient: str  # "v": along y at x = line; "h": along x at y = line
+    line: float
+    a: float
+    b: float
+    thickness: float
+    exterior: bool
+
+
+def wall_runs(plan: Plan) -> list[WallRun]:
+    """The wall centre-line runs behind `plan.walls`, with the same thickness constants (`EXTERIOR_WALL` / `INTERIOR_WALL`)."""
+    runs: list[WallRun] = []
+    for (orient, line), intervals in sorted(_wall_lines(plan.rooms).items()):
+        outside = is_exterior(orient, line, plan.width, plan.depth, plan.porch)
+        for a, b in _merge(intervals):
+            runs.append(WallRun(orient, line, a, b, EXTERIOR_WALL if outside else INTERIOR_WALL, outside))
+    return runs
+
+
+def _walls(rooms: list[Room], openings: list[Opening], w: float, d: float, p: float
+           ) -> tuple[list[tuple[float, float, float, float]], dict[tuple[str, float], float]]:
+    lines = _wall_lines(rooms)
     pieces: list[tuple[float, float, float, float]] = []
     thickness: dict[tuple[str, float], float] = {}
     half_ext = EXTERIOR_WALL / 2
     for (orient, line), intervals in lines.items():
-        outside = (abs(line) < EPS or abs(line - w) < EPS) if orient == "v" else (abs(line - p) < EPS or abs(line - d) < EPS)
-        t = EXTERIOR_WALL if outside else INTERIOR_WALL
+        t = EXTERIOR_WALL if is_exterior(orient, line, w, d, p) else INTERIOR_WALL
         thickness[(orient, line)] = t
         gaps = sorted((o.a, o.b) for o in openings if o.orient == orient and abs(o.line - line) < EPS)
         for a, b in _merge(intervals):

@@ -835,6 +835,8 @@ def rule_area(ctx: RuleContext) -> Outcome:
         checked += 1
         by_code = {str(r.prop("code") or ""): r for r in rooms}
         for row in rows:
+            if row.get("total"):  # a total line of the table is not a room
+                continue
             code, area = str(row.get("code") or ""), _num(row.get("area"))
             room = by_code.get(code)
             if room is None:
@@ -989,6 +991,274 @@ def rule_view_consistency(ctx: RuleContext) -> Outcome:
     return Outcome(issues, f"{checked} entities compared across plan/elevation/section values", checked)
 
 
+# --------------------------------------------------------------------------- cross-view coordination (spec 9, 10)
+
+def _view_records(ctx: RuleContext, kind: str) -> list[Mapping[str, Any]] | None:
+    """The view records of `meta.views` of one kind; None when the model carries no view list at all."""
+    views = ctx.model.meta.get("views")
+    if not isinstance(views, list):
+        return None
+    return [v for v in views if isinstance(v, Mapping) and v.get("kind") == kind]
+
+
+def _opening_key_issues(names: tuple[str, str], code: str, expected: Mapping[str, Any], actual: Mapping[str, Any],
+                        tol: float, ids: list[str]) -> list[Issue]:
+    issues = []
+    for key in ("width", "height", "sill_height"):
+        a, b = _num(expected.get(key)), _num(actual.get(key))
+        if a is not None and b is not None and abs(a - b) > tol:
+            issues.append(Issue(f"{code}: {key} {a:g} in {names[0]} vs {b:g} in {names[1]}", ids, kind="CONFLICT",
+                                detail={"code": code, "key": key, names[0]: a, names[1]: b, "tolerance": tol}))
+    return issues
+
+
+def rule_elevation_matches_plan(ctx: RuleContext) -> Outcome:
+    tols, skip = _need_tol(ctx, "schedule_dimension")
+    if skip:
+        return skip
+    tol = tols["schedule_dimension"]
+    elevations = _view_records(ctx, "elevation")
+    if not elevations:
+        return Outcome.skipped("no elevation view records (meta.views kind 'elevation')")
+    plan_items = ctx.model.of_type(EntityType.DOOR, EntityType.WINDOW)
+    if not plan_items:
+        return Outcome.skipped("no DOOR/WINDOW entities in the plan to compare with")
+    by_code = {str(e.prop("code") or ""): e for e in plan_items}
+    issues: list[Issue] = []
+    checked = 0
+    for view in elevations:
+        side = view.get("side")
+        seen: set[str] = set()
+        for o in view.get("openings") or []:
+            checked += 1
+            code = str(o.get("code") or "")
+            seen.add(code)
+            e = by_code.get(code)
+            if e is None:
+                issues.append(Issue(f"elevation {view.get('id')}: opening {code!r} has no door/window with that code "
+                                    "in the plan", []))
+                continue
+            if o.get("type") and o["type"] != e.entity_type.value:
+                issues.append(Issue(f"{code}: {o['type']} in the elevation but {e.entity_type.value} in the plan",
+                                    [e.entity_id]))
+            plan_facade = e.prop("facade")
+            if plan_facade and side and plan_facade != side:
+                issues.append(Issue(f"{code}: drawn on the {side} elevation but the plan puts it on the {plan_facade} "
+                                    "facade", [e.entity_id]))
+            plan_values = {k: e.prop(k) for k in ("width", "height", "sill_height")}
+            issues += _opening_key_issues(("plan", f"elevation {side}"), code, plan_values, o, tol, [e.entity_id])
+        for e in plan_items:
+            if e.prop("facade") == side and str(e.prop("code") or "") not in seen:
+                issues.append(Issue(f"{e.prop('code')}: on the {side} facade in the plan but missing from the "
+                                    f"{side} elevation", [e.entity_id]))
+    return Outcome(issues, f"{checked} elevation openings compared with the plan symbols (tolerance {tol:g})", checked)
+
+
+def _schedule_rows(ctx: RuleContext, kind: str) -> tuple[list[Mapping[str, Any]] | None, str]:
+    for rec in _view_records(ctx, "schedule") or []:
+        if rec.get("schedule") == kind and rec.get("rows") is not None:
+            return list(rec["rows"]), "drawn table"
+    rows = ctx.model.schedules.get(kind)
+    return (list(rows), "schedule data") if rows is not None else (None, "")
+
+
+def rule_schedule_matches_elevation(ctx: RuleContext) -> Outcome:
+    tols, skip = _need_tol(ctx, "schedule_dimension")
+    if skip:
+        return skip
+    tol = tols["schedule_dimension"]
+    elevations = _view_records(ctx, "elevation")
+    if not elevations:
+        return Outcome.skipped("no elevation view records (meta.views kind 'elevation')")
+    tables = {"DOOR": _schedule_rows(ctx, "door"), "WINDOW": _schedule_rows(ctx, "window")}
+    if all(rows is None for rows, _ in tables.values()):
+        return Outcome.skipped("no door/window schedule (drawn table or schedule data)")
+    issues: list[Issue] = []
+    checked = 0
+    drawn_sides = {v.get("side") for v in elevations}
+    by_side = {v.get("side"): {str(o.get("code")) for o in v.get("openings") or []} for v in elevations}
+    for view in elevations:
+        for o in view.get("openings") or []:
+            rows, origin = tables.get(str(o.get("type")), (None, ""))
+            if rows is None:
+                continue
+            checked += 1
+            code = str(o.get("code") or "")
+            row = next((r for r in rows if str(r.get("code") or "") == code), None)
+            if row is None:
+                issues.append(Issue(f"{code}: drawn on the {view.get('side')} elevation but missing from the "
+                                    f"{str(o.get('type')).lower()} schedule ({origin})", []))
+                continue
+            issues += _opening_key_issues((f"{str(o.get('type')).lower()} schedule", f"elevation {view.get('side')}"),
+                                          code, row, o, tol, [])
+    for kind, (rows, origin) in tables.items():
+        for row in rows or []:
+            side = row.get("facade")
+            if side in drawn_sides and str(row.get("code")) not in by_side[side]:
+                issues.append(Issue(f"{row.get('code')}: the {kind.lower()} schedule puts it on the {side} facade but the "
+                                    f"{side} elevation does not show it", []))
+    return Outcome(issues, f"{checked} elevation openings compared with the schedules (tolerance {tol:g})", checked)
+
+
+def rule_levels_elevation_section(ctx: RuleContext) -> Outcome:
+    tols, skip = _need_tol(ctx, "elevation")
+    if skip:
+        return skip
+    tol = tols["elevation"]
+    views = [v for v in (ctx.model.meta.get("views") or []) if isinstance(v, Mapping) and v.get("levels")]
+    if not views:
+        return Outcome.skipped("no elevation or section view carries level marks (meta.views[].levels)")
+    levels = {l.entity_id: l for l in ctx.model.of_type(EntityType.LEVEL)}
+    if not levels:
+        return Outcome.skipped("no LEVEL entities to compare the marks with")
+    stairs = {s.entity_id: s for s in ctx.model.of_type(EntityType.STAIR)}
+    issues: list[Issue] = []
+    checked = 0
+    seen: dict[str, tuple[str, float]] = {}
+    for view in views:
+        for mark in view["levels"]:
+            checked += 1
+            lid, z = str(mark.get("level_id")), _num(mark.get("elevation"))
+            level = levels.get(lid)
+            if level is None or level.elevation is None or z is None:
+                issues.append(Issue(f"{view.get('id')}: level mark {lid!r} has no matching LEVEL with an elevation", []))
+                continue
+            if abs(z - level.elevation) > tol:
+                issues.append(Issue(f"{view.get('id')}: {lid} is drawn at {z:g} but the level is {level.elevation:g}",
+                                    [lid], kind="CONFLICT", detail={"drawn": z, "level": level.elevation, "tolerance": tol}))
+            label = _num(mark.get("label_value"))
+            if label is None:
+                issues.append(Issue(f"{view.get('id')}: level {lid} has no readable label text", [lid]))
+            elif abs(label - z) > max(tol, 0.0005):
+                issues.append(Issue(f"{view.get('id')}: level {lid} label reads {label:g} but is drawn at {z:g}", [lid],
+                                    kind="CONFLICT"))
+            if lid in seen and abs(seen[lid][1] - z) > tol:
+                issues.append(Issue(f"level {lid} is at {seen[lid][1]:g} in {seen[lid][0]} but {z:g} in {view.get('id')}",
+                                    [lid], kind="CONFLICT"))
+            seen.setdefault(lid, (str(view.get("id")), z))
+        for ch in view.get("clear_heights") or []:
+            checked += 1
+            frm, to = levels.get(str(ch.get("from_level"))), levels.get(str(ch.get("to_level")))
+            h = _num(ch.get("height"))
+            if frm is None or to is None or frm.elevation is None or to.elevation is None or h is None:
+                issues.append(Issue(f"{view.get('id')}: clear height of {ch.get('room_id')} has no valid levels", []))
+            elif abs(h - (to.elevation - frm.elevation)) > tol:
+                issues.append(Issue(f"{view.get('id')}: clear height {h:g} of {ch.get('room_id')} vs level difference "
+                                    f"{to.elevation - frm.elevation:g}", [frm.entity_id, to.entity_id], kind="CONFLICT"))
+        for st in view.get("stairs") or []:
+            checked += 1
+            entity = stairs.get(str(st.get("id")))
+            drawn = _num(st.get("total_height"))
+            if entity is None:
+                issues.append(Issue(f"{view.get('id')}: stair {st.get('id')} is not in the model", []))
+                continue
+            total = _num(entity.prop("total_height"))
+            if drawn is not None and total is not None and abs(drawn - total) > tol:
+                issues.append(Issue(f"stair {entity.entity_id}: {drawn:g} high in {view.get('id')} vs {total:g} in the model",
+                                    [entity.entity_id], kind="CONFLICT"))
+            if st.get("riser_count") is not None and entity.prop("riser_count") is not None \
+                    and int(st["riser_count"]) != int(entity.prop("riser_count")):
+                issues.append(Issue(f"stair {entity.entity_id}: {st['riser_count']} risers drawn vs "
+                                    f"{entity.prop('riser_count')} in the model", [entity.entity_id], kind="CONFLICT"))
+    return Outcome(issues, f"{checked} level marks / clear heights / stairs in {len(views)} views compared with the "
+                           f"LEVEL entities (tolerance {tol:g})", checked)
+
+
+def rule_section_marker_view(ctx: RuleContext) -> Outcome:
+    tols, skip = _need_tol(ctx, "opening_offset")
+    if skip:
+        return skip
+    tol = tols["opening_offset"]
+    markers = [e for e in ctx.model.entities if e.prop("section_code")]
+    sections = _view_records(ctx, "section")
+    if not markers and not sections:
+        return Outcome.skipped("no section markers and no section views")
+    if sections is None:
+        return Outcome.skipped("no view list (meta.views) to resolve the markers against")
+    by_id = {str(v.get("id")): v for v in sections}
+    sheets = {str(s) for s in (ctx.model.meta.get("sheets") or [])}
+    issues: list[Issue] = []
+    for m in markers:
+        target = str(m.prop("target_view") or "")
+        view = by_id.get(target)
+        if view is None:
+            issues.append(Issue(f"marker {m.entity_id}: target view {target!r} does not exist (views: {sorted(by_id)})",
+                                [m.entity_id]))
+            continue
+        if view.get("section_code") != m.prop("section_code"):
+            issues.append(Issue(f"marker {m.entity_id}: code {m.prop('section_code')!r} but the view is "
+                                f"{view.get('section_code')!r}", [m.entity_id]))
+        cut = view.get("cut") or {}
+        pos_view, pos_marker = _num(cut.get("position")), _num(m.prop("position"))
+        if cut.get("axis") != m.prop("axis") or cut.get("direction") != m.prop("direction") or \
+                pos_view is None or pos_marker is None or abs(pos_view - pos_marker) > tol:
+            issues.append(Issue(f"marker {m.entity_id}: drawn at {m.prop('axis')}={m.prop('position')} looking "
+                                f"{m.prop('direction')} but the section view was cut at {cut.get('axis')}="
+                                f"{cut.get('position')} looking {cut.get('direction')}", [m.entity_id], kind="CONFLICT"))
+        if view.get("sheet") and m.prop("target_sheet") != view.get("sheet"):
+            issues.append(Issue(f"marker {m.entity_id}: points to sheet {m.prop('target_sheet')!r} but the view is on "
+                                f"{view.get('sheet')!r}", [m.entity_id]))
+        if sheets and m.prop("target_sheet") and str(m.prop("target_sheet")) not in sheets:
+            issues.append(Issue(f"marker {m.entity_id}: sheet {m.prop('target_sheet')!r} is not in the sheet list", [m.entity_id]))
+    marked = {str(m.prop("target_view")) for m in markers}
+    for vid in sorted(set(by_id) - marked):
+        issues.append(Issue(f"section view {vid} has no marker on the plan", [], severity=Severity.WARNING))
+    return Outcome(issues, f"{len(markers)} markers resolved against {len(by_id)} section views", len(markers) + len(by_id))
+
+
+def rule_room_table_area(ctx: RuleContext) -> Outcome:
+    tols, skip = _need_tol(ctx, "closure_gap")
+    if skip:
+        return skip
+    unit_mm = ctx.model.unit_mm
+    rel = ctx.tol.relative("area_rel")
+    rows, origin = _schedule_rows(ctx, "room")
+    if rows is None:
+        return Outcome.skipped("no room/area table (drawn table or schedule data)")
+    rooms = {r.entity_id: r for r in ctx.model.of_type(EntityType.ROOM)}
+    polygons = {rid: _room_polygon(r, tols["closure_gap"]) for rid, r in rooms.items()}
+    if not any(polygons.values()):
+        return Outcome.skipped("no room with a closed boundary to recompute an area from")
+    issues: list[Issue] = []
+    listed: set[str] = set()
+    recomputed_total = 0.0
+    checked = 0
+    abs_tol = 0.0051  # the table is printed to 0.01 m2
+    for row in rows:
+        if row.get("total"):
+            continue
+        code = str(row.get("code") or "")
+        area = _num(row.get("area"))
+        checked += 1
+        listed.add(code)
+        room, poly = rooms.get(code), polygons.get(code)
+        if room is None:
+            issues.append(Issue(f"area table row {code!r} has no room in the model", []))
+        elif poly is None:
+            issues.append(Issue(f"area table row {code!r}: room has no closed boundary to recompute the area", [code]))
+        elif area is None:
+            issues.append(Issue(f"area table row {code!r}: area {row.get('area')!r} is not a number", [code]))
+        else:
+            value = _area_m2(poly, unit_mm)  # type: ignore[arg-type]
+            recomputed_total += value
+            if not math.isclose(value, area, rel_tol=rel, abs_tol=abs_tol):
+                issues.append(Issue(f"area table {code}: {area:g} m2 but the boundary gives {value:.4g} m2 (relative "
+                                    f"tolerance {rel:g}, table printed to 0.01)", [code], kind="CONFLICT",
+                                    detail={"table": area, "recomputed": value}))
+    for row in rows:
+        if row.get("total"):
+            total = _num(row.get("area"))
+            if total is not None and not math.isclose(recomputed_total, total, rel_tol=rel,
+                                                       abs_tol=abs_tol * max(1, len(listed))):
+                issues.append(Issue(f"area table total {total:g} m2 vs the sum of the listed boundaries "
+                                    f"{recomputed_total:.4g} m2", [], kind="CONFLICT"))
+    for rid, room in rooms.items():
+        if room.prop("listed") is True and rid not in listed:
+            issues.append(Issue(f"room {rid} ({room.prop('name')}) is missing from the area table", [rid]))
+    return Outcome(issues, f"{checked} table rows recomputed from room boundaries ({origin}, relative tolerance {rel:g})",
+                   checked)
+
+
 # --------------------------------------------------------------------------- PLOT rules
 
 def rule_layouts(ctx: RuleContext) -> Outcome:
@@ -1074,6 +1344,16 @@ DEFAULT_RULES: tuple[Rule, ...] = (
          "COORDINATION", Severity.ERROR, rule_levels, tolerance_purposes=("elevation",)),
     Rule("COORD.VIEWS_CONSISTENT", "Plan/elevation/section values of one entity agree", "COORDINATION",
          Severity.ERROR, rule_view_consistency, tolerance_purposes=("schedule_dimension",)),
+    Rule("COORD.ELEVATION_MATCHES_PLAN", "Door/window codes, widths, heights, sills and facade in each elevation equal the plan",
+         "COORDINATION", Severity.ERROR, rule_elevation_matches_plan, tolerance_purposes=("schedule_dimension",)),
+    Rule("COORD.SCHEDULE_MATCHES_ELEVATION", "Door/window schedule rows (codes, widths, heights) equal the elevations",
+         "COORDINATION", Severity.ERROR, rule_schedule_matches_elevation, tolerance_purposes=("schedule_dimension",)),
+    Rule("COORD.LEVELS_ELEVATION_SECTION", "Level marks, labels and clear heights agree across elevations, sections and LEVEL data",
+         "COORDINATION", Severity.ERROR, rule_levels_elevation_section, tolerance_purposes=("elevation",)),
+    Rule("COORD.SECTION_MARKER_VIEW", "Each section marker references an existing section view cut where the marker is drawn",
+         "COORDINATION", Severity.ERROR, rule_section_marker_view, tolerance_purposes=("opening_offset",)),
+    Rule("COORD.ROOM_TABLE_AREA", "Area table rows and total equal the area recomputed from the room boundaries",
+         "COORDINATION", Severity.ERROR, rule_room_table_area, tolerance_purposes=("closure_gap", "area_rel")),
     Rule("PLOT.LAYOUT_SETUP", "Layouts have the profile paper size, a viewport scale and a title block", "PLOT",
          Severity.ERROR, rule_layouts),
     Rule("PLOT.PDF_RENDER_CHECKED", "The PDF was rendered to an image and inspected", "PLOT", Severity.ERROR,

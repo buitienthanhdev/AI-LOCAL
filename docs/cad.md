@@ -57,13 +57,52 @@ restore it if the write fails; the result carries `operation_id` and `backup`.
 
 ## Honest limits
 
-* Verified only by unit tests (`tests/test_autocad_spec_unit.py`); NOT tested against a live AutoCAD, no real DWG was opened,
-  no PDF was rendered.
+* The spec layer was verified by unit tests (`tests/test_autocad_spec_unit.py`); the view tools also had a live run (below). No code compliance is checked,
+  and no DWG was re-opened from disk.
 * `dwg_opened_in_autocad` / `pdf_rendered_checked` are flags the caller sets from earlier tool results; the report checks file
   existence and DWG/PDF header bytes itself and lists these flags as unverified. Code review and issue approval come only from
   human-written JSON files; an issue status is impossible without both and without CODE_REVIEWED.
 * Default tolerances are working defaults (mm per purpose), not standards; set them per project. Stair/riser limits are applied
   only when passed from a verified profile. No legal, structural, fire or accessibility compliance is checked.
 * Not implemented: reading DWG/PDF/IFC directly into the model (only `autocad.get_entities` output, types inferred from layer
-  names), elevation/section generation, idempotency markers written into AutoCAD entities (journal-level only), PDF visual checks,
+  names), (elevation/section generation now exists for generated houses, see below), idempotency markers written into AutoCAD entities (journal-level only), PDF visual checks,
   block/attribute, CTB/STB and plot-setting inspection beyond the supplied `meta` inventory.
+
+# House views from one shared model (autocad.house_model / draw_elevation / draw_section / draw_schedules)
+
+Code: `lga_worker/autocad/housemodel.py` (pure model), `houseviews.py` (pure view primitives), `provider.draw_prims`
+(COM drawing), rules in `validation.py`, tools in `tools/autocad.json` + `lga_worker/tools/autocad.py`.
+
+* `build_house_model(params)` runs `floorplan.plan_house` (same parameters as `autocad.draw_floor_plan`) and returns levels
+  (ground, +0.000 floor, ceiling, roof, ridge/parapet), wall runs (thickness, centre line, facade), doors/windows with unique
+  codes D1.. / W1.., sizes, sill heights and host wall, rooms with a closed boundary (L-shaped when a bedroom has an alcove) and
+  the area recomputed from it (centre-line rule), roof, and the list of assumptions. The plan symbols' numbers, the elevations,
+  the section and the schedules all read this one object; nothing is typed twice.
+* Elevations (front/rear/left/right), sections (cut line, marker A-A, slabs, hatched cut walls split around openings, stair if the
+  model has one, level marks, clear heights) and the door/window/room tables are `Prim` lists on standard A-* layers (mapped by
+  `layers.view_layers` / optional `layer_map`), model space 1:1, everything ByLayer. Each view also returns a record MEASURED from
+  its own primitives (opening rectangles, level lines and label text, dimension values, table cell text, marker line).
+* `autocad.house_model(views=[records])` returns the intermediate model for `autocad.validate_model` / `autocad.report`.
+* New rules (COORDINATION, ERROR; NOT_RUN without data or units): `COORD.ELEVATION_MATCHES_PLAN`,
+  `COORD.SCHEDULE_MATCHES_ELEVATION`, `COORD.LEVELS_ELEVATION_SECTION`, `COORD.SECTION_MARKER_VIEW` (a section without a marker is a
+  WARNING), `COORD.ROOM_TABLE_AREA`. 36 rules in all. `COORD.AREA_RECOMPUTED` now ignores a table total line.
+* Safety: the draw tools write an operation record (`operations.jsonl`); `export_path` writes go through the backup-before-overwrite
+  guard; a drawing call fails with VERIFICATION_FAILED when AutoCAD's entity count differs from what was sent. Not idempotent.
+* Working defaults (storey 3.3 m, plinth 0.45, slab 0.1, door 2.1/2.4, window 1.2 at sill 0.9, narrow window 0.6 at 1.5, roof 30 deg,
+  overhang 0.6, parapet 0.6, wall 0.2/0.1 m, datum +0.000 = floor 1) are flagged ASSUMED with a source note in the model and
+  `data.assumptions`; arguments of the caller become PROVIDED. They are not code requirements; no structural design, no
+  fire/accessibility/glass compliance is checked or claimed. Hatches are graphic symbols only.
+
+## Live check
+
+`logs/dev/autocad_views_live.py` (new document, plan + 4 elevations + section + tables, save DWG, export PDF, read back, validate,
+report; PASS/FAIL per step). Last run: 28 PASS, 0 FAIL; the A4 PDF was rasterised with PyMuPDF (system Python) and looked at:
+not blank, 463 vector paths, but text is small because the whole sheet is fitted to A4 (no layouts/viewports yet).
+Unit tests: `tests/test_autocad_views_unit.py`.
+
+## Not done
+
+Multi-storey houses and stairs from `plan_house` (the section draws a stair only if one is added to the model), layouts/viewports/
+title blocks, balcony/railing/material notes on elevations, beyond-the-cut projection lines in sections, door swing
+conflict checks, reading existing DWG into the model, idempotency markers in the drawing, FINAL_STATUS above DRAFT (needs a DWG
+reopened in AutoCAD and human review).

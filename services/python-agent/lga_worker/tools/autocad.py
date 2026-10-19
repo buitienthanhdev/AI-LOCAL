@@ -10,13 +10,15 @@ what AutoCAD reported back after the change.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 from lga_worker import inventory
-from lga_worker.autocad import floorplan, geometry, safety, spec_tools
+from lga_worker.autocad import floorplan, geometry, housemodel, houseviews, safety, spec_tools
+from lga_worker.autocad import layers as layers_mod
 from lga_worker.autocad.provider import (
     ACAD_IMAGE_NAME,
     PLAN_LAYERS,
@@ -24,6 +26,7 @@ from lga_worker.autocad.provider import (
     PDF_MAGIC,
     AutoCadProvider,
     CreateResult,
+    PrimsResult,
     looks_like_dxf,
     same_file_path,
 )
@@ -166,6 +169,81 @@ def _created(result: CreateResult) -> ToolOutcome:
               f"within {result.tolerance:g}")
     return ToolOutcome(data=entity, checks=[Check("read_back_matches", not result.mismatches, detail)],
                        observation=f"{_entity_line(entity)} (verified)", backend=BACKEND)
+
+
+# ------------------------------------------------------------------ house model and its views (elevation, section, schedules)
+
+def _house(args: Mapping[str, Any]) -> housemodel.HouseModel:
+    """The one shared model, built from the same parameters as autocad.draw_floor_plan plus the vertical numbers."""
+    try:
+        return housemodel.build_house_model(housemodel.HouseParams.from_args(args))
+    except ValueError as exc:
+        raise ToolError(ErrorCode.INVALID_ARGUMENT, str(exc)) from exc
+
+
+def _layer_map(args: Mapping[str, Any]) -> layers_mod.LayerMap:
+    try:
+        return layers_mod.LayerMap.from_dict(args.get("layer_map"))
+    except layers_mod.LayerMapError as exc:
+        raise ToolError(ErrorCode.INVALID_ARGUMENT, str(exc)) from exc
+
+
+def _xy(raw: Mapping[str, Any] | None, default: tuple[float, float]) -> tuple[float, float]:
+    if not raw:
+        return default
+    return float(raw.get("x", default[0])), float(raw.get("y", default[1]))
+
+
+async def _recorded(ctx: ToolContext, kind: safety.OpKind, inputs: Mapping[str, Any], affected: list[str],
+                    run: Callable[[], Any]) -> tuple[Any, safety.OperationRecord]:
+    """Run a drawing operation under an operation record in the journal (no file is overwritten, so no backup)."""
+    journal = safety.OperationJournal(_journal_path(ctx))
+    record = safety.new_record(kind, safety.Mode.APPLY, dict(inputs), affected)
+    journal.add(record)
+    try:
+        result = await run()
+        record.status = safety.OpStatus.APPLIED
+        return result, record
+    except BaseException as exc:
+        record.status = safety.OpStatus.FAILED
+        record.error = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        record.finished = safety._now()
+        journal.flush(record)
+
+
+async def _draw_view(ctx: ToolContext, provider: AutoCadProvider, model: housemodel.HouseModel,
+                     view: houseviews.View, origin: tuple[float, float], layer_map: layers_mod.LayerMap,
+                     new_document: bool) -> tuple[PrimsResult, dict[str, Any], list[Check]]:
+    names = set(view.layers_used())
+    if any(p.kind == "cut" for p in view.prims):
+        names.add("A-HATCH")
+    try:
+        layers = layers_mod.view_layers(sorted(names), layer_map)
+    except layers_mod.LayerMapError as exc:
+        raise ToolError(ErrorCode.INVALID_ARGUMENT, str(exc)) from exc
+    result = await _sta(ctx, provider, provider.draw_prims, view.prims, layers, origin, model.text_height, new_document)
+    expected = view.expected_entities()
+    added = result.entities_after - result.entities_before
+    drawn = sum(result.counts.values())
+    x0, y0, x1, y1 = view.bbox
+    data = {**view.record, "origin": [origin[0], origin[1]], "extent": {"min": [x0 + origin[0], y0 + origin[1]],
+                                                                       "max": [x1 + origin[0], y1 + origin[1]]},
+            "entities": drawn, "layers": sorted(result.by_layer)}
+    checks = [Check(f"{view.id}_entities_drawn", drawn == expected and added == expected,
+                    f"{drawn} created / {added} added to model space, {expected} expected"),
+              Check(f"{view.id}_hatches_ok", not result.hatch_failures,
+                    "; ".join(result.hatch_failures) or f"{result.counts.get('hatch', 0)} hatches evaluated")]
+    return result, data, checks
+
+
+def _row_x(origin: tuple[float, float] | None, widths: list[float], index: int, default: tuple[float, float]
+           ) -> tuple[float, float]:
+    """Origin of the index-th view when the caller gave one origin for a row of views."""
+    if origin is None:
+        return default
+    return origin[0] + sum(w + 14.0 for w in widths[:index]), origin[1]
 
 
 def register(registry: ToolRegistry) -> None:
@@ -415,6 +493,171 @@ def register(registry: ToolRegistry) -> None:
                          f"dimensions, title and area table; one undo step (layers KT-*)."),
             backend=BACKEND,
         )
+
+    # ------------------------------------------------------------------ house model, elevations, sections, schedules
+
+    async def _export_json(ctx: ToolContext, args: Mapping[str, Any], payload: Mapping[str, Any]
+                           ) -> tuple[dict[str, Any], list[Check], list[dict[str, str]]]:
+        """Write `payload` to args['export_path'] through the operation record and the backup-before-overwrite guard."""
+        if not args.get("export_path"):
+            return {}, [], []
+        path = _output_path(args["export_path"], ".json")
+        overwrite = bool(args.get("overwrite", False))
+        if path.is_dir():
+            raise ToolError(ErrorCode.INVALID_ARGUMENT, f"{path} is a directory")
+        if path.exists() and not overwrite:
+            raise ToolError(ErrorCode.CONFLICT, f"{path} exists; pass overwrite=true (a backup is made first)")
+        text = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _, op = await _guarded_write(ctx, safety.OpKind.EXPORT, path, overwrite,
+                                     lambda: asyncio.to_thread(safety.atomic_write_text, path, text))
+        extra, checks = _write_extras(op)
+        size = path.stat().st_size if path.is_file() else 0
+        checks.append(Check("export_written", size > 0, f"{path} ({size} bytes)"))
+        try:
+            json.loads(path.read_text(encoding="utf-8"))
+            parsed = True
+        except (OSError, ValueError):
+            parsed = False
+        checks.append(Check("export_is_json", parsed, "read back and parsed"))
+        return {"export_path": str(path), "export_size": size, **extra}, checks, [{"kind": "file", "path": str(path)}]
+
+    @registry.handler("autocad.house_model")
+    async def house_model(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        model = _house(args)
+        data_model = model.validation_model(list(args.get("views") or []))
+        summary = model.summary()
+        payload = {"summary": summary, "model": data_model}
+        extra, checks, artifacts = await _export_json(ctx, args, payload)
+        n_ent = len(data_model["entities"])
+        return ToolOutcome(
+            data={"summary": summary, "model": data_model, "assumptions": model.assumptions, **extra},
+            checks=checks, artifacts=artifacts, backend="offline",
+            observation=(f"House model {model.width:g} x {model.depth:g} m: {len(model.walls)} wall runs, "
+                         f"{len(model.doors)} doors, {len(model.windows)} windows, {len(model.listed_rooms)} listed rooms, "
+                         f"{len(model.levels)} levels; {n_ent} entities, {len(data_model['meta']['views'])} view record(s). "
+                         f"{len(model.assumptions)} working defaults are flagged ASSUMED (not code requirements). "
+                         "Give data.model to autocad.validate_model / autocad.report as 'model'."
+                         + (f" Written: {extra['export_path']}." if extra else "")))
+
+    @registry.handler("autocad.draw_elevation")
+    async def draw_elevation(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        model = _house(args)
+        sides = list(dict.fromkeys(args.get("sides") or ["front"]))
+        bad = [s for s in sides if s not in housemodel.SIDES]
+        if bad:
+            raise ToolError(ErrorCode.INVALID_ARGUMENT, f"unknown side(s) {bad}; use {list(housemodel.SIDES)}")
+        layer_map = _layer_map(args)
+        plan_origin = _xy(args.get("plan_origin"), (0.0, 0.0))
+        given = _xy(args["origin"], (0.0, 0.0)) if args.get("origin") else None
+        views = [houseviews.elevation_view(model, s) for s in sides]
+        widths = [v.bbox[2] - v.bbox[0] for v in views]
+        provider = await _provider(ctx)
+        new_document = bool(args.get("new_document", False))
+
+        async def run() -> list[tuple[dict[str, Any], list[Check]]]:
+            out = []
+            for i, view in enumerate(views):
+                origin = _row_x(given, widths, i, houseviews.default_origin(model, sides[i], plan_origin))
+                _, data, checks = await _draw_view(ctx, provider, model, view, origin, layer_map,
+                                                   new_document and i == 0)
+                out.append((data, checks))
+            return out
+
+        drawn, op = await _recorded(ctx, safety.OpKind.CREATE, {"tool": "autocad.draw_elevation", "sides": sides,
+                                                                "args": {k: v for k, v in args.items()}},
+                                    [f"elevation:{s}" for s in sides], run)
+        records = [d for d, _ in drawn]
+        checks = [c for _, cs in drawn for c in cs]
+        listing = "; ".join(f"{r['id']} ({r['sheet']}) {len(r['openings'])} opening(s), "
+                            f"{len(r['levels'])} level marks, {r['entities']} entities" for r in records)
+        return ToolOutcome(
+            data={"views": records, "levels": [dict(id=l.id, name=l.name, elevation=l.elevation, status=l.status.value)
+                                              for l in model.levels],
+                  "assumptions": model.assumptions, "operation_id": op.op_id},
+            checks=checks, backend=BACKEND,
+            observation=(f"Drew {len(records)} elevation(s) from the shared house model, model space 1:1, ByLayer on A-* "
+                         f"layers: {listing}. Datum +0.000 = floor 1 (ASSUMED convention); heights and sizes not given by "
+                         "the user are working defaults flagged ASSUMED. Pass data.views to autocad.house_model "
+                         "(views) before validating."))
+
+    @registry.handler("autocad.draw_section")
+    async def draw_section(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        model = _house(args)
+        raw = args.get("cut") or {}
+        cut = houseviews.Cut(axis=str(raw.get("axis", "y")), position=raw.get("position"),
+                             direction=int(raw.get("direction", 1)), letter=str(raw.get("letter", "A")),
+                             sheet=str(raw.get("sheet", houseviews.SECTION_SHEET)))
+        try:
+            cut = houseviews.check_cut(model, cut)
+            view = houseviews.section_view(model, cut)
+            marker = houseviews.section_marker_view(model, cut) if args.get("draw_marker", True) else None
+        except ValueError as exc:
+            raise ToolError(ErrorCode.INVALID_ARGUMENT, str(exc)) from exc
+        layer_map = _layer_map(args)
+        plan_origin = _xy(args.get("plan_origin"), (0.0, 0.0))
+        origin = _xy(args.get("origin"), houseviews.default_origin(model, "section", plan_origin))
+        provider = await _provider(ctx)
+        new_document = bool(args.get("new_document", False))
+
+        async def run() -> tuple[dict[str, Any], list[Check], dict[str, Any] | None]:
+            _, data, checks = await _draw_view(ctx, provider, model, view, origin, layer_map, new_document)
+            marker_data = None
+            if marker is not None:
+                _, marker_data, more = await _draw_view(ctx, provider, model, marker, plan_origin, layer_map, False)
+                checks += more
+            return data, checks, marker_data
+
+        (data, checks, marker_data), op = await _recorded(
+            ctx, safety.OpKind.CREATE, {"tool": "autocad.draw_section", "cut": raw}, [f"section:{cut.code}"], run)
+        return ToolOutcome(
+            data={"view": data, "marker": marker_data, "operation_id": op.op_id,
+                  "cut": data["cut"], "assumptions": model.assumptions},
+            checks=checks, backend=BACKEND,
+            observation=(f"Drew section {cut.code} cut at {cut.axis}={cut.position:g} looking "
+                         f"{'+' if cut.direction > 0 else '-'}{cut.axis if cut.axis == 'y' else 'x'} "
+                         f"({data['entities']} entities; cut walls {data['cut_walls']}, slabs {data['slabs']}, "
+                         f"{len(data['clear_heights'])} clear height(s), {len(data['stairs'])} stair(s)) "
+                         + (f"and its marker on the plan at origin {list(plan_origin)} ({marker_data['entities']} entities)"
+                            if marker_data else "without a marker")
+                         + ". Model space 1:1, ByLayer on A-* layers. Pass data.view to autocad.house_model (views)."))
+
+    @registry.handler("autocad.draw_schedules")
+    async def draw_schedules(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        model = _house(args)
+        layer_map = _layer_map(args)
+        plan_origin = _xy(args.get("plan_origin"), (0.0, 0.0))
+        origin = _xy(args.get("origin"), houseviews.default_origin(model, "schedule", plan_origin))
+        views = houseviews.schedule_views(model)
+        provider = await _provider(ctx)
+        new_document = bool(args.get("new_document", False))
+
+        async def run() -> list[tuple[dict[str, Any], list[Check]]]:
+            out = []
+            for i, view in enumerate(views):
+                _, data, checks = await _draw_view(ctx, provider, model, view, origin, layer_map,
+                                                   new_document and i == 0)
+                out.append((data, checks))
+            return out
+
+        drawn, op = await _recorded(ctx, safety.OpKind.CREATE, {"tool": "autocad.draw_schedules"},
+                                    [v.id for v in views], run)
+        records = [d for d, _ in drawn]
+        checks = [c for _, cs in drawn for c in cs]
+        rows = {"door": model.door_rows(), "window": model.window_rows(), "room": model.room_rows()}
+        total = round(sum(r["area"] for r in rows["room"]), 4)
+        extra, more, artifacts = await _export_json(ctx, args, {"schedules": rows, "room_total_area_m2": total,
+                                                               "views": records, "assumptions": model.assumptions})
+        checks += more
+        return ToolOutcome(
+            data={"views": records, "schedules": rows, "room_total_area_m2": total, "operation_id": op.op_id,
+                  "assumptions": model.assumptions, **extra},
+            checks=checks, artifacts=artifacts, backend=BACKEND,
+            observation=(f"Drew the door ({len(rows['door'])} rows), window ({len(rows['window'])} rows) and room/area "
+                         f"({len(rows['room'])} rows, total {total:.2f} m², centre-line rule) tables from the same model as the "
+                         "plan symbols; rows are returned in data.schedules and re-read from the drawn cell text in "
+                         "data.views[].rows."
+                         + (f" Written: {extra['export_path']}." if extra else "")))
 
     @registry.handler("autocad.draw_image")
     async def draw_image(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:

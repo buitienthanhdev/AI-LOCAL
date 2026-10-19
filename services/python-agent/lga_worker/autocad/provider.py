@@ -76,6 +76,7 @@ UNKNOWN_HANDLE = "(unknown)"
 # Layers of a drawn floor plan: role -> (layer name, ACI colour).
 PLAN_LAYERS = {"wall": ("KT-TUONG", 7), "door": ("KT-CUA", 1), "window": ("KT-CUASO", 4), "furniture": ("KT-NOITHAT", 8),
                "porch": ("KT-HIEN", 2), "text": ("KT-CHU", 2), "dimension": ("KT-KICHTHUOC", 3)}
+HATCH_PATTERN_SCALE = 0.04  # hatch line spacing for drawings in metres (graphic symbol only)
 PLAN_TEXT_STYLE = "LGA_VN"  # Arial: renders Vietnamese marks, unlike AutoCAD's default txt.shx
 DXF_EXPORT_FORMAT = "dxf"  # lower case: AutoCAD appends it verbatim as the file extension
 DXF_SELECTION_PREFIX = "LGA_DXF_"
@@ -200,6 +201,17 @@ class PlanResult:
 
 
 @dataclass
+class PrimsResult:
+    document: str
+    counts: dict[str, int]  # entities created, by primitive kind (a "cut" adds one "poly" and one "hatch")
+    by_layer: dict[str, int]  # entities created, by layer name in the file
+    entities_before: int
+    entities_after: int
+    layers_created: list[str]
+    hatch_failures: list[str]
+
+
+@dataclass
 class StrokesResult:
     document: str
     drawn: int
@@ -234,6 +246,19 @@ class PdfResult:
     layout: str
     plotted: bool
     restore_errors: list[str] = field(default_factory=list)
+
+
+def _style_dimension(d: Any, text_height: float) -> None:
+    """The dimension look of the generated drawings: tick arrows, 2 decimals, decimal comma, Arial text."""
+    for prop, value in (("TextStyle", PLAN_TEXT_STYLE), ("TextHeight", text_height),
+                        ("Arrowhead1Type", 4), ("Arrowhead2Type", 4), ("ArrowheadSize", 0.12),
+                        ("ExtensionLineExtension", 0.1), ("ExtensionLineOffset", 0.1),
+                        ("TextGap", 0.05), ("PrimaryUnitsPrecision", 2), ("SuppressTrailingZeros", False),
+                        ("DecimalSeparator", ",")):
+        try:
+            setattr(d, prop, value)
+        except Exception:  # a property this AutoCAD version lacks: keep its default
+            pass
 
 
 class AutoCadProvider:
@@ -848,21 +873,107 @@ class AutoCadProvider:
                 text(plan.schedule, 1)  # top left
                 for dim in plan.dimensions:
                     d = put(ms.call("AddDimAligned", pt(*dim.p1), pt(*dim.p2), pt(*dim.text_at)), "dimension")
-                    for prop, value in (("TextStyle", PLAN_TEXT_STYLE), ("TextHeight", plan.text_height),
-                                        ("Arrowhead1Type", 4), ("Arrowhead2Type", 4), ("ArrowheadSize", 0.12),
-                                        ("ExtensionLineExtension", 0.1), ("ExtensionLineOffset", 0.1),
-                                        ("TextGap", 0.05), ("PrimaryUnitsPrecision", 2), ("SuppressTrailingZeros", False),
-                                        ("DecimalSeparator", ",")):
-                        try:
-                            setattr(d, prop, value)
-                        except Exception:  # a property this AutoCAD version lacks: keep its default
-                            pass
+                    _style_dimension(d, plan.text_height)
             finally:
                 doc.call("EndUndoMark")
             self._idempotent("zoom extents", lambda: app.call("ZoomExtents"), deadline)
             return PlanResult(document=name, counts=counts)
 
         return self._guard("draw floor plan", run)
+
+    def draw_prims(self, prims: Sequence[Any], layers: Mapping[str, tuple[str, int]], origin: tuple[float, float],
+                   text_height: float, new_document: bool, *, deadline: float) -> PrimsResult:
+        """Draw the primitives of `houseviews` (line, poly, circle, arc, text, dim, cut) in model space at `origin`,
+        1:1, every entity on its layer and otherwise ByLayer, as one undo step. `layers` maps the standard layer name of
+        each primitive to (layer name in the file, ACI colour); missing layers are created, existing ones are left as
+        they are. Nothing else in the drawing is touched."""
+
+        def run() -> PrimsResult:
+            if new_document:
+                self._new_document(None, deadline)
+            app, doc = self._writable_document(deadline)
+            name = str(self._idempotent("read drawing name", lambda: doc.Name, deadline))
+            created_layers: list[str] = []
+            for std, (office, color) in layers.items():
+                existed = self._find_layer(doc, office, deadline) is not None
+                layer = self._idempotent(f"add layer {office}", lambda n=office: doc.Layers.call("Add", n), deadline)
+                if not existed:
+                    self._idempotent("set layer color", lambda lay=layer, c=color: setattr(lay, "color", c), deadline)
+                    created_layers.append(office)
+            style = self._idempotent("add text style", lambda: doc.TextStyles.call("Add", PLAN_TEXT_STYLE), deadline)
+            try:
+                style.call("SetFont", "Arial", False, False, 0, 34)
+            except Exception as exc:  # keeps AutoCAD's default font: still readable, without Vietnamese marks
+                logger.warning("draw_prims: could not set the Arial font: %s", com.describe(exc) if com.is_com_error(exc) else exc)
+            ms = self._idempotent("open model space", lambda: doc.ModelSpace, deadline)
+            before = int(self._idempotent("count model space", lambda: ms.Count, deadline))
+            ox, oy = origin
+            counts: dict[str, int] = {}
+            by_layer: dict[str, int] = {}
+            hatch_failures: list[str] = []
+
+            def pt(x: float, y: float) -> Any:
+                return com.double_array((x + ox, y + oy, 0.0))
+
+            def put(entity: Any, kind: str, std: str) -> Any:
+                office = layers[std][0]
+                entity.Layer = office
+                counts[kind] = counts.get(kind, 0) + 1
+                by_layer[office] = by_layer.get(office, 0) + 1
+                return entity
+
+            def polyline(coords: Sequence[float], closed: bool) -> Any:
+                flat: list[float] = []
+                for i in range(0, len(coords) - 1, 2):
+                    flat += [coords[i] + ox, coords[i + 1] + oy]
+                pl = ms.call("AddLightWeightPolyline", com.double_array(flat))
+                pl.Closed = bool(closed)
+                return pl
+
+            doc.call("StartUndoMark")
+            try:
+                for prim in prims:
+                    v = prim.pts
+                    if prim.kind == "line":
+                        put(ms.call("AddLine", pt(v[0], v[1]), pt(v[2], v[3])), "line", prim.layer)
+                    elif prim.kind == "poly":
+                        put(polyline(v, prim.closed), "poly", prim.layer)
+                    elif prim.kind == "circle":
+                        put(ms.call("AddCircle", pt(v[0], v[1]), float(v[2])), "circle", prim.layer)
+                    elif prim.kind == "arc":
+                        put(ms.call("AddArc", pt(v[0], v[1]), float(v[2]), float(v[3]), float(v[4])), "arc", prim.layer)
+                    elif prim.kind == "text":
+                        mt = ms.call("AddMText", pt(v[0], v[1]), 0.0, prim.text)
+                        mt.StyleName = PLAN_TEXT_STYLE
+                        mt.Height = float(prim.height)
+                        mt.AttachmentPoint = int(prim.attach)
+                        mt.InsertionPoint = pt(v[0], v[1])
+                        put(mt, "text", prim.layer)
+                    elif prim.kind == "dim":
+                        dim = put(ms.call("AddDimAligned", pt(v[0], v[1]), pt(v[2], v[3]), pt(v[4], v[5])), "dim", prim.layer)
+                        _style_dimension(dim, text_height)
+                    elif prim.kind == "cut":
+                        outline = put(polyline(v, True), "poly", prim.layer)
+                        hatch = ms.call("AddHatch", 1, prim.pattern, True)  # acHatchPatternTypePreDefined
+                        put(hatch, "hatch", "A-HATCH")
+                        try:
+                            if prim.pattern.upper() != "SOLID":
+                                hatch.PatternScale = HATCH_PATTERN_SCALE
+                            hatch.call("AppendOuterLoop", com.dispatch_array([outline]))
+                            hatch.call("Evaluate")
+                        except Exception as exc:
+                            hatch_failures.append(f"{prim.ref or prim.semantic}: "
+                                                  f"{com.describe(exc) if com.is_com_error(exc) else exc}")
+                    else:
+                        raise ToolError(ErrorCode.INVALID_ARGUMENT, f"unknown primitive kind {prim.kind!r}")
+            finally:
+                doc.call("EndUndoMark")
+            after = int(self._idempotent("count model space", lambda: ms.Count, deadline))
+            self._idempotent("zoom extents", lambda: app.call("ZoomExtents"), deadline)
+            return PrimsResult(document=name, counts=counts, by_layer=by_layer, entities_before=before,
+                               entities_after=after, layers_created=created_layers, hatch_failures=hatch_failures)
+
+        return self._guard("draw view", run)
 
     def draw_strokes(self, strokes: Sequence[tuple[Sequence[tuple[float, float]], tuple[int, int, int], bool]],
                      new_document: bool, paper: str, aci_for: Callable[[tuple[int, int, int]], int], *,
