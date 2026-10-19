@@ -64,7 +64,7 @@ OP_MAP: dict[tuple[str, str], str] = {
     ("word", "verify"): "word.verify_saved",
     ("excel", "read"): "excel.read_range", ("excel", "edit"): "excel.write_range", ("excel", "create"): "excel.write_range", ("excel", "convert"): "excel.export_pdf",
     ("excel", "verify"): "excel.verify_saved",
-    ("powerpoint", "read"): "powerpoint.read_text", ("powerpoint", "create"): "powerpoint.create_slides", ("powerpoint", "edit"): "powerpoint.create_slides",
+    ("powerpoint", "read"): "powerpoint.read_text", ("powerpoint", "create"): "powerpoint.create_slides", ("powerpoint", "edit"): "powerpoint.edit_slides",
     ("powerpoint", "convert"): "powerpoint.export_pdf", ("powerpoint", "verify"): "powerpoint.verify_saved",
     ("outlook", "read"): "outlook.list_mail", ("outlook", "create"): "outlook.create_draft", ("outlook", "send"): "outlook.send_mail",
     ("pdf", "read"): "pdf.read_text", ("pdf", "verify"): "pdf.verify_saved", ("pdf", "edit"): "pdf.edit",

@@ -161,7 +161,7 @@ def test_registry_schema_and_no_claim_without_evidence():
     assert "word.read_text" in ops and ops["word.read_text"]["method"] == "file_library"  # no Word COM registered here
     assert "word.write_text" not in ops
     assert any(o["operation_id"] == "word.write_text" and "not registered" in o["reasons"][0] for o in word["unsupported_operations"])
-    assert any(o["operation_id"] == "word.insert_toc" and "not implemented" in o["reasons"][0] for o in word["unsupported_operations"])
+    assert any(o["operation_id"] == "word.compare_versions" and "not implemented" in o["reasons"][0] for o in word["unsupported_operations"])
     assert word["installed"] is False
 
 

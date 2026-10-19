@@ -20,6 +20,7 @@ from lga_worker.errors import ErrorCode, ToolError
 from lga_worker.paths import absolute_path
 from lga_worker.registry import Check, ToolContext, ToolOutcome, ToolRegistry
 from lga_worker.sta import StaExecutor
+from lga_worker.tools.office_extra import OfficeExtra, register_extra
 
 BACKEND = "office-com"
 SERVICE_NAME = "office"
@@ -34,7 +35,7 @@ OL_DRAFTS = 16
 FOLDERS = {"inbox": OL_INBOX, "sent": OL_SENT, "drafts": OL_DRAFTS}
 
 
-class Office:
+class Office(OfficeExtra):
     def __init__(self) -> None:
         self.executor = StaExecutor("office")
 
@@ -366,6 +367,7 @@ def register(registry: ToolRegistry) -> None:
     from lga_worker.office import tools as spec_tools
 
     spec_tools.register(registry)
+    register_extra(registry, _office, _run)
 
     @registry.handler("office.excel_read")
     async def excel_read(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
