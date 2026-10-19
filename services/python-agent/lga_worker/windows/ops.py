@@ -255,7 +255,7 @@ class DesktopOpsMixin:
         if content is None or (content.value or "").strip().strip('"') != wanted:
             self.focus_element(name_box.element_id)
             self.hotkey(["ctrl", "a"])
-            self.uia.TypeText(wanted, interval=0.0)
+            self._paste_text(wanted, dialog.hwnd)  # typing garbled backslashes and capitals (measured): paste
             time.sleep(0.2)
         save = self.find_element(ElementQuery(window_hwnd=dialog.hwnd, automation_id=SAVE_BUTTON_ID,
                                               control_type="ButtonControl", max_results=2))
