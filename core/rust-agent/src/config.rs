@@ -210,7 +210,9 @@ fn deep_merge(base: &mut toml::Value, overlay: toml::Value) {
         (toml::Value::Table(base_table), toml::Value::Table(overlay_table)) => {
             for (key, value) in overlay_table {
                 match base_table.get_mut(&key) {
-                    Some(existing) if existing.is_table() && value.is_table() => deep_merge(existing, value),
+                    Some(existing) if existing.is_table() && value.is_table() => {
+                        deep_merge(existing, value)
+                    }
                     _ => {
                         base_table.insert(key, value);
                     }
@@ -222,7 +224,8 @@ fn deep_merge(base: &mut toml::Value, overlay: toml::Value) {
 }
 
 fn read_toml(path: &Path) -> Result<toml::Value> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
@@ -234,7 +237,10 @@ pub fn find_root() -> Result<PathBuf> {
         if root.join(EXAMPLE_CONFIG).is_file() {
             return Ok(root);
         }
-        bail!("LGA_ROOT={} does not contain {EXAMPLE_CONFIG}", root.display());
+        bail!(
+            "LGA_ROOT={} does not contain {EXAMPLE_CONFIG}",
+            root.display()
+        );
     }
     let mut starts = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
@@ -250,7 +256,9 @@ pub fn find_root() -> Result<PathBuf> {
             }
         }
     }
-    Err(anyhow!("cannot find {EXAMPLE_CONFIG}; run from the repository or set LGA_ROOT"))
+    Err(anyhow!(
+        "cannot find {EXAMPLE_CONFIG}; run from the repository or set LGA_ROOT"
+    ))
 }
 
 impl Config {
@@ -268,7 +276,9 @@ impl Config {
             deep_merge(&mut value, read_toml(Path::new(&extra))?);
         }
         let merged = value.clone();
-        let raw: RawConfig = value.try_into().context("configuration does not match the expected shape")?;
+        let raw: RawConfig = value
+            .try_into()
+            .context("configuration does not match the expected shape")?;
         Ok(Config {
             root: root.to_path_buf(),
             agent: raw.agent,
@@ -291,9 +301,14 @@ impl Config {
     pub fn section<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<T> {
         let mut value = &self.raw;
         for part in key.split('.') {
-            value = value.get(part).ok_or_else(|| anyhow!("configuration section [{key}] is missing"))?;
+            value = value
+                .get(part)
+                .ok_or_else(|| anyhow!("configuration section [{key}] is missing"))?;
         }
-        value.clone().try_into().with_context(|| format!("configuration section [{key}] has the wrong shape"))
+        value
+            .clone()
+            .try_into()
+            .with_context(|| format!("configuration section [{key}] has the wrong shape"))
     }
 
     /// Resolve a configured path relative to the repository root.
@@ -323,6 +338,14 @@ impl Config {
     }
 }
 
+fn default_max_context_tokens() -> usize {
+    16_384
+}
+
+fn default_true() -> bool {
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,12 +367,4 @@ mod tests {
         assert!(config.agent.max_steps > 0);
         assert!(config.llm.gateway_url.starts_with("http://127.0.0.1"));
     }
-}
-
-fn default_max_context_tokens() -> usize {
-    16_384
-}
-
-fn default_true() -> bool {
-    true
 }

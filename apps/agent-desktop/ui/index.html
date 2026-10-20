@@ -129,6 +129,8 @@
   .box:focus-within { border-color: var(--accent); }
   textarea { width: 100%; border: none; outline: none; resize: none; background: transparent; color: var(--text); font: inherit; font-size: 15px; min-height: 26px; max-height: 220px; padding: 4px; }
   .bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .screen-mode-row { display: flex; align-items: center; gap: 8px; margin: 0 4px 8px; color: var(--muted); font-size: 12px; }
+  .screen-mode-row select { min-width: 0; max-width: 100%; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; }
   .seg { display: inline-flex; background: var(--code); border-radius: 9px; padding: 2px; }
   .seg button { padding: 4px 10px; border-radius: 7px; font-size: 12.5px; color: var(--muted); }
   .seg button.on { background: var(--panel); color: var(--text); box-shadow: var(--shadow); font-weight: 600; }
@@ -345,6 +347,7 @@
   .box:focus-within { border-color: var(--border); box-shadow: 0 2px 12px rgba(0,0,0,.10); }
   .bar { flex-wrap: nowrap; }
   .bar .seg { margin-left: 4px; }
+  .screen-mode-row { flex-wrap: wrap; }
   .bar .hint { display: none; }
   .bar::after { content: ""; flex: 1; order: 5; }
   .mic { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-size: 16px; color: var(--muted); flex: none; order: 6; }
@@ -558,6 +561,14 @@
       <textarea id="input" rows="1" placeholder="Nhắn cho Illuminati… ví dụ: Mở Excel và tạo bảng chi phí tháng 10"></textarea>
       <div class="pending" id="pending" style="display:none"></div>
       <div class="pending" id="queue" style="display:none" title="Yêu cầu đang xếp hàng"></div>
+      <div class="screen-mode-row">
+        <label for="screenControlMode">Khi AI điều khiển màn hình:</label>
+        <select id="screenControlMode" title="Tạm dừng khi bạn thao tác; AI tự tiếp tục sau 3 giây yên lặng">
+          <option value="pause_on_activity">Tạm dừng khi bạn thao tác (3 giây yên lặng để tiếp tục)</option>
+          <option value="isolated" disabled>Màn hình/chuột/phím riêng (chưa hỗ trợ)</option>
+          <option value="lock_input" disabled>Khóa chuột và bàn phím (chưa hỗ trợ)</option>
+        </select>
+      </div>
       <div class="bar">
         <button class="attach" id="attachBtn" title="Đính kèm tệp: ảnh, Word, Excel, PDF… (hoặc kéo thả / dán ảnh)">📎</button>
         <input type="file" id="fileInput" multiple hidden>
@@ -1307,7 +1318,7 @@ async function refreshHealth() {
 }
 
 /* ---------- Brain settings ---------- */
-const BRAIN_NAMES = { api: "Gemini API", primary: "Gemini Web", fallback: "Gemini Web (dự phòng)", cloud: "Ollama cloud (gemma4:31b)", local: "AI trên máy (Ollama)" };
+const BRAIN_NAMES = { api: "OpenRouter · MiniMax M3.1 Flash (free)", primary: "Gemini Web", fallback: "Gemini Web (dự phòng)", cloud: "Ollama cloud (gemma4:31b)", local: "AI trên máy (Ollama)" };
 let lastBrains = [];
 function brainState(b) {
   if (b.state === "ready" && b.breaker !== "open") return ["ok", "sẵn sàng"];
@@ -1340,6 +1351,19 @@ function setMode(m, remember = true) {
   if (remember) try { localStorage.setItem("lga.mode.v2", m); } catch {}
   for (const b of $("modes").children) b.classList.toggle("on", b.dataset.mode === m);
 }
+const SCREEN_MODE_KEY = "lga.screen-control-mode";
+function selectedScreenControlMode() {
+  const select = $("screenControlMode");
+  let saved = "";
+  try { saved = localStorage.getItem(SCREEN_MODE_KEY) || ""; } catch {}
+  select.value = [...select.options].some(option => option.value === saved && !option.disabled) ? saved : "pause_on_activity";
+  return select.value;
+}
+selectedScreenControlMode();
+$("screenControlMode").addEventListener("change", () => {
+  try { localStorage.setItem(SCREEN_MODE_KEY, $("screenControlMode").value); }
+  catch { toast("Không lưu được chế độ điều khiển màn hình; lựa chọn này chỉ áp dụng cho yêu cầu hiện tại."); }
+});
 function grow() { const t = $("input"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, 220) + "px"; }
 /**
  * The composer continues the chat that is on screen (one box, as many requests as the person types):
@@ -1418,7 +1442,7 @@ async function send(text) {
 const queue = [];
 let draining = false;
 async function startRequest(text, out, shown, useMode) {
-  const body = { task: text, mode: useMode, context: conversationContext(), attachments: out };
+  const body = { task: text, mode: useMode, screen_control_mode: selectedScreenControlMode(), context: conversationContext(), attachments: out };
   if (pinnedBrain) body.brain = pinnedBrain;
   if (conv) body.conversation_id = conv.id;
   const { task_id, conversation_id } = await api("/api/tasks", body);
@@ -1593,10 +1617,11 @@ function render(turn) {
   region(turn, "goal", [task.goal, task.attachments], () => [task.goal, attachmentNodes(task.attachments)]);
   region(turn, "said", turn.said || [], () => (turn.said || []).map(t => el("div", { class: "msg user" }, el("div", { class: "bubble" }, t, el("div", { class: "small", style: "opacity:.6" }, "gửi trong lúc AI đang làm")))));
 
-  region(turn, "ctl", [st, data.pause_requested, data.interrupted], () => [
+  region(turn, "ctl", [st, data.pause_requested, data.auto_paused, data.interrupted], () => [
     el("span", { class: "muted small", style: "margin-right:auto" }, `${when(task.created_at)} · ${modeName(task.mode)}`),
     !done && !data.pause_requested && el("button", { class: "btn", onclick: () => control("pause", turn) }, "⏸ Tạm dừng"),
-    !done && data.pause_requested && el("button", { class: "btn", onclick: () => control("unpause", turn) }, "▶ Tiếp tục"),
+    !done && data.auto_paused && el("span", { class: "muted small" }, "⏸ Đang tạm dừng — tự tiếp tục sau 3 giây yên lặng"),
+    !done && data.pause_requested && !data.auto_paused && el("button", { class: "btn", onclick: () => control("unpause", turn) }, "▶ Tiếp tục"),
     !done && el("button", { class: "btn danger", onclick: () => control("cancel", turn) }, "■ Dừng"),
     st !== "completed" && (done || st === "needs_user") && el("button", { class: "btn", onclick: () => control("resume", turn) }, data.interrupted ? "↻ Chạy tiếp" : "↻ Chạy lại"),
     done && el("button", { class: "btn", onclick: () => { $("input").value = task.goal; grow(); $("input").focus(); } }, "✎ Sửa & gửi lại"),
@@ -2301,7 +2326,7 @@ for (const b of $("usageDays").children) b.onclick = () => {
   loadUsage();
 };
 const QUOTA_NOTE = {
-  api: ["Gemini API: gói miễn phí có hạn mức theo phút và theo ngày, đặt lại mỗi ngày (giờ Thái Bình Dương). Xem hạn mức chính xác của dự án tại", "https://aistudio.google.com/usage", "AI Studio → Usage"],
+  api: ["OpenRouter (model :free): hạn mức lượt gọi theo phút và theo ngày của tài khoản. Xem phần đã dùng tại", "https://openrouter.ai/activity", "openrouter.ai/activity"],
   cloud: ["Ollama cloud: hạn mức theo tháng của gói tài khoản. Xem phần đã dùng tại", "https://ollama.com/settings", "ollama.com/settings"],
   local: ["Chạy trên máy bạn: không giới hạn lượt, dùng GPU/RAM của máy (chậm hơn khi GPU đang bận)."],
   webapi: ["Gemini web (thử nghiệm): không có hạn mức công bố, Google có thể tạm chặn khi dùng nhiều."],

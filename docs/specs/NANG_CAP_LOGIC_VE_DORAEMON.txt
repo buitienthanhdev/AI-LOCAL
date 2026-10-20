@@ -1,183 +1,485 @@
-NHIỆM VỤ: NÂNG CẤP LOGIC VẼ DORAEMON LÊN BẢN V2
+# DORAEMON DRAWING ENGINE V2 — PRODUCTION SPECIFICATION
 
-MỤC TIÊU
-Nâng cấp trực tiếp logic vẽ Doraemon trong codebase AI Agent hiện có để tạo một hình Doraemon toàn thân, chính diện, cân đối, sạch nét, đúng nhận diện nhân vật và đẹp hơn rõ rệt so với kết quả hiện tại. Ưu tiên độ giống mẫu, tỷ lệ hình học, đường nét, lớp che khuất, màu sắc và độ chính xác khi thao tác trên Microsoft Paint. Không chỉ viết kế hoạch hoặc đề xuất; hãy kiểm tra codebase, sửa code, viết test, chạy test và kiểm tra ảnh kết quả thực tế.
+## 1. OBJECTIVE
 
-Không hiểu “đẹp nhất” là thêm nhiều hiệu ứng. Mục tiêu là hình minh họa phẳng kiểu hoạt hình, đúng tỷ lệ, hình khối rõ ràng, biểu cảm thân thiện, viền đều, màu sạch, không méo hình và nhận ra Doraemon ngay cả khi thu nhỏ.
+Nâng cấp trực tiếp module `paint.draw` trong AI Local Agent để vẽ Doraemon toàn thân, chính diện, nhận diện chính xác, hình học cân đối, đường cong mượt, màu phẳng sạch và có chất lượng minh họa chuyên nghiệp trên Microsoft Paint.
 
-1. BỐI CẢNH VÀ DỮ LIỆU HIỆN CÓ
-Đọc file đặc tả Doraemon và đường dẫn ảnh kết quả mới nhất trước khi sửa. Bản hiện tại có canvas logic 1152 x 648, nền trắng, 27 đối tượng, 27 stroke/operation, 3 stage. Log ghi đã vẽ 27 đối tượng trong khoảng 81.5 giây và trạng thái completion_status là verified. Đây chỉ là trạng thái thực thi, không đồng nghĩa hình đã đạt chất lượng thẩm mỹ hoặc giống mẫu.
+Yêu cầu bắt buộc:
+- Sử dụng reference-based drawing, không free interpretation khi yêu cầu là “Doraemon”.
+- Dùng một scene geometry duy nhất cho preview, drawing plan, thao tác Paint và visual validation.
+- Hoạt động offline bằng template cục bộ đã được kiểm định.
+- Tự phát hiện lỗi hình học, lỗi thao tác, sai lớp và sai lệch tọa độ; sửa đúng đối tượng lỗi.
+- Chỉ xác nhận thành công khi ảnh thực tế vượt qua quality gates.
+- Nâng cấp kiến trúc hiện tại, không tạo pipeline song song và không làm hỏng các tác vụ vẽ khác.
 
-Các số liệu quan trọng trong bản hiện tại:
-head: bbox x=353.1, y=56.5, width=445.8, height=345.5; tỷ lệ rộng/cao khoảng 1.29.
-face: bbox x=397.7, y=134.5, width=356.6, height=256.3; cạnh dưới gần sát cạnh dưới đầu.
-torso: bbox x=420.0, y=368.6, width=312.1, height=211.8.
-collar: bbox x=442.2, y=368.6, width=267.5, height=50.2; đang là hình chữ nhật.
-bell: bbox x=537.0, y=396.5, width=78.0, height=77.9.
-mouth_line: x=576.0, từ y=262.7 tới y=324.0.
-mouth: bbox x=447.8, y=279.4, width=256.4, height=89.2; điểm giữa của đường cong ở gần y=368.6.
-Stroke width đang trộn 1 px, 3 px và 5 px không theo hệ thống.
+## 2. PIPELINE
 
-Thứ tự hiện tại có vấn đề: thân được vẽ trước tay nên tay có thể nổi đè lên thân; cổ áo và chuông được vẽ trước đầu; đầu được tô sau có thể che phần trên của chuông; vùng mặt được vẽ sau cổ áo và chồng lên phần trên của cổ áo. Đường dọc từ mũi xuống y=324 đi sâu vào lòng nụ cười thay vì dừng tại vùng giữa phía trên của đường cong cười. Túi bụng đang dùng polygon đóng; cần kiểm tra để tạo miệng túi và đáy túi mềm mại thay vì một đa giác gãy khúc.
+`Intent → Reference Resolver → Character Template → Geometry Solver → Constraint Validation → Scene Renderer → Drawing Planner → Paint Executor → Screenshot Capture → Visual Validator → Local Repair → Final Quality Gate → Artifact Storage`
 
-Bản hiện tại đặt fidelity_level = free_interpretation và reference=false, dù yêu cầu chỉ rõ tên một nhân vật đã có mẫu phổ biến. Không được tiếp tục mặc định diễn giải tự do khi người dùng chỉ yêu cầu “vẽ Doraemon”.
+Mỗi stage phải có input, output, trạng thái, thời gian thực thi và lỗi có cấu trúc.
 
-Đường dẫn screenshot được ghi trong dữ liệu cũ là:
-C:\Users\TIEN THANH\Desktop\AI LOCAL\local-gemini-agent\artifacts\20261016-061821-6a1db3\paint\result-4aea5f02-4c5a-40d7-be27-b884b1c023fb.png
-Hãy xác nhận đường dẫn này còn tồn tại hay tìm screenshot mới nhất của lần chạy thực tế. Không mặc định rằng file vẫn tồn tại.
+Không cho phép executor chạy nếu geometry validation hoặc Paint preflight thất bại.
 
-2. KIỂM TRA CODEBASE TRƯỚC KHI SỬA
-Tìm các thành phần hiện có chịu trách nhiệm cho nhận diện yêu cầu, tìm mẫu tham chiếu, tạo artwork specification, mô hình hình học, lập drawing plan, sinh stroke, ánh xạ tọa độ màn hình, điều khiển Paint, chụp checkpoint, kiểm định ảnh và lưu artifact. Tái sử dụng kiến trúc, công cụ, bộ test và hệ thống log đang có. Không tạo thêm một pipeline song song nếu có thể nâng cấp pipeline hiện tại.
+## 3. DRAWING PROFILE
 
-Không xóa, không ghi đè mù quáng và không làm hỏng khả năng vẽ các hình khác. Tách riêng template/parameter của Doraemon khỏi logic dùng chung. Giữ đường lui về bản template trước bằng versioning hoặc commit phù hợp. Không thêm dịch vụ trả phí, API key bắt buộc hoặc model tải lớn chỉ để vẽ hình này.
+Default profile:
+- Character: Doraemon.
+- Pose: full-body, front-facing, standing.
+- Expression: friendly smile.
+- Style: canonical flat-color cartoon.
+- Background: white.
+- Perspective: orthographic/front view.
+- Outline: continuous black contours with consistent hierarchy.
+- Shading: disabled by default.
+- Accessories: standard red collar, yellow bell, white belly and pocket.
+- Reference mode: `REFERENCE_BASED`.
+- Offline fallback: `APPROVED_LOCAL_TEMPLATE`.
 
-3. THAM CHIẾU VÀ CHẾ ĐỘ TRUNG THÀNH
-Khi online, tìm ảnh tham chiếu chính diện, toàn thân, nền đơn giản và đường nét rõ. Ưu tiên nguồn chính thức như:
-https://www.dora-world.com/
-https://www.tv-asahi.co.jp/doraemon/character/
-https://www.bandai.co.jp/character/doraemon.php
-Nếu trang chính thức không cung cấp ảnh chính diện phù hợp, có thể dùng ảnh tham chiếu sạch, rõ nét khác, nhưng phải lưu URL, thời điểm truy xuất và trạng thái tin cậy. Không tuyên bố đã khớp mẫu nếu chưa có ảnh mẫu để so sánh.
+Không tự ý thay đổi pose, biểu cảm, tỷ lệ, phụ kiện hoặc phong cách khi người dùng chưa yêu cầu.
 
-Khi offline hoặc không lấy được ảnh, dùng template hình học Doraemon chuẩn được lưu cục bộ. Không để việc thiếu mạng làm mất khả năng vẽ. Trong metadata, phân biệt rõ reference_status = AVAILABLE hoặc OFFLINE_TEMPLATE; không giả lập rằng đã phân tích ảnh online.
+## 4. REFERENCE MANAGEMENT
 
-Mặc định với yêu cầu “Doraemon”, dùng kiểu chính diện toàn thân, đứng thẳng, vui vẻ, màu phẳng, không phối cảnh, không bóng đổ phức tạp, không thêm đạo cụ và không tự đổi biểu cảm. Nếu người dùng nêu tư thế hoặc biểu cảm khác thì mới thay đổi template tương ứng.
+Reference priority:
+1. Official Doraemon character artwork.
+2. Approved high-quality front-view full-body reference.
+3. Versioned local template đã được duyệt.
 
-4. MÔ HÌNH HÌNH HỌC PHẢI DÙNG TỶ LỆ TƯƠNG ĐỐI
-Không dùng một bộ tọa độ pixel cố định làm chuẩn duy nhất. Tạo một scene/template có hệ tọa độ chuẩn và các điểm neo tương đối; lưu tọa độ theo normalized coordinates hoặc theo bounding box nhân vật. Chuyển thành pixel canvas sau khi đã xác định kích thước canvas thực tế. Giữ tỷ lệ đồng nhất khi thay đổi kích thước canvas; tuyệt đối không co giãn độc lập theo X và Y làm Doraemon bị bè hoặc cao gầy bất thường.
+Reference metadata:
+- `reference_id`
+- `source_url`
+- `retrieved_at`
+- `source_type`
+- `image_width`
+- `image_height`
+- `character_bbox`
+- `landmarks`
+- `palette`
+- `reference_status`
+- `confidence`
+- `template_version`
 
-Với canvas 1152 x 648 hiện tại, dùng các khoảng tỷ lệ sau làm constraint ban đầu, sau đó hiệu chỉnh theo ảnh tham chiếu đã chọn:
-Toàn nhân vật chiếm khoảng 84% đến 90% chiều cao canvas, canh giữa, không bị cắt đầu, tay, râu hoặc chân.
-Tỷ lệ rộng/cao của silhouette toàn thân mục tiêu khoảng 0.72 đến 0.86; không giữ nguyên silhouette hiện tại gần 0.98 nếu nó làm nhân vật bè ngang.
-Đầu là khối gần tròn, tỷ lệ width/height mục tiêu khoảng 1.08 đến 1.20; không giữ ellipse hiện tại có tỷ lệ khoảng 1.29 nếu ảnh tham chiếu không xác nhận tỷ lệ đó.
-Đầu chiếm khoảng một nửa chiều cao toàn nhân vật. Thân thấp, tròn và gọn; hai tay cùng hai chân cân đối theo đầu, không biến Doraemon thành hình người có vai rộng.
-Mặt trắng rộng, hai má mềm, nằm cân đối trong đầu xanh. Mép dưới mặt phải phối hợp với cổ áo; không được để vùng mặt trắng phủ lên cổ áo do sai thứ tự lớp.
-Hai mắt trắng dựng đứng, gần chạm nhau ở giữa; đồng tử đen nhỏ hơn mắt và hướng về phía trung tâm vừa phải. Không để mắt lệch cao thấp hoặc tạo khe giữa không có chủ đích.
-Mũi đỏ nằm đúng trục giữa khuôn mặt, dưới mắt. Đường dọc mũi-miệng phải kết nối đúng điểm với phần trên của nụ cười.
-Miệng là đường cong cười hình chữ U rộng, cân đối hai bên, không bị gãy đoạn hoặc nối vào giữa đáy miệng.
-Có chính xác ba ria mép mỗi bên, tổng cộng sáu đường. Ria không được vượt khỏi silhouette đầu, không bị cắt và có độ dài, góc nghiêng đối xứng hợp lý.
-Cổ áo đỏ dạng capsule/rounded rectangle nằm ở mối nối đầu và thân. Chuông vàng đè lên cổ áo ở chính giữa, có đường ngang và chi tiết đen nhỏ ở tâm.
-Bụng trắng cân đối trong thân xanh. Túi bốn chiều có đường miệng ngang và đáy cong chữ U; không được tạo cảm giác là miếng giấy hình đa giác dán lên bụng.
-Bàn tay trắng tròn nằm ở đầu tay xanh. Hai bàn chân trắng nằm thấp, cân bằng, có khoảng hở hoặc tiếp giáp giữa hai chân theo ảnh mẫu; không để thân che mất phần chân quá nhiều.
+Phân biệt rõ `AVAILABLE`, `OFFLINE_TEMPLATE`, `UNAVAILABLE`.
 
-Các tỷ lệ trên là constraint kiểm tra chứ không phải tọa độ cứng. Khi có ảnh tham chiếu rõ, các landmark và tỷ lệ đo từ ảnh tham chiếu được ưu tiên. Nếu điều chỉnh một thành phần, phải kiểm tra lại các thành phần phụ thuộc để không phá cân đối tổng thể.
+Không giả lập việc truy xuất, phân tích hoặc so sánh reference khi chưa thực sự thực hiện. Khi không có reference đáng tin cậy, sử dụng local template và ghi rõ giới hạn fidelity.
 
-5. XÂY DỰNG HÌNH KHỐI VÀ ĐƯỜNG PATH
-Không dựng mọi thành phần bằng ellipse mặc định. Dùng ellipse cho mắt, mũi, chuông, bàn tay, bàn chân ở nơi phù hợp; dùng path cong có kiểm soát cho silhouette đầu, vùng mặt, thân, tay, miệng, cổ áo và túi bụng khi ảnh mẫu yêu cầu hình dáng không phải ellipse hoàn hảo.
+## 5. CANVAS AND COORDINATE SYSTEM
 
-Tổ chức geometry thành các đối tượng có tên ổn định, ví dụ: head_outer, face_patch, eye_left, eye_right, pupil_left, pupil_right, nose, nose_to_mouth, smile_curve, whisker_left_top/middle/bottom, whisker_right_top/middle/bottom, torso, arm_left, arm_right, hand_left, hand_right, belly, pocket_outline, collar, bell, bell_groove, bell_dot, foot_left, foot_right. Có thể giữ tên schema hiện hữu nếu hệ thống đã phụ thuộc vào chúng, nhưng phải có mapping rõ ràng giữa semantic object và geometry.
+Canvas logic mặc định: `1152 × 648 px`; hỗ trợ kích thước tùy biến.
 
-Với curve, tính control point theo tỷ lệ và dùng cubic Bézier hoặc đường cong được làm mượt. Nếu renderer Paint chỉ nhận chuỗi điểm chuột, hãy lấy mẫu dọc theo Bézier với khoảng cách gần đều, không dùng vài đoạn thẳng dài làm méo đường cong. Giữ tốc độ vẽ hợp lý bằng cách loại các điểm trùng, điểm có độ cong không đáng kể và điểm nằm ngoài vùng cần vẽ. Không giảm số điểm đến mức đường cong bị đa giác hóa.
+Sử dụng normalized coordinates trong khoảng `[0,1]`, quy chiếu theo canvas hoặc character bounding box.
 
-Mỗi đối tượng phải có fill, outline, stroke width, bounding box, layer/depth, anchor/landmark và expected region rõ ràng. Phân biệt đường biên đóng có tô màu với đường nét mở chỉ có stroke. Không để một thao tác fill làm tràn sang vùng khác hoặc tô đè chi tiết đã hoàn thành.
+Không co giãn độc lập theo hai trục. Duy trì aspect ratio gốc.
 
-6. THỨ TỰ LỚP VÀ CHE KHUẤT
-Xây thứ tự lớp từ quan hệ che khuất, không chỉ theo thứ tự liệt kê object. Tạo dependency/occlusion graph và kiểm tra nó không có chu trình bất hợp lệ. Thứ tự đề xuất cho pose chính diện cơ bản:
-Stage A: nền và vùng trống; hai bàn chân; hai cánh tay ở phía sau; thân xanh để che phần gốc tay và cạnh trên bàn chân.
-Stage B: đầu xanh nằm trước thân tại vùng cổ; vùng mặt trắng nằm trong đầu; bụng trắng nằm trên thân; hai bàn tay che phần đầu ngoài của tay; đường túi bụng.
-Stage C: cổ áo đỏ vẽ sau vùng đầu/mặt và thân để nằm trên đường nối cổ; chuông vàng nằm trên cổ áo; các rãnh và chấm đen của chuông.
-Stage D: lòng trắng hai mắt; hai đồng tử; mũi; đường dọc mũi-miệng; đường cong cười; sáu ria mép.
+Target layout:
+- Character height: `84–90%` canvas height.
+- Character horizontally centered.
+- Character bounding-box aspect ratio: khởi tạo `0.72–0.86`, sau đó hiệu chỉnh theo reference.
+- Head width/height: khởi tạo `1.08–1.20`, sau đó hiệu chỉnh theo reference.
+- Chừa đủ không gian cho ria mép, bàn tay, bàn chân và outline.
+- Không clipping bất kỳ thành phần nào.
 
-Có thể thay đổi thứ tự cục bộ nếu ảnh tham chiếu cần khác, nhưng phải bảo đảm: tay bị thân che tại khớp; đầu che đúng phần trên thân; cổ áo không bị mặt hoặc đầu tô phủ sau cùng; chuông không bị đầu tô đè; chi tiết mắt/mũi/miệng/ria luôn hiển thị ở lớp trước vùng mặt. Các nét nội bộ không được vô tình xóa bởi fill của đối tượng kế tiếp.
+Các tỷ lệ là constraint ban đầu, không thay thế dữ liệu đo từ reference. Nếu constraint xung đột với reference đã duyệt, ưu tiên reference và ghi lại ngoại lệ.
 
-7. HỆ THỐNG MÀU VÀ ĐỘ DÀY NÉT
-Giữ phong cách màu phẳng. Dùng palette nhất quán dựa trên ảnh tham chiếu: xanh Doraemon, trắng, đen, đỏ cổ áo/mũi và vàng chuông. Màu xanh #0096E0, trắng #FFFFFF, đen #000000, đỏ #E60012, vàng #FFD400 trong spec hiện tại chỉ là baseline khởi đầu; nếu đo màu từ tham chiếu đáng tin cậy thì điều chỉnh đồng bộ cả spec, preview và kết quả vẽ. Không thêm gradient, glow, bóng đổ hoặc texture nếu người dùng không yêu cầu.
+Coordinate mapping:
 
-Tạo hệ thống line-width theo scale canvas, không gán ngẫu nhiên 1/3/5 px:
-Nét viền silhouette chính là nhóm dày nhất.
-Nét viền vùng mặt, bụng, tay, chân và cổ áo mỏng hơn nhưng vẫn rõ.
-Nét mắt, mũi, miệng, ria và chi tiết chuông đủ đậm để đọc được ở kích thước nhỏ.
-Giữ độ dày tương đối nhất quán giữa hai bên đối xứng. Nhân tỷ lệ stroke theo scale đồng nhất và giới hạn min/max hợp lý cho kích thước canvas thực tế. Tránh dùng 1 px cho đường viền lớn trên canvas 1152 x 648 nếu làm đường viền mất cân đối.
+`screen_x = canvas_screen_left + canvas_x × displayed_canvas_width / canvas_pixel_width`
 
-Ưu tiên đường đen liền mạch, bo góc mượt, đầu nét gọn và không có các chấm dư do chuột dừng hoặc chuyển hướng. Nếu Paint anti-aliasing không đảm bảo, phải tạo preview chất lượng cao trong scene renderer và chọn cách vẽ/copy được codebase hỗ trợ mà không làm mất khả năng thao tác Paint. Không tuyên bố anti-aliasing hoạt động chỉ vì metadata ghi true; phải xác minh trên ảnh screenshot.
+`screen_y = canvas_screen_top + canvas_y × displayed_canvas_height / canvas_pixel_height`
 
-8. SỬA CÁC LỖI CỤ THỂ CỦA TEMPLATE HIỆN TẠI
-Sửa tỷ lệ đầu từ ellipse rộng/cao 1.29 sang khối gần tròn theo constraint và tham chiếu.
-Sửa silhouette tổng thể đang quá rộng so với chiều cao nếu đo theo bbox hiện tại x=308.5..843.5, y=56.5..602.6.
-Sửa layer: arm_left/arm_right phải ở phía sau torso; head_outer phải được phối hợp với torso và face_patch đúng thứ tự; collar phải được vẽ sau vùng mặt; bell phải được vẽ trên collar và không bị lớp head che.
-Sửa mặt: không dùng fill trắng lớn che lên cổ áo. Cạnh dưới face_patch phải dừng hoặc được cổ áo che có chủ đích, để phần giao tiếp đầu-cổ nhìn tự nhiên.
-Sửa smile: đường dọc từ mũi hiện kết thúc tại y=324 trong khi đường cười bắt đầu ở khoảng y=279 và đáy ở gần y=369. Tính lại điểm cuối đường dọc để nối vào vùng giữa phía trên của đường cong cười; không kéo xuống xuyên sâu vào lòng miệng.
-Sửa pocket: giữ được đường miệng ngang, hai cạnh và đáy cong mềm. Ưu tiên outline path không tô đè màu bụng; nếu dùng polygon đóng thì kiểm tra mép trên và hai góc để không tạo hình đa giác thô.
-Sửa collar: chuyển hình chữ nhật góc vuông sang dạng capsule/rounded rectangle phù hợp, có đường viền đều.
-Sửa nét: không để face/belly/whiskers/mouth line có stroke width quá mỏng so với outer head. Tạo width profile dùng chung.
-Sửa thông tin fidelity: thay free_interpretation bằng chế độ reference-based/high-fidelity tương thích schema thực tế. Nếu tên enum có giới hạn, dùng giá trị hợp lệ hiện có và cập nhật schema cùng test, không tự ghi enum không được hỗ trợ.
-Sửa metadata confidence: không gán confidence=1.0 cho nội dung được suy luận mà chưa đo từ ảnh tham chiếu. Ghi rõ nguồn của màu, landmark và tỷ lệ.
+Xác định chính xác canvas content bounds, zoom, cửa sổ Paint, DPI scaling và offset thực tế.
 
-9. HIỆU CHỈNH TỌA ĐỘ SCREEN VÀ MOUSE TRONG PAINT
-Không hardcode screen_rect left=384, top=284, scale=1.0 hoặc giả định zoom luôn 100%. Mỗi phiên phải lấy trạng thái Paint thực tế: canvas pixel width/height, vùng canvas đang hiển thị, zoom, vị trí cửa sổ, Windows DPI scaling và tọa độ client/screen phù hợp. Phân biệt rõ tọa độ ảnh (canvas coordinates), tọa độ vùng client và tọa độ màn hình.
+Mọi tọa độ phải qua một coordinate transform duy nhất có unit test. Không hardcode vị trí cửa sổ, zoom hoặc screen origin.
 
-Dùng một hàm chuyển đổi tọa độ duy nhất có test:
-screen_x = canvas_screen_left + canvas_x * displayed_canvas_width / canvas_pixel_width
-screen_y = canvas_screen_top + canvas_y * displayed_canvas_height / canvas_pixel_height
-Nếu ứng dụng có viền/scrollbar/canvas offset, phải lấy đúng vùng canvas nội dung trước khi tính. Không sử dụng công thức trên với bounding box của toàn cửa sổ thay cho vùng canvas thực. Hiệu chuẩn bằng các điểm xác nhận an toàn trước khi bắt đầu vẽ. Nếu sai lệch hiệu chuẩn vượt ngưỡng, dừng và hiệu chuẩn lại thay vì tiếp tục vẽ lệch.
+## 6. GEOMETRY MODEL
 
-Trước mỗi stage, xác nhận cửa sổ Paint đang foreground, canvas đúng, công cụ/màu/độ dày được chọn và không còn popup/modal dialog chặn chuột. Event cũ có thông báo “a menu or dialog is open in Paint”; cần xử lý popup có nhận diện và kiểm chứng. Không click tọa độ tùy tiện để đóng dialog vì có thể bấm nhầm nút xóa hoặc lưu đè.
+Mỗi scene object phải chứa:
+- `id`
+- `semantic_role`
+- `geometry_type`
+- `normalized_path`
+- `fill_color`
+- `outline_color`
+- `stroke_width`
+- `bounding_box`
+- `landmarks`
+- `z_index`
+- `occlusion_dependencies`
+- `validation_rules`
+- `repair_parameters`
 
-10. PREVIEW TRƯỚC KHI VẼ VÀ VÒNG LẶP SỬA LỖI
-Từ cùng scene geometry, render một preview nội bộ trước khi điều khiển chuột. Preview và thao tác Paint phải dùng chung một nguồn dữ liệu geometry để không có chuyện preview đẹp nhưng Paint vẽ khác tọa độ hoặc khác layer.
+Object registry tối thiểu:
 
-Thực hiện theo pipeline:
-Bước 1: xác định yêu cầu, chế độ Doraemon chuẩn và nguồn tham chiếu.
-Bước 2: dựng scene/landmark, xác nhận constraint tỷ lệ, canvas và khoảng trống.
-Bước 3: render preview, tự kiểm tra silhouette, mắt, mũi, miệng, sáu ria, cổ áo, chuông và túi.
-Bước 4: nếu constraint thất bại thì tự sửa geometry và render lại; không bắt đầu điều khiển Paint với bản plan đã biết là sai.
-Bước 5: chạy preflight Paint và vẽ theo từng stage.
-Bước 6: chụp screenshot sau từng stage. So sánh vùng ảnh thật với preview tương ứng; nếu lệch thì dừng ở stage đó và sửa đúng đối tượng bị lỗi.
-Bước 7: chụp screenshot cuối, chạy kiểm tra trực quan và định lượng; chỉ đánh dấu hoàn tất khi đạt các điều kiện chất lượng.
-Bước 8: lưu template version, screenshot, thông số và các chỉnh sửa có ích để lần vẽ kế tiếp có thể cải thiện.
+`head_outer, face_patch, eye_left, eye_right, pupil_left, pupil_right, nose, nose_to_mouth, smile_curve, whisker_left_top, whisker_left_middle, whisker_left_bottom, whisker_right_top, whisker_right_middle, whisker_right_bottom, torso, arm_left, arm_right, hand_left, hand_right, belly, pocket_outline, collar, bell, bell_groove, bell_dot, foot_left, foot_right`.
 
-Không xóa toàn bộ canvas khi sửa lỗi. Chỉ sửa các object thất bại hoặc phần vùng liên quan, trừ khi kiểm tra chứng minh rằng phải vẽ lại từ đầu và có xác nhận an toàn. Có giới hạn số vòng sửa để tránh lặp vô hạn; ghi rõ lỗi còn lại nếu không thể tự khắc phục.
+Dùng:
+- Ellipse cho mắt, đồng tử, mũi, chuông, bàn tay và bàn chân khi phù hợp.
+- Cubic Bézier cho silhouette đầu, mặt, thân, miệng, cổ áo và túi.
+- Closed path cho vùng cần fill.
+- Open path cho ria, đường miệng túi, chi tiết chuông và đường nét nội bộ.
 
-11. KIỂM ĐỊNH KẾT QUẢ THỰC TẾ, KHÔNG TỰ CHẤM ĐIỂM
-Validation hiện tại chủ yếu kiểm tra canvas có khớp drawing plan do cùng hệ thống sinh ra hay không. Kiểm tra đó chỉ đo độ chính xác thi hành plan, không đo mức độ giống Doraemon. Tách thành các nhóm kết quả riêng:
-execution_conformance: công cụ vẽ đúng geometry đã định hay không.
-character_fidelity: tỷ lệ/landmark/silhouette có giống ảnh tham chiếu hoặc template đã duyệt hay không.
-visual_quality: nét có liền, đủ dày, không có chỗ hở, chồng nét sai, tô tràn, đường cong gãy hoặc thành phần lệch hay không.
-canvas_safety: không bị cắt, không có nét ngoài vùng vẽ, không có dialog chặn hoặc trạng thái Paint chưa ổn định.
+Không biểu diễn mọi thành phần bằng ellipse hoặc polygon thô.
 
-Khi có ảnh tham chiếu, dùng cách phù hợp với thư viện hiện có để so sánh silhouette, landmark đã chuẩn hóa, vùng màu và các chi tiết quan trọng. Tính landmark error hoặc metric tương đương trên hệ tọa độ chuẩn. Không dùng một phép so sánh pixel thô duy nhất vì anti-aliasing và phiên bản hình có thể khác. Khi offline, so với template cục bộ nhưng ghi rõ nguồn kiểm định là OFFLINE_TEMPLATE.
+## 7. LANDMARKS AND PROPORTION CONSTRAINTS
 
-Các kiểm tra tối thiểu:
-Silhouette Doraemon nằm trọn canvas, canh giữa và không bị kéo ngang.
-Đầu đủ tròn và cân đối so với chiều cao toàn nhân vật.
-Mặt trắng nằm trong đầu, không che cổ áo và không để viền xanh lệch bất thường.
-Hai mắt cân, hai đồng tử đúng vị trí, mũi nằm trên trục giữa.
-Đường mũi-miệng kết nối đúng; nụ cười thành một đường cong mượt.
-Có đúng sáu ria, ba mỗi bên; không mất ria, không có ria thừa.
-Cổ áo đỏ, chuông vàng và các chi tiết chuông nhìn rõ, không bị lớp khác che.
-Thân, bụng, túi, tay, bàn tay, bàn chân được phân lớp hợp lý.
-Không có màu tràn, vùng trắng thủng, outline bị đứt hoặc chấm đen lạc.
-Stroke width giữa contour ngoài và nét chi tiết đúng profile.
-Ảnh screenshot cuối thực sự tồn tại và có thể mở được; không chỉ lưu đường dẫn giả định.
+Dùng landmark tương đối và symmetry constraints để điều khiển hình học.
 
-Giữ riêng hai trạng thái: DRAW_EXECUTION_PASS và VISUAL_QUALITY_PASS. Không cho phép execution pass tự động biến thành visual pass. Nếu không có ảnh tham chiếu và chưa có template cục bộ đã được duyệt, kết quả phải ghi rõ giới hạn; không gán điểm fidelity tối đa giả tạo.
+Các nhóm landmark:
+- Character centerline.
+- Head extrema: top, bottom, left, right.
+- Face boundary and face-to-collar junction.
+- Eye centers, eye bounds and pupil centers.
+- Nose center and nose-to-mouth junction.
+- Smile endpoints, control points and lowest point.
+- Six whisker endpoints and root points.
+- Shoulder, elbow, wrist and hand centers.
+- Torso center and bounds.
+- Belly bounds.
+- Pocket mouth endpoints, side points and bottom control point.
+- Collar bounds and bell center.
+- Foot centers and baseline.
 
-12. HỌC TỪ KẾT QUẢ VÀ QUẢN LÝ TEMPLATE
-Sau mỗi lần vẽ, lưu template version, geometry parameters, nguồn tham chiếu, screenshot thực tế, quality metrics và danh sách lỗi đã sửa trong artifact/log hiện có. Các thay đổi tự học phải dựa trên lỗi quan sát được trong screenshot hoặc phản hồi xác nhận của người dùng, không được học từ plan chưa thi hành hoặc kết quả chưa kiểm định.
+Constraint bắt buộc:
+- Mặt đối xứng quanh trục giữa trong giới hạn sai số được cấu hình.
+- Hai mắt có kích thước tương thích và cao độ nhất quán.
+- Mũi nằm trên trục giữa.
+- Chuông nằm trên trục cổ áo và thân.
+- Đường dọc mũi kết thúc đúng tại vùng giữa phía trên của nụ cười.
+- Miệng là đường cong chữ U liên tục, không đứt hoặc xuyên sâu sai vị trí.
+- Chính xác sáu ria, ba mỗi bên.
+- Hai tay nối tự nhiên với thân; thân che phần gốc tay.
+- Bụng nằm trong thân.
+- Túi nằm trong bụng, có miệng ngang và đáy cong.
+- Hai chân và bàn chân cân bằng trên baseline.
 
-Không tự động ghi đè template tốt nhất bằng template mới có điểm thấp hơn. Dùng candidate version và chỉ promote khi vượt các quality gate. Ghi nhận được loại lỗi lặp lại, ví dụ đầu quá rộng, đường cười đứt, cổ áo bị che hoặc stroke quá mỏng, rồi sửa đúng tham số liên quan. Giữ offline fallback hoạt động hoàn toàn bằng template cục bộ đã duyệt.
+Không ép symmetry tuyệt đối cho mọi đường cong nếu reference có bất đối xứng có chủ đích.
 
-13. TEST BẮT BUỘC
-Thêm hoặc cập nhật unit test cho normalized geometry, giữ aspect ratio, giới hạn bounding box trong canvas, profile stroke width, tính toán endpoint/control point của nụ cười, số lượng ria mép, trục đối xứng khuôn mặt, layer ordering/occlusion graph và ánh xạ tọa độ canvas sang screen.
+## 8. PATH GENERATION
 
-Thêm regression test cho lỗi lớp hiện tại: thân che phần gốc tay; cổ áo nằm trên vùng mặt ở mối nối; chuông nằm trên cổ áo và không bị đầu che; đường dọc mũi kết nối đúng vùng trên của nụ cười.
+Dùng cubic Bézier:
 
-Thêm test cho canvas nhiều tỷ lệ/kích thước, zoom khác nhau, DPI khác nhau và trường hợp Paint có popup. Kiểm tra không làm thay đổi hành vi vẽ các tác vụ khác. Chạy đúng bộ test có sẵn trong repository, không chỉ viết test mà không chạy. Nếu test nào không chạy được, ghi rõ lệnh, lỗi và nguyên nhân; không báo PASS giả.
+`B(t) = (1−t)^3 P0 + 3(1−t)^2 t P1 + 3(1−t)t² P2 + t³ P3`
 
-14. ĐIỀU KIỆN CHẤP NHẬN
-Một bản nâng cấp chỉ được coi là xong khi:
-Codebase thực tế đã được sửa; không dừng ở tài liệu hoặc pseudo-code.
-Template Doraemon V2 cân đối hơn rõ rệt so với baseline, đặc biệt về silhouette tổng thể, đầu, cổ áo/chuông, smile và độ dày nét.
-Preview nội bộ và ảnh thật trong Paint dùng cùng một scene/geometry.
-Tất cả kiểm tra layer, tọa độ, giới hạn canvas và regression tests đạt.
-Ảnh screenshot mới nhất được mở hoặc phân tích thực tế, có artifact path hợp lệ.
-Log tách biệt rõ kết quả thực thi và điểm chất lượng hình.
-Không còn popup/modal chặn sau khi hoàn thành; nếu có dialog không xác định được thì dừng an toàn và báo lỗi.
-Không bịa nguồn tham chiếu, metric hoặc kết quả test.
+với `t ∈ [0,1]`.
 
-15. CÁCH THỰC HIỆN VÀ BÁO CÁO
-Bắt đầu bằng việc tìm và đọc code chịu trách nhiệm cho luồng paint.draw. Kiểm tra screenshot baseline nếu còn. Sau đó sửa logic theo thứ tự ưu tiên: geometry và tỷ lệ; layer/occlusion; mouth và facial landmarks; line-weight/palette; hiệu chuẩn canvas; visual validator; regression tests. Không thay đổi những module không liên quan nếu không có bằng chứng cần thiết.
+Path sampling phải:
+- Đảm bảo sai số xấp xỉ đường cong nằm trong tolerance cấu hình.
+- Có khoảng cách điểm thích ứng theo độ cong.
+- Loại điểm trùng và điểm dư.
+- Không tạo đoạn thẳng dài gây đa giác hóa.
+- Duy trì tính liên tục ở các điểm nối.
+- Kiểm tra path closure trước khi fill.
+- Giữ stroke joins và endpoints gọn.
 
-Sau khi triển khai, trả báo cáo ngắn nhưng có bằng chứng gồm: file đã sửa, vấn đề gốc đã khắc phục, test đã chạy và kết quả thật, screenshot/artifact path của Doraemon V2, metric hoặc checklist visual quality, giới hạn còn lại. Nếu còn lỗi, nói chính xác lỗi nào chưa xử lý. Không kết thúc bằng “đã tối ưu” nếu chưa có ảnh kết quả mới để đối chiếu.
+Nếu Paint executor chỉ hỗ trợ mouse events, chuyển path thành chuỗi tọa độ đã hiệu chuẩn; không thay đổi geometry gốc để phù hợp với giới hạn thao tác chuột.
 
-YÊU CẦU CUỐI CÙNG
-Thực hiện nâng cấp ngay trong codebase hiện hữu, ưu tiên chất lượng hình và tính đúng đắn của thao tác Paint. Giữ template chuẩn cho trường hợp “vẽ Doraemon”, tự tìm tham chiếu khi online và dùng template offline khi mất mạng. Kết quả phải được chứng minh bằng screenshot thật và test thực thi, không chỉ bằng JSON spec hoặc trạng thái completion_status.
+## 9. OCCLUSION GRAPH AND DRAW ORDER
+
+Tạo directed acyclic graph cho quan hệ che khuất. Reject scene nếu có chu trình không hợp lệ.
+
+Default layer order:
+
+Stage A — Background and rear components:
+1. Background.
+2. Feet.
+3. Arms.
+4. Torso.
+
+Stage B — Main body surfaces:
+5. Head outer.
+6. Face patch.
+7. Belly.
+8. Hands.
+9. Pocket outline.
+
+Stage C — Neck and accessories:
+10. Collar.
+11. Bell.
+12. Bell groove.
+13. Bell dot.
+
+Stage D — Facial features:
+14. Eyes.
+15. Pupils.
+16. Nose.
+17. Nose-to-mouth line.
+18. Smile curve.
+19. Six whiskers.
+
+Layer order là dependency logic, không chỉ là danh sách cố định. Cho phép điều chỉnh khi reference yêu cầu nhưng phải bảo toàn các quan hệ che khuất.
+
+Regression requirements:
+- Torso che phần gốc tay.
+- Head che phần trên thân tại vùng cổ.
+- Face không phủ lên collar.
+- Collar hiển thị phía trước mối nối đầu-thân.
+- Bell hiển thị hoàn chỉnh phía trước collar.
+- Facial features không bị fill của object sau xóa.
+- Pocket không tô đè toàn bộ vùng belly.
+- Feet và hands không bị che sai.
+
+## 10. COLOR AND STROKE SYSTEM
+
+Initial palette:
+- Blue: `#0096E0`
+- White: `#FFFFFF`
+- Black: `#000000`
+- Red: `#E60012`
+- Yellow: `#FFD400`
+
+Màu từ reference đáng tin cậy được ưu tiên hơn baseline.
+
+Flat-color rendering mặc định. Không thêm gradient, glow, texture hoặc shadow không có trong reference.
+
+Stroke system:
+- `outline_primary`: silhouette ngoài, dày nhất.
+- `outline_secondary`: mặt, thân, bụng, tay, chân và collar.
+- `detail_stroke`: mắt, mũi, miệng, ria và chi tiết chuông.
+
+Tạo stroke profile theo kích thước canvas và reference. Khởi tạo trên canvas rộng khoảng 1152 px:
+- Primary: `4–6 px`.
+- Secondary: `3–4 px`.
+- Detail: `2.5–3.5 px`.
+
+Đây là giá trị khởi tạo, không phải hằng số cho mọi canvas. Scale đồng nhất, giới hạn min/max và kiểm tra độ dày thực tế trên screenshot.
+
+Không sử dụng stroke `1 px` cho silhouette lớn nếu gây mất cân đối. Không ghi nhận anti-aliasing là PASS chỉ từ metadata; phải kiểm tra ảnh render thực tế.
+
+## 11. PAINT PREFLIGHT
+
+Trước khi vẽ:
+1. Xác nhận Paint process và foreground window.
+2. Xác định đúng canvas content bounds.
+3. Đọc canvas dimensions và zoom.
+4. Xác định DPI scaling và screen-coordinate mapping.
+5. Kiểm tra công cụ, màu và stroke width.
+6. Phát hiện popup, modal, menu và dialog.
+7. Chạy calibration bằng các điểm an toàn.
+8. Xác nhận sai số mapping nằm trong tolerance.
+9. Kiểm tra drawing plan nằm trọn canvas.
+10. Chỉ bắt đầu nếu tất cả điều kiện bắt buộc PASS.
+
+Nếu phát hiện dialog không xác định, mất focus, mapping sai hoặc canvas thay đổi, dừng executor. Không click ngẫu nhiên để đóng dialog.
+
+## 12. PREVIEW AND EXECUTION
+
+Preview renderer và Paint executor phải sử dụng cùng scene graph, geometry, palette và layer order.
+
+Execution sequence:
+1. Resolve intent and reference.
+2. Build scene and landmarks.
+3. Solve geometry constraints.
+4. Render preview.
+5. Run geometry and visual preflight.
+6. Capture initial Paint state.
+7. Execute one drawing stage.
+8. Capture screenshot checkpoint.
+9. Compare expected versus observed stage output.
+10. Continue only if checkpoint passes.
+11. Capture final screenshot.
+12. Run visual validation and save artifacts.
+
+Không thực thi plan đã biết là sai. Không xóa toàn canvas để sửa lỗi cục bộ. Chỉ sửa các object thất bại khi có thể xác định chính xác vùng cần sửa.
+
+Mỗi stage có timeout, cancellation, retry limit và recovery state. Khi Paint mất focus hoặc nhận sai input, dừng an toàn và ghi trạng thái phục hồi.
+
+## 13. VISUAL VALIDATION
+
+Tách riêng bốn nhóm:
+
+`execution_conformance`
+`character_fidelity`
+`visual_quality`
+`canvas_safety`
+
+Không dùng việc canvas khớp với drawing plan làm bằng chứng duy nhất về chất lượng nhân vật.
+
+Validation tối thiểu:
+- Silhouette không clipping, không méo tỷ lệ.
+- Head-to-body ratio đạt constraint.
+- Face nằm đúng trong head.
+- Hai mắt, pupils và nose đúng vị trí.
+- Smile liên tục và nối đúng với nose line.
+- Có đúng sáu whiskers.
+- Collar và bell không bị che.
+- Belly và pocket đúng hình học.
+- Hands, arms, feet và torso có occlusion đúng.
+- Không có màu tràn hoặc vùng fill thủng.
+- Không có outline đứt, chấm dư hoặc path bị đa giác hóa.
+- Stroke hierarchy nhất quán.
+- Ảnh screenshot cuối tồn tại và đọc được.
+
+Khi có reference:
+- So sánh landmark sau chuẩn hóa.
+- So sánh silhouette.
+- So sánh vùng màu và vị trí các chi tiết quan trọng.
+- Dùng metric phù hợp với reference và renderer.
+- Ghi rõ metric, tolerance và nguồn reference.
+
+Không dùng pixel-difference đơn lẻ làm tiêu chí chất lượng duy nhất.
+
+Khi offline:
+- So sánh với approved local template.
+- Ghi `validation_reference = OFFLINE_TEMPLATE`.
+- Không tuyên bố reference fidelity đã được xác minh độc lập.
+
+## 14. QUALITY GATES
+
+Mỗi gate trả về `PASS`, `FAIL` hoặc `NOT_EVALUATED`.
+
+`G0_INTENT_VALID`
+`G1_REFERENCE_RESOLVED`
+`G2_GEOMETRY_VALID`
+`G3_OCCLUSION_VALID`
+`G4_PREVIEW_VALID`
+`G5_PAINT_PREFLIGHT_PASS`
+`G6_EXECUTION_CONFORMANT`
+`G7_SCREENSHOT_VALID`
+`G8_VISUAL_QUALITY_PASS`
+`G9_ARTIFACTS_SAVED`
+
+Điều kiện hoàn tất:
+- Các gate bắt buộc đều PASS.
+- `DRAW_EXECUTION_PASS` và `VISUAL_QUALITY_PASS` được lưu riêng.
+- Không suy ra visual quality từ execution status.
+- `NOT_EVALUATED` không được chuyển thành PASS.
+- Không gán confidence tối đa nếu chưa có bằng chứng.
+- Nếu gate thất bại, trả về lỗi cụ thể và object liên quan.
+
+## 15. LOCAL REPAIR
+
+Repair loop:
+1. Xác định lỗi từ screenshot hoặc metric.
+2. Ánh xạ lỗi về semantic object và geometry parameters.
+3. Tạo candidate patch.
+4. Kiểm tra constraint phụ thuộc.
+5. Render preview mới.
+6. Sửa đúng vùng liên quan trong Paint.
+7. Chụp lại screenshot.
+8. Đánh giá lại gate thất bại.
+
+Mỗi vòng sửa phải có:
+- `failure_id`
+- `object_id`
+- `failure_type`
+- `evidence`
+- `parameter_delta`
+- `before_metric`
+- `after_metric`
+- `repair_status`
+
+Giới hạn số vòng sửa bằng cấu hình. Không tự sửa lặp vô hạn. Nếu không đạt quality gate, giữ artifact tốt nhất và báo lỗi còn lại.
+
+## 16. TEMPLATE LEARNING
+
+Sau mỗi lần vẽ, lưu:
+- Template version.
+- Geometry parameters.
+- Reference metadata.
+- Preview và final screenshot.
+- Quality metrics.
+- Lỗi phát hiện.
+- Patch đã áp dụng.
+- Kết quả trước và sau sửa.
+- User feedback nếu có.
+
+Chỉ học từ screenshot thực tế đã kiểm định hoặc phản hồi người dùng. Không học từ drawing plan chưa thi hành.
+
+Dùng candidate/promote/rollback:
+- Candidate chỉ được promote khi vượt quality gates.
+- Không ghi đè template tốt nhất bằng candidate kém hơn.
+- Mọi thay đổi có version và khả năng rollback.
+- Giữ local approved template hoạt động hoàn toàn offline.
+
+## 17. TEST REQUIREMENTS
+
+Unit tests:
+- Normalized coordinates.
+- Aspect-ratio preservation.
+- Bounding-box containment.
+- Landmark symmetry and alignment.
+- Bézier endpoint and tangent continuity.
+- Smile geometry.
+- Six-whisker invariant.
+- Stroke profile scaling.
+- Closed/open path validation.
+- Occlusion graph acyclicity.
+- Canvas-to-screen transform.
+- DPI and zoom mapping.
+- Fill-region safety.
+
+Regression tests:
+- Head tỷ lệ gần tròn.
+- Silhouette không bè ngang.
+- Face không che collar.
+- Bell không bị head che.
+- Arms nằm sau torso.
+- Nose line kết thúc đúng tại smile.
+- Pocket đáy cong và miệng ngang.
+- Paint dialog khiến executor dừng an toàn.
+- Không ảnh hưởng các drawing task khác.
+
+Integration tests:
+- Preview và Paint sử dụng cùng geometry.
+- Screenshot checkpoint được tạo thật.
+- Visual validator phân biệt execution và quality.
+- Artifact path tồn tại và ảnh mở được.
+- Offline mode không cần API hoặc network.
+- Repair loop có giới hạn và rollback.
+
+Chạy test hiện có và test mới. Báo đúng command, số lượng PASS/FAIL/SKIP và nguyên nhân test không chạy được.
+
+## 18. ACCEPTANCE CRITERIA
+
+Chỉ chấp nhận V2 khi:
+1. Đã sửa code thực tế trong repository.
+2. Template Doraemon V2 được version hóa và có rollback.
+3. Tỷ lệ, landmark, path và occlusion đạt constraint.
+4. Preview và Paint dùng cùng scene geometry.
+5. Calibration đúng với canvas, zoom và DPI thực tế.
+6. Regression tests đạt.
+7. Screenshot cuối đã được mở hoặc phân tích thực tế.
+8. Visual quality được đánh giá độc lập với execution.
+9. Artifacts và metadata được lưu tại đường dẫn thực tế.
+10. Không báo PASS giả hoặc bịa metric.
+11. Các tác vụ vẽ khác vẫn hoạt động.
+12. Offline template vẫn dùng được khi mất mạng.
+
+## 19. IMPLEMENTATION ORDER
+
+P0 — Inspect repository, existing Doraemon spec, latest screenshot and baseline metrics.
+
+P1 — Fix geometry, proportions, landmarks and symmetry.
+
+P2 — Fix layer order, occlusion, smile connection, collar and pocket.
+
+P3 — Implement shared scene renderer and drawing plan.
+
+P4 — Fix Paint coordinate calibration, focus detection and popup safety.
+
+P5 — Add screenshot checkpoints and visual validation.
+
+P6 — Implement local repair, template versioning and rollback.
+
+P7 — Run unit, regression and integration tests.
+
+P8 — Draw Doraemon V2 in actual Paint, capture and inspect screenshot, compare with baseline and report verified results.
+
+Do not rewrite unrelated modules without evidence. Reuse existing architecture, libraries and test infrastructure.
+
+## 20. REQUIRED FINAL REPORT
+
+Return a concise evidence-based report:
+
+- Modified files.
+- Root causes fixed.
+- Geometry/template version.
+- Reference source and status.
+- Test commands and actual results.
+- Baseline versus V2 comparison.
+- Visual quality metrics and failed checks.
+- Actual screenshot/artifact paths.
+- Remaining defects and limitations.
+
+Không kết luận “đẹp nhất”, “hoàn thành” hoặc “đã tối ưu” khi chưa có screenshot thực tế và bằng chứng kiểm định.
+
+END OF SPECIFICATION.

@@ -71,6 +71,21 @@ def register(registry: ToolRegistry) -> None:
         return ToolOutcome(data={"windows": [w.to_dict() for w in windows]}, backend=BACKEND,
                            observation="\n".join(_window_line(w) for w in windows) or "No windows.")
 
+    @registry.handler("desktop.list_start_apps")
+    async def list_start_apps(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
+        provider = await ctx.services.desktop()
+        limit = int(args.get("limit", 100))
+        apps, count = await _sta(ctx, provider, provider.list_start_apps, args.get("query"), limit)
+        shown = len(apps)
+        observation = "Start-menu apps: " + (", ".join(apps) if apps else "none found")
+        if count > shown:
+            observation += f" (showing {shown} of {count}; refine with query)"
+        return ToolOutcome(
+            data={"apps": apps, "count": count, "truncated": count > shown},
+            observation=observation,
+            backend=BACKEND,
+        )
+
     @registry.handler("desktop.launch_app")
     async def launch_app(ctx: ToolContext, args: dict[str, Any]) -> ToolOutcome:
         provider = await ctx.services.desktop()

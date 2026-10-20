@@ -402,7 +402,7 @@ async fn main_inner() -> Result<ExitCode> {
             let memory = lga_core::memory::Memory::open(&config.path(&config.memory.persistent_db), redactor)?;
             let (mut seen, mut written) = (0, 0);
             let mut records = store(&config).list()?;
-            records.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+            records.sort_by_key(|record| record.created_at);
             for record in records.iter().filter(|r| r.status == lga_core::state::TaskStatus::Completed && r.completion_basis.as_deref() == Some("verified")) {
                 let ok = |s: &&lga_core::state::StepRecord| s.status == lga_core::state::StepStatus::Succeeded && !s.tool.starts_with("task.");
                 let chain: Vec<String> = record.steps.iter().filter(ok).map(|s| s.tool.clone()).collect();

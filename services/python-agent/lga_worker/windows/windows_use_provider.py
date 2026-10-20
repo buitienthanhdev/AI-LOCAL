@@ -257,6 +257,15 @@ class WindowsUseProvider(DesktopOpsMixin, WindowsControlProvider):
             return None
         return best[0], apps[best[0]]
 
+    def list_start_apps(self, query: str | None, limit: int) -> tuple[list[str], int]:
+        names = sorted(self._start_menu_apps(), key=str.casefold)
+        if query:
+            needle = query.strip().casefold()
+            if needle:
+                names = [name for name in names if needle in name.casefold()]
+        count = len(names)
+        return names[:limit], count
+
     def launch_app(
         self, target: str, arguments: list[str], timeout_s: float, expect_title: str | None = None
     ) -> LaunchResult:
@@ -1075,4 +1084,3 @@ class WindowsUseProvider(DesktopOpsMixin, WindowsControlProvider):
             raise ToolError(ErrorCode.NOT_FOUND, f"working directory {cwd} does not exist")
         return run_powershell(script, executable=self._shell(), cwd=cwd, timeout_s=timeout_s,
                               max_output_bytes=self._settings.shell_max_output_bytes, cancel_event=cancel_event)
-
