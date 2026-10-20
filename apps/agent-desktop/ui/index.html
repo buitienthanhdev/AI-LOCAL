@@ -676,7 +676,13 @@
           <div class="seg2" id="usageDays"><button data-d="1">Hôm nay</button><button data-d="7" class="on">7 ngày</button><button data-d="30">30 ngày</button></div></div>
         <div class="small muted" style="margin-bottom:10px">Các nhà cung cấp không cho đọc số dư hạn mức qua API; số liệu dưới đây do chính Illuminati đo từ các lần gọi (thành công, lỗi, token khi nhà cung cấp trả về). Bấm "Dùng làm mặc định" để ghim bộ não cho các việc mới.</div>
         <div id="brainList" class="cards"></div>
-        <div class="grp"><h3>Khóa Gemini API</h3>
+        <div class="grp"><h3>Khóa OpenRouter (bộ não API)</h3>
+          <div class="small muted" style="margin-bottom:6px">Mở <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a>, tạo khóa rồi dán vào đây. Model hiện dùng: minimax/minimax-m3.1-flash:free. Khóa chỉ lưu trên máy này.</div>
+          <input id="orKey" type="password" autocomplete="off" placeholder="Dán khóa OpenRouter (sk-or-…)" class="wide">
+          <div id="orKeyState" class="small muted" style="margin-top:6px"></div>
+          <div class="actions"><button class="btn primary" id="saveOrKey">Lưu</button><button class="btn danger" id="removeOrKey">Xóa khóa</button></div>
+        </div>
+        <div class="grp"><h3>Khóa Gemini API (không còn dùng cho bộ não API)</h3>
           <div class="small muted" style="margin-bottom:6px">Mở <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a>, tạo khóa rồi dán vào đây. Khóa chỉ lưu trên máy này.</div>
           <input id="apiKey" type="password" autocomplete="off" placeholder="Dán khóa Gemini API…" class="wide">
           <div id="apiKeyState" class="small muted" style="margin-top:6px"></div>
@@ -1331,8 +1337,19 @@ async function loadApiKeyState() {
   try {
     const st = await api("/api/settings");
     $("apiKeyState").textContent = st.gemini_api_key_set ? "✓ Đã có khóa Gemini API (dán khóa mới để thay)." : "Chưa có khóa Gemini API.";
+    $("orKeyState").textContent = st.openrouter_api_key_set ? "✓ Đã có khóa OpenRouter (dán khóa mới để thay)." : "Chưa có khóa OpenRouter.";
   } catch (e) { $("apiKeyState").textContent = e.message; }
 }
+async function saveOrKey(value) {
+  try {
+    await api("/api/settings", { openrouter_api_key: value });
+    toast(value ? "Đã lưu khóa. Đang khởi động lại bộ não AI…" : "Đã xóa khóa.");
+    $("orKey").value = ""; loadApiKeyState();
+    setTimeout(refreshHealth, 12000);
+  } catch (e) { toast(e.message); }
+}
+$("saveOrKey").onclick = () => { const v = $("orKey").value.trim(); if (v) saveOrKey(v); else toast("Hãy dán khóa trước"); };
+$("removeOrKey").onclick = () => saveOrKey("");
 async function saveKey(value) {
   try {
     await api("/api/settings", { gemini_api_key: value });

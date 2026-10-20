@@ -38,6 +38,7 @@ const CONTROL_TIMEOUT: Duration = Duration::from_secs(30);
 const SCREEN_CONTROL_MODE: &str = "pause_on_activity";
 const VALID_MODES: [&str; 3] = ["normal", "trusted", "full_access"];
 const GEMINI_API_KEY_SECRET: &str = "LGA_GEMINI_API_KEY";
+const OPENROUTER_API_KEY_SECRET: &str = "LGA_OPENROUTER_API_KEY";
 pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 pub const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
 
@@ -358,13 +359,22 @@ impl Api {
     }
 
     fn settings(&self) -> Value {
-        json!({"gemini_api_key_set": lga_core::secrets::resolve_secret(&self.config.root, GEMINI_API_KEY_SECRET).is_some()})
+        let set = |name| lga_core::secrets::resolve_secret(&self.config.root, name).is_some();
+        json!({
+            "gemini_api_key_set": set(GEMINI_API_KEY_SECRET),
+            "openrouter_api_key_set": set(OPENROUTER_API_KEY_SECRET),
+        })
     }
 
     /// Save (or with an empty value remove) the Gemini API key in the repository's git-ignored `.env`, then
     /// restart the gateway so it uses the key.
     fn save_settings(&self, body: &Value) -> Result<Reply> {
-        let Some(key) = body.get("gemini_api_key").and_then(Value::as_str) else {
+        let (field, secret) = if body.get("openrouter_api_key").is_some() {
+            ("openrouter_api_key", OPENROUTER_API_KEY_SECRET)
+        } else {
+            ("gemini_api_key", GEMINI_API_KEY_SECRET)
+        };
+        let Some(key) = body.get(field).and_then(Value::as_str) else {
             return Err(anyhow!("nothing to save"));
         };
         let key = key.trim();
@@ -376,7 +386,7 @@ impl Api {
                     .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')))
         {
             return Err(anyhow!(
-                "Khóa API không hợp lệ (dán đúng chuỗi khóa từ Google AI Studio)"
+                "Khóa API không hợp lệ (dán đúng chuỗi khóa của nhà cung cấp)"
             ));
         }
         let env_path = self.config.root.join(".env");
@@ -385,12 +395,12 @@ impl Api {
             .lines()
             .filter(|l| {
                 l.split_once('=')
-                    .is_none_or(|(k, _)| k.trim() != GEMINI_API_KEY_SECRET)
+                    .is_none_or(|(k, _)| k.trim() != secret)
             })
             .map(String::from)
             .collect();
         if !key.is_empty() {
-            lines.push(format!("{GEMINI_API_KEY_SECRET}={key}"));
+            lines.push(format!("{secret}={key}"));
         }
         fs::write(&env_path, lines.join("\n") + "\n")?;
         let agent = self.agent_exe.clone();
@@ -406,7 +416,7 @@ impl Api {
         });
         Ok(json_reply(
             StatusCode::OK,
-            json!({"ok": true, "gemini_api_key_set": !key.is_empty()}),
+            json!({"ok": true, "key_set": !key.is_empty()}),
         ))
     }
 
