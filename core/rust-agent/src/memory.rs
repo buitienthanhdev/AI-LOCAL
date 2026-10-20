@@ -6,6 +6,7 @@
 //! * persistent memory: this database: task history, successful procedures, known application
 //!   state, failure patterns and the recovery that worked, and the notes the user asked the agent to
 //!   remember (preferences, facts about them), which every planner prompt carries.
+//!
 //! Everything is redacted before it is stored; secrets are never written.
 
 use std::collections::HashSet;
@@ -114,16 +115,56 @@ pub struct RecalledMemory {
     pub date: String,
 }
 
+pub struct Episode<'a> {
+    pub task_id: &'a str,
+    pub goal: &'a str,
+    pub status: &'a str,
+    pub summary: Option<&'a str>,
+    pub failure: Option<&'a str>,
+    pub tools: &'a [String],
+    pub steps: usize,
+    pub verified: bool,
+}
+
+struct MemoryEntry<'a> {
+    kind: &'a str,
+    scope: &'a str,
+    text: &'a str,
+    source: &'a str,
+    task_id: Option<&'a str>,
+    confidence: f64,
+    evidence: &'a str,
+}
+
+type MemoryRow = (
+    i64,
+    String,
+    String,
+    String,
+    f64,
+    String,
+    String,
+    i64,
+    String,
+    String,
+);
+
 impl Recall {
     pub fn is_empty(&self) -> bool {
-        self.procedures.is_empty() && self.failures.is_empty() && self.app_state.is_empty() && self.notes.is_empty() && self.memories.is_empty()
+        self.procedures.is_empty()
+            && self.failures.is_empty()
+            && self.app_state.is_empty()
+            && self.notes.is_empty()
+            && self.memories.is_empty()
     }
 
     pub fn render(&self) -> String {
         let mut out = String::new();
         for note in &self.notes {
-            out.push_str(&format!("- The user asked you to remember: {note}
-"));
+            out.push_str(&format!(
+                "- The user asked you to remember: {note}
+"
+            ));
         }
         for m in &self.memories {
             let how = if m.status == "conflict" {
@@ -141,7 +182,10 @@ impl Recall {
             out.push_str(&format!("- {label}: {}\n", m.text));
         }
         for p in &self.procedures {
-            out.push_str(&format!("- Procedure that worked ({}x) for \"{}\": {}\n", p.success_count, p.goal, p.steps));
+            out.push_str(&format!(
+                "- Procedure that worked ({}x) for \"{}\": {}\n",
+                p.success_count, p.goal, p.steps
+            ));
         }
         for f in &self.failures {
             out.push_str(&format!(
@@ -150,7 +194,10 @@ impl Recall {
                 f.error_code,
                 f.count,
                 f.context,
-                f.recovery.as_ref().map(|r| format!("; recovery that worked: {r}")).unwrap_or_default()
+                f.recovery
+                    .as_ref()
+                    .map(|r| format!("; recovery that worked: {r}"))
+                    .unwrap_or_default()
             ));
         }
         for (app, key, value) in &self.app_state {
@@ -165,9 +212,11 @@ fn is_filler_word(word: &str) -> bool {
     let w = brain_core::text::norm(word);
     w.chars().all(|c| c.is_ascii_digit())
         || [
-            "cua", "cho", "toi", "ban", "nay", "mot", "cac", "nhung", "file", "tep", "hay", "trong", "voi", "tren", "duoi", "tuy", "den", "khong", "bang",
-            "vao", "nam", "may", "giup", "lam", "gioi", "cong", "xong", "roi", "sau", "that", "the", "and", "for", "with", "from", "that", "this", "bench", "folder",
-            "thu", "muc", "can", "nao", "gi", "duoc", "tai", "ghi", "doc", "mo", "tao", "xem",
+            "cua", "cho", "toi", "ban", "nay", "mot", "cac", "nhung", "file", "tep", "hay",
+            "trong", "voi", "tren", "duoi", "tuy", "den", "khong", "bang", "vao", "nam", "may",
+            "giup", "lam", "gioi", "cong", "xong", "roi", "sau", "that", "the", "and", "for",
+            "with", "from", "that", "this", "bench", "folder", "thu", "muc", "can", "nao", "gi",
+            "duoc", "tai", "ghi", "doc", "mo", "tao", "xem",
         ]
         .contains(&w.as_str())
 }
@@ -216,11 +265,16 @@ impl Memory {
         for statement in MIGRATIONS {
             let _ = conn.execute(statement, []); // "duplicate column" on a database that already has it
         }
-        Ok(Self { conn: Mutex::new(conn), redactor })
+        Ok(Self {
+            conn: Mutex::new(conn),
+            redactor,
+        })
     }
 
     fn conn(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
-        self.conn.lock().map_err(|_| anyhow!("memory lock poisoned"))
+        self.conn
+            .lock()
+            .map_err(|_| anyhow!("memory lock poisoned"))
     }
 
     fn clean(&self, text: &str) -> String {
@@ -232,7 +286,13 @@ impl Memory {
         Ok(conn.query_row("PRAGMA integrity_check", [], |row| row.get(0))?)
     }
 
-    pub fn record_task(&self, task_id: &str, goal: &str, status: &str, summary: Option<&str>) -> Result<()> {
+    pub fn record_task(
+        &self,
+        task_id: &str,
+        goal: &str,
+        status: &str,
+        summary: Option<&str>,
+    ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn()?.execute(
             "INSERT INTO tasks (task_id, goal, status, summary, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
@@ -253,7 +313,13 @@ impl Memory {
         Ok(())
     }
 
-    pub fn record_failure(&self, tool: &str, error_code: &str, context: &str, recovery: Option<&str>) -> Result<()> {
+    pub fn record_failure(
+        &self,
+        tool: &str,
+        error_code: &str,
+        context: &str,
+        recovery: Option<&str>,
+    ) -> Result<()> {
         self.conn()?.execute(
             "INSERT INTO failures (tool, error_code, context, recovery, count, last_seen) VALUES (?1, ?2, ?3, ?4, 1, ?5)
              ON CONFLICT(tool, error_code, context) DO UPDATE SET count = count + 1, last_seen = excluded.last_seen,
@@ -275,13 +341,20 @@ impl Memory {
     pub fn app_state(&self, app: &str, key: &str) -> Result<Option<String>> {
         Ok(self
             .conn()?
-            .query_row("SELECT value FROM app_state WHERE app = ?1 AND key = ?2", params![app, key], |r| r.get(0))
+            .query_row(
+                "SELECT value FROM app_state WHERE app = ?1 AND key = ?2",
+                params![app, key],
+                |r| r.get(0),
+            )
             .optional()?)
     }
 
     /// Remember a note for future tasks. Returns false when the same note is already stored.
     pub fn remember(&self, note: &str) -> Result<bool> {
-        anyhow::ensure!(!self.looks_sensitive(note.trim()), "this looks like a password, key or token, so it was not stored");
+        anyhow::ensure!(
+            !self.looks_sensitive(note.trim()),
+            "this looks like a password, key or token, so it was not stored"
+        );
         let note = self.clean(note.trim());
         anyhow::ensure!(!note.is_empty(), "the note is empty");
         let added = self.conn()?.execute(
@@ -323,18 +396,42 @@ impl Memory {
     pub fn recall(&self, goal: &str, limit: usize) -> Result<Recall> {
         let wanted: HashSet<String> = keywords(goal).into_iter().collect();
         let conn = self.conn()?;
-        let score = |text: &str| keywords(text).iter().filter(|k| wanted.contains(*k)).count();
+        let score = |text: &str| {
+            keywords(text)
+                .iter()
+                .filter(|k| wanted.contains(*k))
+                .count()
+        };
 
         let mut procedures: Vec<(usize, Procedure)> = conn
-            .prepare("SELECT goal, keywords, steps, success_count FROM procedures WHERE disabled = 0")?
+            .prepare(
+                "SELECT goal, keywords, steps, success_count FROM procedures WHERE disabled = 0",
+            )?
             .query_map([], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
             })?
             .filter_map(|r| r.ok())
-            .map(|(goal, kw, steps, count)| (score(&kw), Procedure { goal, steps, success_count: count }))
+            .map(|(goal, kw, steps, count)| {
+                (
+                    score(&kw),
+                    Procedure {
+                        goal,
+                        steps,
+                        success_count: count,
+                    },
+                )
+            })
             .filter(|(s, _)| *s > 0)
             .collect();
-        procedures.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.success_count.cmp(&a.1.success_count)));
+        procedures.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then(b.1.success_count.cmp(&a.1.success_count))
+        });
 
         let mut failures: Vec<(usize, FailurePattern)> = conn
             .prepare("SELECT tool, error_code, context, recovery, count FROM failures WHERE disabled = 0")?
@@ -378,12 +475,37 @@ impl Memory {
             return true;
         }
         let lower = text.to_lowercase();
-        ["password", "mật khẩu", "mat khau", "passwd", "api key", "api_key", "apikey", "secret", "token", "private key", "otp"]
-            .iter()
-            .any(|k| lower.contains(k) && lower.chars().any(|c| c.is_ascii_digit()) && lower.matches(|c: char| ":=".contains(c)).count() > 0)
+        [
+            "password",
+            "mật khẩu",
+            "mat khau",
+            "passwd",
+            "api key",
+            "api_key",
+            "apikey",
+            "secret",
+            "token",
+            "private key",
+            "otp",
+        ]
+        .iter()
+        .any(|k| {
+            lower.contains(k)
+                && lower.chars().any(|c| c.is_ascii_digit())
+                && lower.matches(|c: char| ":=".contains(c)).count() > 0
+        })
     }
 
-    fn upsert_memory(&self, kind: &str, scope: &str, text: &str, source: &str, task_id: Option<&str>, confidence: f64, evidence: &str) -> Result<i64> {
+    fn upsert_memory(&self, entry: MemoryEntry<'_>) -> Result<i64> {
+        let MemoryEntry {
+            kind,
+            scope,
+            text,
+            source,
+            task_id,
+            confidence,
+            evidence,
+        } = entry;
         let text = self.clean(text.trim());
         anyhow::ensure!(!text.is_empty(), "the memory is empty");
         let now = Utc::now().to_rfc3339();
@@ -396,12 +518,26 @@ impl Memory {
                status = CASE WHEN status = 'disabled' THEN 'disabled' ELSE status END",
             params![kind, scope, text, keywords(&text).join(" "), source, task_id, confidence, evidence, now],
         )?;
-        Ok(conn.query_row("SELECT id FROM memories WHERE kind = ?1 AND text = ?2", params![kind, text], |r| r.get(0))?)
+        Ok(conn.query_row(
+            "SELECT id FROM memories WHERE kind = ?1 AND text = ?2",
+            params![kind, text],
+            |r| r.get(0),
+        )?)
     }
 
     /// One line for a finished task: what was asked, how it ended, with which tools. Built from the task record
     /// (no model call). Unverified outcomes are stored as such; a failure keeps only the reason that was observed.
-    pub fn record_episode(&self, task_id: &str, goal: &str, status: &str, summary: Option<&str>, failure: Option<&str>, tools: &[String], steps: usize, verified: bool) -> Result<()> {
+    pub fn record_episode(&self, episode: Episode<'_>) -> Result<()> {
+        let Episode {
+            task_id,
+            goal,
+            status,
+            summary,
+            failure,
+            tools,
+            steps,
+            verified,
+        } = episode;
         if goal.trim().is_empty() || self.looks_sensitive(goal) {
             return Ok(());
         }
@@ -411,16 +547,34 @@ impl Memory {
             "cancelled" => "bị dừng",
             other => other,
         };
-        let mut text = format!("Yêu cầu: {} → {outcome}", goal.trim().chars().take(160).collect::<String>());
+        let mut text = format!(
+            "Yêu cầu: {} → {outcome}",
+            goal.trim().chars().take(160).collect::<String>()
+        );
         if !tools.is_empty() {
-            text.push_str(&format!("; công cụ: {}", tools.iter().take(6).cloned().collect::<Vec<_>>().join(", ")));
+            text.push_str(&format!(
+                "; công cụ: {}",
+                tools.iter().take(6).cloned().collect::<Vec<_>>().join(", ")
+            ));
         }
         text.push_str(&format!("; {steps} bước"));
-        if let Some(s) = summary.map(str::trim).filter(|s| !s.is_empty() && status == "completed") {
-            text.push_str(&format!("; kết quả: {}", s.replace('\n', " ").chars().take(180).collect::<String>()));
+        if let Some(s) = summary
+            .map(str::trim)
+            .filter(|s| !s.is_empty() && status == "completed")
+        {
+            text.push_str(&format!(
+                "; kết quả: {}",
+                s.replace('\n', " ").chars().take(180).collect::<String>()
+            ));
         }
-        if let Some(f) = failure.map(str::trim).filter(|f| !f.is_empty() && status != "completed") {
-            text.push_str(&format!("; lý do: {}", f.replace('\n', " ").chars().take(180).collect::<String>()));
+        if let Some(f) = failure
+            .map(str::trim)
+            .filter(|f| !f.is_empty() && status != "completed")
+        {
+            text.push_str(&format!(
+                "; lý do: {}",
+                f.replace('\n', " ").chars().take(180).collect::<String>()
+            ));
         }
         let (confidence, evidence) = match (status, verified) {
             ("completed", true) => (0.8, "verified"),
@@ -428,23 +582,69 @@ impl Memory {
             ("failed", _) => (0.6, "verified"), // the failure was observed, its cause may still be a guess
             _ => (0.4, "unverified"),
         };
-        self.upsert_memory("episodic", "project", &text, "auto", Some(task_id), confidence, evidence)?;
+        self.upsert_memory(MemoryEntry {
+            kind: "episodic",
+            scope: "project",
+            text: &text,
+            source: "auto",
+            task_id: Some(task_id),
+            confidence,
+            evidence,
+        })?;
         Ok(())
     }
 
     /// A rating or correction from the user. `rating`: up | down | fix. Stored with the request it concerns so it
     /// only applies to similar requests; the same correction seen again raises `hits`, it is never generalised.
-    pub fn record_feedback(&self, task_id: &str, goal: &str, rating: &str, comment: &str, category: &str) -> Result<i64> {
-        anyhow::ensure!(["up", "down", "fix"].contains(&rating), "rating must be up, down or fix");
+    pub fn record_feedback(
+        &self,
+        task_id: &str,
+        goal: &str,
+        rating: &str,
+        comment: &str,
+        category: &str,
+    ) -> Result<i64> {
+        anyhow::ensure!(
+            ["up", "down", "fix"].contains(&rating),
+            "rating must be up, down or fix"
+        );
         let comment = comment.trim();
-        anyhow::ensure!(rating == "up" || !comment.is_empty(), "say what should be different");
-        anyhow::ensure!(!self.looks_sensitive(comment), "the comment looks like a secret and was not stored");
+        anyhow::ensure!(
+            rating == "up" || !comment.is_empty(),
+            "say what should be different"
+        );
+        anyhow::ensure!(
+            !self.looks_sensitive(comment),
+            "the comment looks like a secret and was not stored"
+        );
         let goal_short: String = goal.trim().chars().take(120).collect();
         let text = match rating {
-            "up" => format!("Với việc \"{goal_short}\": cách làm được chấp nhận{}", if comment.is_empty() { String::new() } else { format!(" ({comment})") }),
-            _ => format!("Với việc \"{goal_short}\": {comment}{}", if category.is_empty() { String::new() } else { format!(" [lỗi: {category}]") }),
+            "up" => format!(
+                "Với việc \"{goal_short}\": cách làm được chấp nhận{}",
+                if comment.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({comment})")
+                }
+            ),
+            _ => format!(
+                "Với việc \"{goal_short}\": {comment}{}",
+                if category.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [lỗi: {category}]")
+                }
+            ),
         };
-        self.upsert_memory("feedback", "project", &format!("{text}"), "feedback", Some(task_id), if rating == "up" { 0.7 } else { 0.9 }, "user")
+        self.upsert_memory(MemoryEntry {
+            kind: "feedback",
+            scope: "project",
+            text: &text,
+            source: "feedback",
+            task_id: Some(task_id),
+            confidence: if rating == "up" { 0.7 } else { 0.9 },
+            evidence: "user",
+        })
     }
 
     /// A lasting fact or rule the user states. Refuses secrets; a near-duplicate with different wording is stored
@@ -452,8 +652,15 @@ impl Memory {
     pub fn add_semantic(&self, text: &str, scope: &str) -> Result<(i64, Option<i64>)> {
         let text = text.trim();
         anyhow::ensure!(!text.is_empty(), "the memory is empty");
-        anyhow::ensure!(!self.looks_sensitive(text), "this looks like a password, key or token, so it was not stored");
-        let scope = if ["global", "project", "session"].contains(&scope) { scope } else { "global" };
+        anyhow::ensure!(
+            !self.looks_sensitive(text),
+            "this looks like a password, key or token, so it was not stored"
+        );
+        let scope = if ["global", "project", "session"].contains(&scope) {
+            scope
+        } else {
+            "global"
+        };
         let wanted: HashSet<String> = keywords(text).into_iter().collect();
         let mut clash = None;
         {
@@ -473,9 +680,20 @@ impl Memory {
                 }
             }
         }
-        let id = self.upsert_memory("semantic", scope, text, "user", None, 0.95, "user")?;
+        let id = self.upsert_memory(MemoryEntry {
+            kind: "semantic",
+            scope,
+            text,
+            source: "user",
+            task_id: None,
+            confidence: 0.95,
+            evidence: "user",
+        })?;
         if let Some(other) = clash {
-            self.conn()?.execute("UPDATE memories SET status = 'conflict' WHERE id IN (?1, ?2)", params![id, other])?;
+            self.conn()?.execute(
+                "UPDATE memories SET status = 'conflict' WHERE id IN (?1, ?2)",
+                params![id, other],
+            )?;
         }
         Ok((id, clash))
     }
@@ -483,7 +701,13 @@ impl Memory {
     /// A verified success with real work behind it. When at least `MIN_SKILL_SUPPORT` such tasks (different tasks, similar
     /// requests) exist, a playbook for that kind of request is produced from them: which tools worked, in which order, and
     /// what the model said it was doing at each step. Deterministic, no model call, no argument values (only their names).
-    pub fn record_skill_candidate(&self, task_id: &str, goal: &str, chain: &[String], hints: &[String]) -> Result<Option<GeneratedSkill>> {
+    pub fn record_skill_candidate(
+        &self,
+        task_id: &str,
+        goal: &str,
+        chain: &[String],
+        hints: &[String],
+    ) -> Result<Option<GeneratedSkill>> {
         if chain.len() < 2 || self.looks_sensitive(goal) {
             return Ok(None);
         }
@@ -491,7 +715,10 @@ impl Memory {
             return Ok(None); // test fixtures are not what the person asks for
         }
         let goal = self.clean(goal.trim());
-        let kws: Vec<String> = keywords(&goal).into_iter().filter(|k| !is_filler_word(k)).collect();
+        let kws: Vec<String> = keywords(&goal)
+            .into_iter()
+            .filter(|k| !is_filler_word(k))
+            .collect();
         if kws.len() < 2 {
             return Ok(None);
         }
@@ -507,8 +734,10 @@ impl Memory {
         let rows: Vec<(String, String, String, String)> = {
             let conn = self.conn()?;
             let mut stmt = conn.prepare("SELECT goal, keywords, chain, hints FROM skill_candidates ORDER BY id DESC LIMIT 400")?;
-            let collected: Vec<(String, String, String, String)> =
-                stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.filter_map(|r| r.ok()).collect();
+            let collected: Vec<(String, String, String, String)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+                .filter_map(|r| r.ok())
+                .collect();
             collected
         };
         let similar: Vec<&(String, String, String, String)> = rows
@@ -527,12 +756,21 @@ impl Memory {
         for (_, _, c, _) in &similar {
             *chains.entry(c.as_str()).or_default() += 1;
         }
-        let Some((best_chain, best_count)) = chains.iter().max_by_key(|(c, n)| (**n, c.len())).map(|(c, n)| (c.to_string(), *n)) else { return Ok(None) };
+        let Some((best_chain, best_count)) = chains
+            .iter()
+            .max_by_key(|(c, n)| (**n, c.len()))
+            .map(|(c, n)| (c.to_string(), *n))
+        else {
+            return Ok(None);
+        };
         // similar requests solved with DIFFERENT tool chains are not a pattern: the same chain must repeat
         if best_count < MIN_SKILL_SUPPORT {
             return Ok(None);
         }
-        let similar: Vec<&(String, String, String, String)> = similar.into_iter().filter(|(_, _, c, _)| *c == best_chain).collect();
+        let similar: Vec<&(String, String, String, String)> = similar
+            .into_iter()
+            .filter(|(_, _, c, _)| *c == best_chain)
+            .collect();
         let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for (_, k, _, _) in &similar {
             for w in k.split_whitespace().collect::<HashSet<_>>() {
@@ -540,9 +778,16 @@ impl Memory {
             }
         }
         let need = (similar.len() * 6).div_ceil(10);
-        let mut triggers: Vec<(String, usize)> = counts.into_iter().filter(|(_, n)| *n >= need.max(2)).collect();
+        let mut triggers: Vec<(String, usize)> = counts
+            .into_iter()
+            .filter(|(_, n)| *n >= need.max(2))
+            .collect();
         triggers.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        let triggers: Vec<String> = triggers.into_iter().take(6).map(|(w, _)| brain_core::text::norm(&w)).collect();
+        let triggers: Vec<String> = triggers
+            .into_iter()
+            .take(6)
+            .map(|(w, _)| brain_core::text::norm(&w))
+            .collect();
         if triggers.len() < 2 {
             return Ok(None);
         }
@@ -570,8 +815,19 @@ impl Memory {
         let body: String = body.chars().take(1500).collect();
         let mut id_source = triggers.clone();
         id_source.sort();
-        let slug: String = id_source.join("-").chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-').take(40).collect();
-        Ok(Some(GeneratedSkill { id: format!("auto-{slug}"), name: format!("Tự học: {}", triggers.join(" ")), triggers, body, support: similar.len() }))
+        let slug: String = id_source
+            .join("-")
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '-')
+            .take(40)
+            .collect();
+        Ok(Some(GeneratedSkill {
+            id: format!("auto-{slug}"),
+            name: format!("Tự học: {}", triggers.join(" ")),
+            triggers,
+            body,
+            support: similar.len(),
+        }))
     }
 
     fn recall_memories(&self, goal: &str) -> Result<Vec<RecalledMemory>> {
@@ -580,26 +836,51 @@ impl Memory {
             return Ok(Vec::new());
         }
         let conn = self.conn()?;
-        let rows: Vec<(i64, String, String, String, f64, String, String, i64, String, String)> = conn
+        let rows: Vec<MemoryRow> = conn
             .prepare("SELECT id, kind, text, keywords, confidence, evidence, status, hits, updated_at, scope FROM memories WHERE status != 'disabled'")?
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?)))?
             .filter_map(|r| r.ok())
             .collect();
         let mut scored: Vec<(f64, RecalledMemory)> = Vec::new();
         for (id, kind, text, kw, confidence, evidence, status, hits, updated, scope) in rows {
-            let overlap = kw.split_whitespace().filter(|k| wanted.contains(*k)).count();
+            let overlap = kw
+                .split_whitespace()
+                .filter(|k| wanted.contains(*k))
+                .count();
             let needed = if kind == "episodic" { 2 } else { 1 };
             if overlap < needed || (scope == "session") {
                 continue;
             }
-            let score = overlap as f64 * confidence * (1.0 + (hits as f64).ln_1p()) * if kind == "feedback" { 1.5 } else { 1.0 };
-            scored.push((score, RecalledMemory { id, kind, text, confidence, evidence, status, hits, date: updated.chars().take(10).collect() }));
+            let score = overlap as f64
+                * confidence
+                * (1.0 + (hits as f64).ln_1p())
+                * if kind == "feedback" { 1.5 } else { 1.0 };
+            scored.push((
+                score,
+                RecalledMemory {
+                    id,
+                    kind,
+                    text,
+                    confidence,
+                    evidence,
+                    status,
+                    hits,
+                    date: updated.chars().take(10).collect(),
+                },
+            ));
         }
         scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
-        let picked: Vec<RecalledMemory> = scored.into_iter().take(MAX_RECALLED_MEMORIES).map(|(_, m)| m).collect();
+        let picked: Vec<RecalledMemory> = scored
+            .into_iter()
+            .take(MAX_RECALLED_MEMORIES)
+            .map(|(_, m)| m)
+            .collect();
         let now = Utc::now().to_rfc3339();
         for m in &picked {
-            let _ = conn.execute("UPDATE memories SET use_count = use_count + 1, last_used = ?2 WHERE id = ?1", params![m.id, now]);
+            let _ = conn.execute(
+                "UPDATE memories SET use_count = use_count + 1, last_used = ?2 WHERE id = ?1",
+                params![m.id, now],
+            );
         }
         Ok(picked)
     }
@@ -611,13 +892,30 @@ impl Memory {
         let conn = self.conn()?;
         let mut out: Vec<serde_json::Value> = Vec::new();
         let mut push = |v: serde_json::Value| {
-            if needle.is_empty() || v["text"].as_str().is_some_and(|t| t.to_lowercase().contains(&needle)) {
+            if needle.is_empty()
+                || v["text"]
+                    .as_str()
+                    .is_some_and(|t| t.to_lowercase().contains(&needle))
+            {
                 out.push(v);
             }
         };
-        for r in conn.prepare("SELECT id, note, created_at, disabled FROM user_notes ORDER BY id DESC")?.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, i64>(3)?)))?.flatten() {
-            push(json!({"id": format!("n:{}", r.0), "kind": "semantic", "scope": "global", "text": r.1, "source": "user", "confidence": 0.95, "evidence": "user",
-                        "status": if r.3 == 1 { "disabled" } else { "active" }, "hits": 1, "use_count": 0, "created_at": r.2, "updated_at": r.2, "editable": true}));
+        for r in conn
+            .prepare("SELECT id, note, created_at, disabled FROM user_notes ORDER BY id DESC")?
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })?
+            .flatten()
+        {
+            push(
+                json!({"id": format!("n:{}", r.0), "kind": "semantic", "scope": "global", "text": r.1, "source": "user", "confidence": 0.95, "evidence": "user",
+                        "status": if r.3 == 1 { "disabled" } else { "active" }, "hits": 1, "use_count": 0, "created_at": r.2, "updated_at": r.2, "editable": true}),
+            );
         }
         for r in conn.prepare("SELECT id, kind, scope, text, source, task_id, confidence, evidence, status, hits, use_count, created_at, updated_at FROM memories ORDER BY updated_at DESC")?
             .query_map([], |r| Ok(json!({"id": format!("m:{}", r.get::<_, i64>(0)?), "kind": r.get::<_, String>(1)?, "scope": r.get::<_, String>(2)?, "text": r.get::<_, String>(3)?,
@@ -650,20 +948,38 @@ impl Memory {
     pub fn update_memory(&self, id: &str, text: Option<&str>, status: Option<&str>) -> Result<()> {
         let (table, n) = Self::split_id(id)?;
         if let Some(status) = status {
-            anyhow::ensure!(["active", "disabled"].contains(&status), "status must be active or disabled");
+            anyhow::ensure!(
+                ["active", "disabled"].contains(&status),
+                "status must be active or disabled"
+            );
             let conn = self.conn()?;
             let off = (status == "disabled") as i64;
             match table {
-                "n" => conn.execute("UPDATE user_notes SET disabled = ?2 WHERE id = ?1", params![n, off])?,
-                "p" => conn.execute("UPDATE procedures SET disabled = ?2 WHERE id = ?1", params![n, off])?,
-                "f" => conn.execute("UPDATE failures SET disabled = ?2 WHERE id = ?1", params![n, off])?,
-                _ => conn.execute("UPDATE memories SET status = ?2, updated_at = ?3 WHERE id = ?1", params![n, status, Utc::now().to_rfc3339()])?,
+                "n" => conn.execute(
+                    "UPDATE user_notes SET disabled = ?2 WHERE id = ?1",
+                    params![n, off],
+                )?,
+                "p" => conn.execute(
+                    "UPDATE procedures SET disabled = ?2 WHERE id = ?1",
+                    params![n, off],
+                )?,
+                "f" => conn.execute(
+                    "UPDATE failures SET disabled = ?2 WHERE id = ?1",
+                    params![n, off],
+                )?,
+                _ => conn.execute(
+                    "UPDATE memories SET status = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![n, status, Utc::now().to_rfc3339()],
+                )?,
             };
         }
         if let Some(text) = text {
             let text = text.trim();
             anyhow::ensure!(!text.is_empty(), "the memory is empty");
-            anyhow::ensure!(!self.looks_sensitive(text), "this looks like a password, key or token, so it was not stored");
+            anyhow::ensure!(
+                !self.looks_sensitive(text),
+                "this looks like a password, key or token, so it was not stored"
+            );
             let text = self.clean(text);
             let conn = self.conn()?;
             match table {
@@ -698,10 +1014,26 @@ mod tests {
     fn recall_ranks_by_keywords_and_redacts() {
         let dir = tempfile::tempdir().unwrap();
         let m = Memory::open(&dir.path().join("m.db"), Redactor::new()).unwrap();
-        m.record_procedure("Open notepad and save hello.txt", "desktop.launch_app notepad -> desktop.type -> desktop.hotkey ctrl+s").unwrap();
-        m.record_procedure("Draw a circle in AutoCAD", "autocad.create_circle").unwrap();
-        m.record_failure("desktop.click", "STALE_ELEMENT", "notepad save dialog", Some("re-inspect")).unwrap();
-        m.set_app_state("autocad", "last_drawing", "C:\\temp\\a.dwg password=hunter22").unwrap();
+        m.record_procedure(
+            "Open notepad and save hello.txt",
+            "desktop.launch_app notepad -> desktop.type -> desktop.hotkey ctrl+s",
+        )
+        .unwrap();
+        m.record_procedure("Draw a circle in AutoCAD", "autocad.create_circle")
+            .unwrap();
+        m.record_failure(
+            "desktop.click",
+            "STALE_ELEMENT",
+            "notepad save dialog",
+            Some("re-inspect"),
+        )
+        .unwrap();
+        m.set_app_state(
+            "autocad",
+            "last_drawing",
+            "C:\\temp\\a.dwg password=hunter22",
+        )
+        .unwrap();
         let recall = m.recall("mở notepad rồi save file", 5).unwrap();
         assert_eq!(recall.procedures.len(), 1);
         assert!(recall.procedures[0].goal.contains("notepad"));
@@ -719,7 +1051,10 @@ mod tests {
         assert!(!m.remember("Tôi thích câu trả lời ngắn gọn").unwrap());
         m.remember("Sếp của tôi tên Hùng").unwrap();
         let recall = m.recall("việc gì đó không liên quan", 5).unwrap();
-        assert_eq!(recall.notes, vec!["Sếp của tôi tên Hùng", "Tôi thích câu trả lời ngắn gọn"]);
+        assert_eq!(
+            recall.notes,
+            vec!["Sếp của tôi tên Hùng", "Tôi thích câu trả lời ngắn gọn"]
+        );
         assert!(recall.render().contains("remember: Sếp của tôi tên Hùng"));
         assert_eq!(m.forget("sếp").unwrap(), vec!["Sếp của tôi tên Hùng"]);
         assert_eq!(m.notes(10).unwrap().len(), 1);
@@ -729,14 +1064,46 @@ mod tests {
     fn episodes_feedback_and_semantic_memories_are_recalled_only_when_relevant() {
         let dir = tempfile::tempdir().unwrap();
         let m = Memory::open(&dir.path().join("m.db"), Redactor::new()).unwrap();
-        m.record_episode("t1", "Lập báo cáo doanh thu tuần từ file Excel", "completed", Some("Đã tạo bao_cao.docx"), None, &["office.excel_read".into(), "office.word_write".into()], 4, true).unwrap();
-        m.record_episode("t2", "Vẽ con mèo trong Paint", "failed", None, Some("Paint không lấy được foreground"), &["paint.draw".into()], 2, false).unwrap();
-        m.record_feedback("t1", "Lập báo cáo doanh thu tuần từ file Excel", "fix", "Phải cộng cả cột phụ phí khi tính tổng", "reasoning").unwrap();
-        let recall = m.recall("làm báo cáo doanh thu tháng 10 bằng Excel", 5).unwrap();
+        m.record_episode(Episode {
+            task_id: "t1",
+            goal: "Lập báo cáo doanh thu tuần từ file Excel",
+            status: "completed",
+            summary: Some("Đã tạo bao_cao.docx"),
+            failure: None,
+            tools: &["office.excel_read".into(), "office.word_write".into()],
+            steps: 4,
+            verified: true,
+        })
+        .unwrap();
+        m.record_episode(Episode {
+            task_id: "t2",
+            goal: "Vẽ con mèo trong Paint",
+            status: "failed",
+            summary: None,
+            failure: Some("Paint không lấy được foreground"),
+            tools: &["paint.draw".into()],
+            steps: 2,
+            verified: false,
+        })
+        .unwrap();
+        m.record_feedback(
+            "t1",
+            "Lập báo cáo doanh thu tuần từ file Excel",
+            "fix",
+            "Phải cộng cả cột phụ phí khi tính tổng",
+            "reasoning",
+        )
+        .unwrap();
+        let recall = m
+            .recall("làm báo cáo doanh thu tháng 10 bằng Excel", 5)
+            .unwrap();
         let text = recall.render();
         assert!(text.contains("phụ phí"), "{text}");
         assert!(text.contains("Earlier similar task"), "{text}");
-        assert!(!text.contains("con mèo"), "an unrelated episode is not injected: {text}");
+        assert!(
+            !text.contains("con mèo"),
+            "an unrelated episode is not injected: {text}"
+        );
         let unrelated = m.recall("dịch câu này sang tiếng Anh", 5).unwrap();
         assert!(unrelated.memories.is_empty());
     }
@@ -745,16 +1112,40 @@ mod tests {
     fn corrections_repeat_without_becoming_general_rules_and_deleted_memories_vanish() {
         let dir = tempfile::tempdir().unwrap();
         let m = Memory::open(&dir.path().join("m.db"), Redactor::new()).unwrap();
-        let id = m.record_feedback("t1", "xuất báo cáo pdf", "fix", "Đặt tên file theo ngày", "tool").unwrap();
-        m.record_feedback("t2", "xuất báo cáo pdf", "fix", "Đặt tên file theo ngày", "tool").unwrap();
+        let id = m
+            .record_feedback(
+                "t1",
+                "xuất báo cáo pdf",
+                "fix",
+                "Đặt tên file theo ngày",
+                "tool",
+            )
+            .unwrap();
+        m.record_feedback(
+            "t2",
+            "xuất báo cáo pdf",
+            "fix",
+            "Đặt tên file theo ngày",
+            "tool",
+        )
+        .unwrap();
         let all = m.list_all("").unwrap();
         let row = all.iter().find(|v| v["id"] == format!("m:{id}")).unwrap();
         assert_eq!(row["hits"], 2);
-        assert!(m.recall("xuất báo cáo pdf", 5).unwrap().render().contains("2x"));
+        assert!(m
+            .recall("xuất báo cáo pdf", 5)
+            .unwrap()
+            .render()
+            .contains("2x"));
         assert!(m.recall("mở notepad", 5).unwrap().memories.is_empty());
-        m.update_memory(&format!("m:{id}"), None, Some("disabled")).unwrap();
-        assert!(m.recall("xuất báo cáo pdf", 5).unwrap().memories.is_empty(), "a disabled memory is not retrieved");
-        m.update_memory(&format!("m:{id}"), None, Some("active")).unwrap();
+        m.update_memory(&format!("m:{id}"), None, Some("disabled"))
+            .unwrap();
+        assert!(
+            m.recall("xuất báo cáo pdf", 5).unwrap().memories.is_empty(),
+            "a disabled memory is not retrieved"
+        );
+        m.update_memory(&format!("m:{id}"), None, Some("active"))
+            .unwrap();
         assert!(m.delete_memory(&format!("m:{id}")).unwrap());
         assert!(m.recall("xuất báo cáo pdf", 5).unwrap().memories.is_empty());
     }
@@ -764,35 +1155,97 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let m = Memory::open(&dir.path().join("m.db"), Redactor::new()).unwrap();
         let chain = vec!["data.aggregate".to_string(), "filesystem.write".to_string()];
-        let hints = vec!["Tổng cột doanh thu bằng data.aggregate".to_string(), "Ghi dòng 'Tổng doanh thu' vào báo cáo".to_string()];
-        assert!(m.record_skill_candidate("t1", "Tính tổng doanh thu các file csv và ghi báo cáo", &chain, &hints).unwrap().is_none(), "one success is not a pattern");
-        assert!(m.record_skill_candidate("t2", "Làm báo cáo cuối: tổng doanh thu trong các file csv của thư mục", &["paint.draw".into(), "desktop.save_as".into()], &[]).unwrap().is_none());
-        let skill = m.record_skill_candidate("t3", "Tính tổng doanh thu mọi file csv rồi ghi vào báo cáo", &chain, &hints).unwrap().expect("two similar successes");
-        assert!(skill.id.starts_with("auto-") && skill.support >= 2, "{skill:?}");
-        assert!(skill.triggers.iter().any(|t| t == "doanh" || t == "csv" || t == "bao"), "{:?}", skill.triggers);
-        assert!(skill.body.contains("data.aggregate -> filesystem.write"), "{}", skill.body);
+        let hints = vec![
+            "Tổng cột doanh thu bằng data.aggregate".to_string(),
+            "Ghi dòng 'Tổng doanh thu' vào báo cáo".to_string(),
+        ];
+        assert!(
+            m.record_skill_candidate(
+                "t1",
+                "Tính tổng doanh thu các file csv và ghi báo cáo",
+                &chain,
+                &hints
+            )
+            .unwrap()
+            .is_none(),
+            "one success is not a pattern"
+        );
+        assert!(m
+            .record_skill_candidate(
+                "t2",
+                "Làm báo cáo cuối: tổng doanh thu trong các file csv của thư mục",
+                &["paint.draw".into(), "desktop.save_as".into()],
+                &[]
+            )
+            .unwrap()
+            .is_none());
+        let skill = m
+            .record_skill_candidate(
+                "t3",
+                "Tính tổng doanh thu mọi file csv rồi ghi vào báo cáo",
+                &chain,
+                &hints,
+            )
+            .unwrap()
+            .expect("two similar successes");
+        assert!(
+            skill.id.starts_with("auto-") && skill.support >= 2,
+            "{skill:?}"
+        );
+        assert!(
+            skill
+                .triggers
+                .iter()
+                .any(|t| t == "doanh" || t == "csv" || t == "bao"),
+            "{:?}",
+            skill.triggers
+        );
+        assert!(
+            skill.body.contains("data.aggregate -> filesystem.write"),
+            "{}",
+            skill.body
+        );
         assert!(!skill.body.contains("C:\\"), "no argument values");
         // a one-step task is not worth a playbook, nor is a goal that mentions a secret
-        assert!(m.record_skill_candidate("t4", "Mở notepad", &["desktop.launch_app".into()], &[]).unwrap().is_none());
-        assert!(m.record_skill_candidate("t5", "mật khẩu: abc123 tính tổng", &chain, &hints).unwrap().is_none());
+        assert!(m
+            .record_skill_candidate("t4", "Mở notepad", &["desktop.launch_app".into()], &[])
+            .unwrap()
+            .is_none());
+        assert!(m
+            .record_skill_candidate("t5", "mật khẩu: abc123 tính tổng", &chain, &hints)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
     fn secrets_are_not_remembered_and_near_duplicates_are_flagged() {
         let dir = tempfile::tempdir().unwrap();
         let m = Memory::open(&dir.path().join("m.db"), Redactor::new()).unwrap();
-        assert!(m.add_semantic("Mật khẩu wifi của tôi là: abc12345", "global").is_err());
+        assert!(m
+            .add_semantic("Mật khẩu wifi của tôi là: abc12345", "global")
+            .is_err());
         assert!(m.add_semantic("api_key = sk-123456", "global").is_err());
-        let (first, clash) = m.add_semantic("Luôn lưu báo cáo tuần vào thư mục D:\\Bao cao", "project").unwrap();
+        let (first, clash) = m
+            .add_semantic("Luôn lưu báo cáo tuần vào thư mục D:\\Bao cao", "project")
+            .unwrap();
         assert!(clash.is_none());
-        let (second, clash) = m.add_semantic("Luôn lưu báo cáo tuần vào thư mục E:\\Tai lieu", "project").unwrap();
+        let (second, clash) = m
+            .add_semantic("Luôn lưu báo cáo tuần vào thư mục E:\\Tai lieu", "project")
+            .unwrap();
         assert_eq!(clash, Some(first));
         let all = m.list_all("báo cáo").unwrap();
-        let statuses: Vec<_> = all.iter().filter(|v| v["id"] == format!("m:{first}") || v["id"] == format!("m:{second}")).map(|v| v["status"].as_str().unwrap().to_string()).collect();
+        let statuses: Vec<_> = all
+            .iter()
+            .filter(|v| v["id"] == format!("m:{first}") || v["id"] == format!("m:{second}"))
+            .map(|v| v["status"].as_str().unwrap().to_string())
+            .collect();
         assert_eq!(statuses, vec!["conflict", "conflict"]);
         let text = m.recall("lưu báo cáo tuần", 5).unwrap().render();
         assert!(text.contains("CONFLICTS"), "{text}");
-        assert!(m.record_feedback("t", "x", "down", "", "").is_err(), "a rejection must say what should change");
+        assert!(
+            m.record_feedback("t", "x", "down", "", "").is_err(),
+            "a rejection must say what should change"
+        );
     }
 
     #[test]
@@ -806,7 +1259,10 @@ mod tests {
         }
         let m = Memory::open(&path, Redactor::new()).unwrap();
         assert_eq!(m.notes(10).unwrap(), vec!["cũ"]);
-        let id = m.list_all("").unwrap()[0]["id"].as_str().unwrap().to_string();
+        let id = m.list_all("").unwrap()[0]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
         m.update_memory(&id, None, Some("disabled")).unwrap();
         assert!(m.notes(10).unwrap().is_empty());
         assert_eq!(m.integrity_check().unwrap(), "ok");

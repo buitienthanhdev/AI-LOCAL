@@ -15,6 +15,7 @@ pub struct CancelToken {
     flag: Arc<AtomicBool>,
     marker: PathBuf,
     pause_marker: PathBuf,
+    activity_pause_marker: PathBuf,
 }
 
 pub fn marker_path(tasks_dir: &Path, task_id: &str) -> PathBuf {
@@ -47,11 +48,27 @@ impl CancelToken {
             flag: Arc::new(AtomicBool::new(false)),
             marker: marker_path(tasks_dir, task_id),
             pause_marker: pause_marker_path(tasks_dir, task_id),
+            activity_pause_marker: tasks_dir.join(format!("{task_id}.activity-pause")),
         }
     }
 
     pub fn is_paused(&self) -> bool {
         self.pause_marker.exists()
+    }
+
+    pub fn is_activity_paused(&self) -> bool {
+        self.activity_pause_marker.exists()
+    }
+
+    pub fn pause_for_activity(&self) -> std::io::Result<()> {
+        std::fs::write(&self.activity_pause_marker, chrono::Utc::now().to_rfc3339())
+    }
+
+    pub fn clear_activity_pause(&self) -> std::io::Result<()> {
+        match std::fs::remove_file(&self.activity_pause_marker) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
     }
 
     pub fn cancel(&self) {
@@ -92,4 +109,24 @@ pub fn request_cancel(tasks_dir: &Path, task_id: &str) -> std::io::Result<PathBu
     let path = marker_path(tasks_dir, task_id);
     std::fs::write(&path, chrono::Utc::now().to_rfc3339())?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn activity_pause_is_distinct_from_a_manual_pause() {
+        let dir = tempfile::tempdir().unwrap();
+        let token = super::CancelToken::new(dir.path(), "activity-test");
+
+        token.pause_for_activity().unwrap();
+        assert!(token.is_activity_paused());
+        assert!(!token.is_paused());
+        token.clear_activity_pause().unwrap();
+        assert!(!token.is_activity_paused());
+
+        super::request_pause(dir.path(), "activity-test").unwrap();
+        assert!(token.is_paused());
+        assert!(!token.is_activity_paused());
+        super::clear_pause(dir.path(), "activity-test").unwrap();
+    }
 }

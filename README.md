@@ -1,6 +1,6 @@
 # Local Gemini Agent
 
-**One agent, one AI.** Company Brain (company RAG knowledge) lives in this repository
+3**One agent, one AI.** Company Brain (company RAG knowledge) lives in this repository
 (`services/company-brain`) and is the agent's knowledge subsystem: a single chat, a single orchestrator, and
 the brain order is Gemini Web -> Gemini API -> Ollama (cloud gemma4:31b, then a local Ollama
 model); Company Brain uses an Ollama model too. No llama.cpp anywhere (owner rule 2026-10-14). Company knowledge is just more tools (`knowledge.*`), searched natively by the Rust

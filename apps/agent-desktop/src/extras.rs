@@ -196,7 +196,7 @@ fn usage_uncached(config: &Config, days: u64) -> Value {
             };
             json!({
                 "name": name, "model": a.model, "ok": a.ok, "failed": a.failed,
-                "avg_ms": if a.ok > 0 { a.ms / a.ok } else { 0 },
+                "avg_ms": a.ms.checked_div(a.ok).unwrap_or(0),
                 "prompt_tokens": a.prompt_tokens, "completion_tokens": a.completion_tokens,
                 "last_error": a.last_error, "last_error_at": a.last_error_at, "last_ok_at": a.last_ok_at,
                 "quota_hit": quota_hit && a.last_error_at >= a.last_ok_at,

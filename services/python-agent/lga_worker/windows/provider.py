@@ -227,6 +227,9 @@ class WindowsControlProvider(ABC):
     @abstractmethod
     def list_windows(self) -> list[WindowInfo]: ...
 
+    @abstractmethod
+    def list_start_apps(self, query: str | None, limit: int) -> tuple[list[str], int]: ...
+
     # --- mouse ---------------------------------------------------------------------------------
     @abstractmethod
     def click(self, x: int, y: int, button: MouseButton) -> None: ...

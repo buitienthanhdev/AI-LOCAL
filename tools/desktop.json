@@ -33,6 +33,55 @@
       "policy_category": "desktop.observe", "side_effects": "none"
     },
     {
+      "name": "desktop.list_start_apps",
+      "description": "Search or list application names registered in the Windows Start menu. This is a read-only discovery list, not a complete inventory of every installed program. Use a returned exact name with desktop.launch_app; refine long lists with query.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Optional case-insensitive substring to find app names."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 100
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "apps",
+          "count",
+          "truncated"
+        ],
+        "properties": {
+          "apps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "count": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "timeout_ms": 35000,
+      "risk_level": "low",
+      "requires_confirmation": false,
+      "idempotent": true,
+      "supports_rollback": false,
+      "verification": "none",
+      "policy_category": "desktop.observe", "side_effects": "none"
+    },
+    {
       "name": "desktop.launch_app",
       "description": "Start an application by executable name/path (e.g. 'notepad.exe', 'calc.exe', 'chrome'), App Paths registration, or Start-menu name (e.g. 'AutoCAD 2023'). Succeeds only when a window of the app appears (Store apps such as Calculator included) and returns that window, which becomes the window you work in. To open a file in an app pass its path in arguments (e.g. notepad.exe with ['C:\\\\temp\\\\a.txt']). Windows 11 Notepad reopens old tabs: a plain launch gives you a fresh Untitled tab; read data.note.",
       "input_schema": {

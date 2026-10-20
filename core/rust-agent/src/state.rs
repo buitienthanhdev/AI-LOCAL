@@ -34,7 +34,10 @@ pub enum TaskStatus {
 
 impl TaskStatus {
     pub fn is_terminal(self) -> bool {
-        matches!(self, TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled)
+        matches!(
+            self,
+            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+        )
     }
 
     pub fn as_str(self) -> &'static str {
@@ -131,9 +134,18 @@ pub struct UserAttachment {
 
 impl UserAttachment {
     pub fn from_path(path: &Path) -> Self {
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string();
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file")
+            .to_string();
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        Self { name, path: path.display().to_string(), kind: attachment_kind(path).to_string(), size }
+        Self {
+            name,
+            path: path.display().to_string(),
+            kind: attachment_kind(path).to_string(),
+            size,
+        }
     }
 
     pub fn is_image(&self) -> bool {
@@ -142,13 +154,23 @@ impl UserAttachment {
 
     /// "report.pdf (PDF, 1.2 MB)".
     pub fn describe(&self) -> String {
-        let ext = Path::new(&self.path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_uppercase();
+        let ext = Path::new(&self.path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_uppercase();
         let size = if self.size >= 1_000_000 {
             format!("{:.1} MB", self.size as f64 / 1_000_000.0)
         } else {
-            format!("{} KB", (self.size + 999) / 1000)
+            format!("{} KB", self.size.div_ceil(1000))
         };
-        format!("{} ({}{}{})", self.path, ext, if ext.is_empty() { "" } else { ", " }, size)
+        format!(
+            "{} ({}{}{})",
+            self.path,
+            ext,
+            if ext.is_empty() { "" } else { ", " },
+            size
+        )
     }
 }
 
@@ -162,20 +184,32 @@ pub fn safe_file_name(name: &str) -> String {
     let base = name.rsplit(['\\', '/']).next().unwrap_or(name).trim();
     let mut out: String = base
         .chars()
-        .map(|c| if c.is_control() || matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '_' } else { c })
+        .map(|c| {
+            if c.is_control() || matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') {
+                '_'
+            } else {
+                c
+            }
+        })
         .collect();
     out = out.trim_matches(|c| c == '.' || c == ' ').to_string();
     if out.is_empty() {
         out = "file".to_string();
     }
     let stem_upper = out.split('.').next().unwrap_or("").to_ascii_uppercase();
-    const RESERVED: [&str; 22] = ["CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-                                  "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"];
+    const RESERVED: [&str; 22] = [
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    ];
     if RESERVED.contains(&stem_upper.as_str()) {
         out = format!("_{out}");
     }
     if out.chars().count() > 120 {
-        let ext = Path::new(&out).extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+        let ext = Path::new(&out)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!(".{e}"))
+            .unwrap_or_default();
         let stem: String = out.chars().take(120 - ext.chars().count()).collect();
         out = format!("{stem}{ext}");
     }
@@ -190,21 +224,35 @@ pub fn attach_file(artifacts_dir: &Path, task_id: &str, source: &Path) -> Result
     }
     let dir = attachments_dir(artifacts_dir, task_id);
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
-    let inside = source.canonicalize().ok().zip(dir.canonicalize().ok()).is_some_and(|(s, d)| s.starts_with(&d));
+    let inside = source
+        .canonicalize()
+        .ok()
+        .zip(dir.canonicalize().ok())
+        .is_some_and(|(s, d)| s.starts_with(&d));
     let target = if inside {
         source.to_path_buf()
     } else {
-        let name = safe_file_name(source.file_name().and_then(|n| n.to_str()).unwrap_or("file"));
+        let name = safe_file_name(
+            source
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("file"),
+        );
         let mut target = dir.join(&name);
         let mut n = 1;
         while target.exists() {
             n += 1;
             let p = Path::new(&name);
             let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("file");
-            let ext = p.extension().and_then(|e| e.to_str()).map(|e| format!(".{e}")).unwrap_or_default();
+            let ext = p
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| format!(".{e}"))
+                .unwrap_or_default();
             target = dir.join(format!("{stem}-{n}{ext}"));
         }
-        std::fs::copy(source, &target).with_context(|| format!("copying {} to {}", source.display(), target.display()))?;
+        std::fs::copy(source, &target)
+            .with_context(|| format!("copying {} to {}", source.display(), target.display()))?;
         target
     };
     Ok(UserAttachment::from_path(&target))
@@ -214,11 +262,16 @@ pub fn attach_file(artifacts_dir: &Path, task_id: &str, source: &Path) -> Result
 pub const PLANNER_IMAGE_EXTENSIONS: [&str; 5] = ["png", "jpg", "jpeg", "webp", "gif"];
 
 pub fn attachment_kind(path: &Path) -> &'static str {
-    let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).unwrap_or_default();
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
     match ext.as_str() {
         e if PLANNER_IMAGE_EXTENSIONS.contains(&e) => "image",
         "bmp" | "tif" | "tiff" | "heic" => "image",
-        "mp3" | "wav" | "m4a" | "ogg" | "flac" | "aac" | "wma" | "opus" | "mp4" | "mov" | "mkv" | "avi" | "webm" | "wmv" | "m4v" => "media",
+        "mp3" | "wav" | "m4a" | "ogg" | "flac" | "aac" | "wma" | "opus" | "mp4" | "mov" | "mkv"
+        | "avi" | "webm" | "wmv" | "m4v" => "media",
         _ => "document",
     }
 }
@@ -298,7 +351,11 @@ impl TaskRecord {
 
     pub fn transition(&mut self, to: TaskStatus) -> Result<()> {
         if !self.status.can_transition(to) {
-            bail!("invalid task transition {} -> {}", self.status.as_str(), to.as_str());
+            bail!(
+                "invalid task transition {} -> {}",
+                self.status.as_str(),
+                to.as_str()
+            );
         }
         self.status = to;
         self.updated_at = Utc::now();
@@ -324,7 +381,11 @@ impl TaskRecord {
 }
 
 pub fn new_task_id() -> String {
-    format!("{}-{}", Utc::now().format("%Y%m%d-%H%M%S"), &uuid::Uuid::new_v4().simple().to_string()[..6])
+    format!(
+        "{}-{}",
+        Utc::now().format("%Y%m%d-%H%M%S"),
+        &uuid::Uuid::new_v4().simple().to_string()[..6]
+    )
 }
 
 pub struct TaskStore {
@@ -360,12 +421,14 @@ impl TaskStore {
         let data = serde_json::to_vec_pretty(record)?;
         {
             use std::io::Write;
-            let mut file = std::fs::File::create(&tmp).with_context(|| format!("creating {}", tmp.display()))?;
+            let mut file = std::fs::File::create(&tmp)
+                .with_context(|| format!("creating {}", tmp.display()))?;
             file.write_all(&data)?;
             file.sync_all()?;
         }
         if path.is_file() && serde_json::from_slice::<TaskRecord>(&std::fs::read(&path)?).is_ok() {
-            std::fs::copy(&path, &backup).with_context(|| format!("backing up {}", path.display()))?;
+            std::fs::copy(&path, &backup)
+                .with_context(|| format!("backing up {}", path.display()))?;
         }
         std::fs::rename(&tmp, &path).with_context(|| format!("replacing {}", path.display()))?;
         Ok(())
@@ -391,17 +454,22 @@ impl TaskStore {
 
     pub fn list(&self) -> Result<Vec<TaskRecord>> {
         let mut records = Vec::new();
-        let Ok(entries) = std::fs::read_dir(&self.dir) else { return Ok(records) };
+        let Ok(entries) = std::fs::read_dir(&self.dir) else {
+            return Ok(records);
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if path.extension().is_some_and(|e| e == "json") {
-                let id = path.file_stem().and_then(|s| s.to_str()).ok_or_else(|| anyhow!("bad file name"))?;
+                let id = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .ok_or_else(|| anyhow!("bad file name"))?;
                 if let Ok((record, _)) = self.load(id) {
                     records.push(record);
                 }
             }
         }
-        records.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        records.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
         Ok(records)
     }
 }
@@ -434,7 +502,10 @@ mod tests {
         r.transition(TaskStatus::Executing).unwrap();
         r.transition(TaskStatus::Observing).unwrap();
         r.transition(TaskStatus::Planning).unwrap();
-        assert!(r.transition(TaskStatus::Completed).is_err(), "completion must go through verification");
+        assert!(
+            r.transition(TaskStatus::Completed).is_err(),
+            "completion must go through verification"
+        );
         r.transition(TaskStatus::Verifying).unwrap();
         r.transition(TaskStatus::Completed).unwrap();
         assert!(r.transition(TaskStatus::Planning).is_err());

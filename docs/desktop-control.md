@@ -18,6 +18,26 @@ that exit at once (`calc.exe`, `notepad.exe`), and of Windows 11 Notepad when it
 tabs; in that case it opens a fresh *Untitled* tab (Ctrl+N) so nothing is typed into another document, and says
 so in `data.note`.
 
+When the requested app is unfamiliar, `desktop.list_start_apps` can search or list the names registered in
+the Windows Start menu. It is read-only and returns a bounded, case-insensitively sorted list; use an exact
+returned name with `desktop.launch_app`. This is not a complete inventory of installed software. Once an
+unfamiliar app is open, its controls can be inspected with the same UI Automation and observation tools; use
+specialist tools when the app has them, and never guess a control or report an unverified result.
+
+## User control while the agent is operating the screen
+
+The desktop chat offers a screen-control mode selector. The supported mode is **pause on user activity**:
+physical keyboard input or mouse clicks/wheel events pause the task before its next hands-on action. The task
+continues only after those inputs have been quiet for at least three seconds. Injected keyboard/mouse events
+from the automation are excluded; moving the pointer without clicking is not treated as input. A small
+always-on-top ribbon remains visible during hands-on work; its
+separate **DỪNG** button cancels the task immediately, while the rest of the ribbon lets clicks pass through.
+If the ribbon or activity monitors cannot start, the screen-control action fails closed.
+
+The isolated screen/input mode and hard input-lock mode are shown as unavailable. The current provider works
+on the user's interactive Windows desktop; it does not provide an isolated virtual desktop, and locking user
+input without an independent escape path would make safe stopping unreliable.
+
 ## Observation after every action
 
 After every hands-on step (launch, focus, click, type, keys, drag, scroll, save, close) the core calls

@@ -71,7 +71,7 @@ def worker() -> Iterator[WorkerProcess]:
 
 def test_ready_lists_tools(worker: WorkerProcess) -> None:
     assert worker.ready["protocol"] == 1
-    for tool in ("desktop.click", "desktop.wait_for_window", "vision.ocr"):
+    for tool in ("desktop.click", "desktop.wait_for_window", "desktop.list_start_apps", "vision.ocr"):
         assert tool in worker.ready["tools"]
     # shell.exec, filesystem.* and system.environment run in the Rust core, not here.
     assert "shell.exec" not in worker.ready["tools"]

@@ -860,7 +860,7 @@ impl Backend {
             Kind::GeminiApi { .. } | Kind::OpenAiServer { .. } => match self.list_models().await {
                 Ok(models) if !models.is_empty() => Ok(ProbeResult {
                     state: BackendState::Ready,
-                    detail: format!("{}, model {}", if matches!(self.kind, Kind::GeminiApi { .. }) { "Gemini API" } else { "local server" }, self.resolve_model("auto")),
+                    detail: format!("{}, model {}", if matches!(self.kind, Kind::GeminiApi { .. }) { "OpenAI-compatible API" } else { "local server" }, self.resolve_model("auto")),
                     capabilities: Capabilities { chat: true, images: true },
                 }),
                 Ok(_) => Ok(ProbeResult { state: BackendState::Unavailable, detail: "Gemini API lists no models".into(), capabilities: Capabilities::NONE }),

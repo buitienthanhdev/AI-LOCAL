@@ -40,12 +40,24 @@ pub fn sha256_file(path: &Path) -> std::io::Result<String> {
 fn os_error(error: &std::io::Error, path: &Path) -> ToolErrorInfo {
     let winerror = json!({"winerror": error.raw_os_error()});
     match error.kind() {
-        IoKind::NotFound => tool_error(ErrorCode::NotFound, format!("not found: {}", path.display())),
-        IoKind::PermissionDenied => {
-            tool_error(ErrorCode::PolicyDenied, format!("the OS denied access to {}: {error}", path.display())).with_details(winerror)
-        }
-        IoKind::IsADirectory | IoKind::NotADirectory => tool_error(ErrorCode::InvalidArgument, format!("{}: {error}", path.display())),
-        _ => tool_error(ErrorCode::ExecutionFailed, format!("{}: {error}", path.display())).with_details(winerror),
+        IoKind::NotFound => tool_error(
+            ErrorCode::NotFound,
+            format!("not found: {}", path.display()),
+        ),
+        IoKind::PermissionDenied => tool_error(
+            ErrorCode::PolicyDenied,
+            format!("the OS denied access to {}: {error}", path.display()),
+        )
+        .with_details(winerror),
+        IoKind::IsADirectory | IoKind::NotADirectory => tool_error(
+            ErrorCode::InvalidArgument,
+            format!("{}: {error}", path.display()),
+        ),
+        _ => tool_error(
+            ErrorCode::ExecutionFailed,
+            format!("{}: {error}", path.display()),
+        )
+        .with_details(winerror),
     }
 }
 
@@ -60,7 +72,10 @@ pub fn absolute_path(raw: &str) -> FsResult<PathBuf> {
     let expanded = expand_vars(&text);
     let path = Path::new(&expanded);
     if !path.is_absolute() {
-        return Err(tool_error(ErrorCode::InvalidArgument, format!("path must be absolute: {raw:?}")));
+        return Err(tool_error(
+            ErrorCode::InvalidArgument,
+            format!("path must be absolute: {raw:?}"),
+        ));
     }
     let mut out = PathBuf::new();
     for component in path.components() {
@@ -85,17 +100,29 @@ fn expand_vars(text: &str) -> String {
         let c = chars[i];
         let (name, consumed) = if c == '%' {
             match chars[i + 1..].iter().position(|&ch| ch == '%') {
-                Some(end) if end > 0 => (chars[i + 1..i + 1 + end].iter().collect::<String>(), end + 2),
+                Some(end) if end > 0 => (
+                    chars[i + 1..i + 1 + end].iter().collect::<String>(),
+                    end + 2,
+                ),
                 _ => (String::new(), 0),
             }
         } else if c == '$' && chars.get(i + 1) == Some(&'{') {
             match chars[i + 2..].iter().position(|&ch| ch == '}') {
-                Some(end) if end > 0 => (chars[i + 2..i + 2 + end].iter().collect::<String>(), end + 3),
+                Some(end) if end > 0 => (
+                    chars[i + 2..i + 2 + end].iter().collect::<String>(),
+                    end + 3,
+                ),
                 _ => (String::new(), 0),
             }
         } else if c == '$' {
-            let len = chars[i + 1..].iter().take_while(|ch| ch.is_ascii_alphanumeric() || **ch == '_').count();
-            (chars[i + 1..i + 1 + len].iter().collect::<String>(), if len > 0 { len + 1 } else { 0 })
+            let len = chars[i + 1..]
+                .iter()
+                .take_while(|ch| ch.is_ascii_alphanumeric() || **ch == '_')
+                .count();
+            (
+                chars[i + 1..i + 1 + len].iter().collect::<String>(),
+                if len > 0 { len + 1 } else { 0 },
+            )
         } else {
             (String::new(), 0)
         };
@@ -125,28 +152,51 @@ fn codec(name: &str) -> FsResult<Codec> {
     Ok(match lowered.as_str() {
         "utf-8" | "utf8" => Codec::Utf8 { bom: false },
         "utf-8-sig" | "utf8-sig" => Codec::Utf8 { bom: true },
-        "utf-16" | "utf16" => Codec::Utf16 { little_endian: true, bom: true },
-        "utf-16-le" | "utf-16le" => Codec::Utf16 { little_endian: true, bom: false },
-        "utf-16-be" | "utf-16be" => Codec::Utf16 { little_endian: false, bom: false },
+        "utf-16" | "utf16" => Codec::Utf16 {
+            little_endian: true,
+            bom: true,
+        },
+        "utf-16-le" | "utf-16le" => Codec::Utf16 {
+            little_endian: true,
+            bom: false,
+        },
+        "utf-16-be" | "utf-16be" => Codec::Utf16 {
+            little_endian: false,
+            bom: false,
+        },
         other => {
-            let label = other.strip_prefix("cp").filter(|n| n.chars().all(|c| c.is_ascii_digit())).map(|n| format!("windows-{n}"));
+            let label = other
+                .strip_prefix("cp")
+                .filter(|n| n.chars().all(|c| c.is_ascii_digit()))
+                .map(|n| format!("windows-{n}"));
             let label = match other {
                 "latin-1" | "latin1" | "iso8859-1" => "iso-8859-1".to_string(),
                 _ => label.unwrap_or_else(|| other.to_string()),
             };
-            Codec::Other(
-                Encoding::for_label(label.as_bytes())
-                    .ok_or_else(|| tool_error(ErrorCode::InvalidArgument, format!("unknown encoding {name:?}")))?,
-            )
+            Codec::Other(Encoding::for_label(label.as_bytes()).ok_or_else(|| {
+                tool_error(
+                    ErrorCode::InvalidArgument,
+                    format!("unknown encoding {name:?}"),
+                )
+            })?)
         }
     })
 }
 
 fn decode_with(data: &[u8], name: &str) -> FsResult<String> {
-    let fail = || tool_error(ErrorCode::InvalidArgument, format!("cannot decode as {name}"));
+    let fail = || {
+        tool_error(
+            ErrorCode::InvalidArgument,
+            format!("cannot decode as {name}"),
+        )
+    };
     match codec(name)? {
         Codec::Utf8 { bom } => {
-            let body = if bom { data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(data) } else { data };
+            let body = if bom {
+                data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(data)
+            } else {
+                data
+            };
             String::from_utf8(body.to_vec()).map_err(|_| fail())
         }
         Codec::Utf16 { little_endian, bom } => {
@@ -158,31 +208,59 @@ fn decode_with(data: &[u8], name: &str) -> FsResult<String> {
             if body.len() % 2 != 0 {
                 return Err(fail());
             }
-            let units: Vec<u16> =
-                body.chunks_exact(2).map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) }).collect();
+            let units: Vec<u16> = body
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|chunk| {
+                    if le {
+                        u16::from_le_bytes(*chunk)
+                    } else {
+                        u16::from_be_bytes(*chunk)
+                    }
+                })
+                .collect();
             String::from_utf16(&units).map_err(|_| fail())
         }
-        Codec::Other(encoding) => encoding.decode_without_bom_handling_and_without_replacement(data).map(|c| c.into_owned()).ok_or_else(fail),
+        Codec::Other(encoding) => encoding
+            .decode_without_bom_handling_and_without_replacement(data)
+            .map(|c| c.into_owned())
+            .ok_or_else(fail),
     }
 }
 
 fn encode_with(text: &str, name: &str) -> FsResult<Vec<u8>> {
     match codec(name)? {
-        Codec::Utf8 { bom } => Ok([if bom { &b"\xef\xbb\xbf"[..] } else { &[] }, text.as_bytes()].concat()),
+        Codec::Utf8 { bom } => Ok([
+            if bom { &b"\xef\xbb\xbf"[..] } else { &[] },
+            text.as_bytes(),
+        ]
+        .concat()),
         Codec::Utf16 { little_endian, bom } => {
             let mut out = Vec::with_capacity(text.len() * 2 + 2);
             if bom {
-                out.extend_from_slice(if little_endian { &[0xff, 0xfe] } else { &[0xfe, 0xff] });
+                out.extend_from_slice(if little_endian {
+                    &[0xff, 0xfe]
+                } else {
+                    &[0xfe, 0xff]
+                });
             }
             for unit in text.encode_utf16() {
-                out.extend_from_slice(&if little_endian { unit.to_le_bytes() } else { unit.to_be_bytes() });
+                out.extend_from_slice(&if little_endian {
+                    unit.to_le_bytes()
+                } else {
+                    unit.to_be_bytes()
+                });
             }
             Ok(out)
         }
         Codec::Other(encoding) => {
             let (bytes, _, unmappable) = encoding.encode(text);
             if unmappable || encoding.output_encoding() != encoding {
-                return Err(tool_error(ErrorCode::InvalidArgument, format!("cannot encode content as {name}")));
+                return Err(tool_error(
+                    ErrorCode::InvalidArgument,
+                    format!("cannot encode content as {name}"),
+                ));
             }
             Ok(bytes.into_owned())
         }
@@ -195,25 +273,44 @@ fn decode(data: &[u8], encoding: Option<&str>) -> FsResult<(String, String)> {
         return Ok((decode_with(data, name)?, name.to_string()));
     }
     if let Some(rest) = data.strip_prefix(b"\xef\xbb\xbf") {
-        return Ok((String::from_utf8_lossy(rest).into_owned(), "utf-8-sig".into()));
+        return Ok((
+            String::from_utf8_lossy(rest).into_owned(),
+            "utf-8-sig".into(),
+        ));
     }
     if data.starts_with(&[0xff, 0xfe]) || data.starts_with(&[0xfe, 0xff]) {
-        return Ok((decode_with(data, "utf-16").unwrap_or_else(|_| String::from_utf8_lossy(data).into_owned()), "utf-16".into()));
+        return Ok((
+            decode_with(data, "utf-16")
+                .unwrap_or_else(|_| String::from_utf8_lossy(data).into_owned()),
+            "utf-16".into(),
+        ));
     }
     if data[..data.len().min(BINARY_SNIFF_BYTES)].contains(&0) {
-        return Ok((base64::engine::general_purpose::STANDARD.encode(data), "base64".into()));
+        return Ok((
+            base64::engine::general_purpose::STANDARD.encode(data),
+            "base64".into(),
+        ));
     }
     match std::str::from_utf8(data) {
         Ok(text) => Ok((text.to_string(), "utf-8".into())),
         // Legacy ANSI text (e.g. files written by old Windows tools); the encoding name tells the caller.
-        Err(_) => Ok((encoding_rs::WINDOWS_1252.decode_without_bom_handling(data).0.into_owned(), "cp1252".into())),
+        Err(_) => Ok((
+            encoding_rs::WINDOWS_1252
+                .decode_without_bom_handling(data)
+                .0
+                .into_owned(),
+            "cp1252".into(),
+        )),
     }
 }
 
 pub fn read_file(path: &Path, max_bytes: usize, encoding: Option<&str>) -> FsResult<Value> {
     let meta = fs::metadata(path).map_err(|e| os_error(&e, path))?;
     if meta.is_dir() {
-        return Err(tool_error(ErrorCode::InvalidArgument, format!("{} is a directory", path.display())));
+        return Err(tool_error(
+            ErrorCode::InvalidArgument,
+            format!("{} is a directory", path.display()),
+        ));
     }
     let mut data = Vec::new();
     fs::File::open(path)
@@ -222,27 +319,57 @@ pub fn read_file(path: &Path, max_bytes: usize, encoding: Option<&str>) -> FsRes
     let truncated = data.len() > max_bytes;
     data.truncate(max_bytes);
     let (content, used) = decode(&data, encoding)?;
-    let sha256 = if truncated { sha256_bytes(&data) } else { sha256_file(path).map_err(|e| os_error(&e, path))? };
-    Ok(json!({"path": path.display().to_string(), "size": meta.len(), "encoding": used, "content": content,
-              "truncated": truncated, "sha256": sha256}))
+    let sha256 = if truncated {
+        sha256_bytes(&data)
+    } else {
+        sha256_file(path).map_err(|e| os_error(&e, path))?
+    };
+    Ok(
+        json!({"path": path.display().to_string(), "size": meta.len(), "encoding": used, "content": content,
+              "truncated": truncated, "sha256": sha256}),
+    )
 }
 
-pub fn write_file(path: &Path, content: &str, encoding: &str, overwrite: bool, create_dirs: bool, max_bytes: usize) -> FsResult<Value> {
+pub fn write_file(
+    path: &Path,
+    content: &str,
+    encoding: &str,
+    overwrite: bool,
+    create_dirs: bool,
+    max_bytes: usize,
+) -> FsResult<Value> {
     let data = encode_with(content, encoding)?;
     if data.len() > max_bytes {
-        return Err(tool_error(ErrorCode::InvalidArgument, format!("content is {} bytes; limit is {max_bytes}", data.len())));
+        return Err(tool_error(
+            ErrorCode::InvalidArgument,
+            format!("content is {} bytes; limit is {max_bytes}", data.len()),
+        ));
     }
     let existed = path.exists();
     if existed && !overwrite {
-        return Err(tool_error(ErrorCode::Conflict, format!("{} already exists and overwrite is false", path.display())));
+        return Err(tool_error(
+            ErrorCode::Conflict,
+            format!("{} already exists and overwrite is false", path.display()),
+        ));
     }
     if existed && path.is_dir() {
-        return Err(tool_error(ErrorCode::InvalidArgument, format!("{} is a directory", path.display())));
+        return Err(tool_error(
+            ErrorCode::InvalidArgument,
+            format!("{} is a directory", path.display()),
+        ));
     }
-    let parent = path.parent().ok_or_else(|| tool_error(ErrorCode::InvalidArgument, format!("{} has no parent directory", path.display())))?;
+    let parent = path.parent().ok_or_else(|| {
+        tool_error(
+            ErrorCode::InvalidArgument,
+            format!("{} has no parent directory", path.display()),
+        )
+    })?;
     if !parent.exists() {
         if !create_dirs {
-            return Err(tool_error(ErrorCode::NotFound, format!("parent directory {} does not exist", parent.display())));
+            return Err(tool_error(
+                ErrorCode::NotFound,
+                format!("parent directory {} does not exist", parent.display()),
+            ));
         }
         fs::create_dir_all(parent).map_err(|e| os_error(&e, parent))?;
     }
@@ -261,22 +388,39 @@ pub fn write_file(path: &Path, content: &str, encoding: &str, overwrite: bool, c
     let size = fs::metadata(path).map_err(|e| os_error(&e, path))?.len();
     let digest = sha256_file(path).map_err(|e| os_error(&e, path))?;
     if size as usize != data.len() || digest != sha256_bytes(&data) {
-        return Err(tool_error(ErrorCode::VerificationFailed, format!("read-back of {} does not match what was written", path.display()))
-            .with_details(json!({"expected_size": data.len(), "actual_size": size})));
+        return Err(tool_error(
+            ErrorCode::VerificationFailed,
+            format!(
+                "read-back of {} does not match what was written",
+                path.display()
+            ),
+        )
+        .with_details(json!({"expected_size": data.len(), "actual_size": size})));
     }
-    Ok(json!({"path": path.display().to_string(), "size": size, "sha256": digest, "created": !existed}))
+    Ok(
+        json!({"path": path.display().to_string(), "size": size, "sha256": digest, "created": !existed}),
+    )
 }
 
 fn mtime(meta: &fs::Metadata) -> f64 {
-    meta.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0.0, |d| d.as_secs_f64())
+    meta.modified()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or(0.0, |d| d.as_secs_f64())
 }
 
 pub fn list_directory(path: &Path, max_entries: usize) -> FsResult<(Vec<Value>, bool)> {
     if !path.is_dir() {
         return Err(if path.exists() {
-            tool_error(ErrorCode::InvalidArgument, format!("{} is not a directory", path.display()))
+            tool_error(
+                ErrorCode::InvalidArgument,
+                format!("{} is not a directory", path.display()),
+            )
         } else {
-            tool_error(ErrorCode::NotFound, format!("not found: {}", path.display()))
+            tool_error(
+                ErrorCode::NotFound,
+                format!("not found: {}", path.display()),
+            )
         });
     }
     let mut items: Vec<(bool, String, fs::Metadata)> = fs::read_dir(path)
@@ -285,10 +429,14 @@ pub fn list_directory(path: &Path, max_entries: usize) -> FsResult<(Vec<Value>, 
         // An entry that vanished or is inaccessible is skipped; listing the rest is still correct.
         .filter_map(|entry| {
             let meta = fs::symlink_metadata(entry.path()).ok()?;
-            Some((meta.is_dir(), entry.file_name().to_string_lossy().into_owned(), meta))
+            Some((
+                meta.is_dir(),
+                entry.file_name().to_string_lossy().into_owned(),
+                meta,
+            ))
         })
         .collect();
-    items.sort_by(|a, b| (!a.0, a.1.to_lowercase()).cmp(&(!b.0, b.1.to_lowercase())));
+    items.sort_by_key(|item| (!item.0, item.1.to_lowercase()));
     let truncated = items.len() > max_entries;
     let entries = items
         .into_iter()
@@ -305,8 +453,14 @@ pub fn stat(path: &Path, hash_max_bytes: u64) -> FsResult<Value> {
     let Ok(meta) = fs::metadata(path) else {
         return Ok(json!({"path": display, "exists": false}));
     };
-    let digest = if meta.is_file() && meta.len() <= hash_max_bytes { sha256_file(path).ok() } else { None };
-    Ok(json!({"path": display, "exists": true, "is_dir": meta.is_dir(), "size": meta.len(), "modified_unix": mtime(&meta), "sha256": digest}))
+    let digest = if meta.is_file() && meta.len() <= hash_max_bytes {
+        sha256_file(path).ok()
+    } else {
+        None
+    };
+    Ok(
+        json!({"path": display, "exists": true, "is_dir": meta.is_dir(), "size": meta.len(), "modified_unix": mtime(&meta), "sha256": digest}),
+    )
 }
 
 #[cfg(test)]
@@ -322,9 +476,22 @@ mod tests {
         let read = read_file(&target, 1024, None).unwrap();
         assert_eq!(read["content"], "xin chào\nhello");
         assert_eq!(read["sha256"], written["sha256"]);
-        assert_eq!(write_file(&target, "again", "utf-8", false, false, 1024).unwrap_err().code, ErrorCode::Conflict);
-        assert_eq!(write_file(&target, "again", "utf-8", true, false, 1024).unwrap()["created"], false);
-        assert_eq!(read_file(&dir.path().join("missing.txt"), 10, None).unwrap_err().code, ErrorCode::NotFound);
+        assert_eq!(
+            write_file(&target, "again", "utf-8", false, false, 1024)
+                .unwrap_err()
+                .code,
+            ErrorCode::Conflict
+        );
+        assert_eq!(
+            write_file(&target, "again", "utf-8", true, false, 1024).unwrap()["created"],
+            false
+        );
+        assert_eq!(
+            read_file(&dir.path().join("missing.txt"), 10, None)
+                .unwrap_err()
+                .code,
+            ErrorCode::NotFound
+        );
     }
 
     #[test]
@@ -336,13 +503,24 @@ mod tests {
         let ansi = dir.path().join("ansi.txt");
         fs::write(&ansi, b"caf\xe9").unwrap();
         let read = read_file(&ansi, 100, None).unwrap();
-        assert_eq!((read["encoding"].as_str(), read["content"].as_str()), (Some("cp1252"), Some("café")));
+        assert_eq!(
+            (read["encoding"].as_str(), read["content"].as_str()),
+            (Some("cp1252"), Some("café"))
+        );
         let utf16 = dir.path().join("u16.txt");
         write_file(&utf16, "Việt", "utf-16", false, true, 100).unwrap();
         assert_eq!(read_file(&utf16, 100, None).unwrap()["content"], "Việt");
         write_file(&ansi, "Cà phê", "cp1258", true, true, 100).unwrap();
-        assert_eq!(read_file(&ansi, 100, Some("cp1258")).unwrap()["content"], "Cà phê");
-        assert_eq!(write_file(&ansi, "日本", "cp1252", true, true, 100).unwrap_err().code, ErrorCode::InvalidArgument);
+        assert_eq!(
+            read_file(&ansi, 100, Some("cp1258")).unwrap()["content"],
+            "Cà phê"
+        );
+        assert_eq!(
+            write_file(&ansi, "日本", "cp1252", true, true, 100)
+                .unwrap_err()
+                .code,
+            ErrorCode::InvalidArgument
+        );
     }
 
     #[test]
@@ -353,7 +531,10 @@ mod tests {
         }
         fs::create_dir(dir.path().join("zdir")).unwrap();
         let (entries, truncated) = list_directory(dir.path(), 3).unwrap();
-        let names: Vec<&str> = entries.iter().map(|e| e["name"].as_str().unwrap()).collect();
+        let names: Vec<&str> = entries
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
         assert_eq!(names, vec!["zdir", "A.txt", "b.txt"]);
         assert!(truncated);
         assert_eq!(entries[0]["size"], Value::Null);
@@ -362,9 +543,21 @@ mod tests {
     #[test]
     fn paths_are_expanded_and_must_be_absolute() {
         std::env::set_var("LGA_TEST_DIR", r"C:\data");
-        assert_eq!(absolute_path(r"%LGA_TEST_DIR%\x\..\y.txt").unwrap(), PathBuf::from(r"C:\data\y.txt"));
-        assert_eq!(absolute_path("$LGA_TEST_DIR/z").unwrap(), PathBuf::from(r"C:\data\z"));
-        assert_eq!(absolute_path("relative.txt").unwrap_err().code, ErrorCode::InvalidArgument);
-        assert_eq!(stat(Path::new(r"C:\definitely\missing\file"), 10).unwrap()["exists"], false);
+        assert_eq!(
+            absolute_path(r"%LGA_TEST_DIR%\x\..\y.txt").unwrap(),
+            PathBuf::from(r"C:\data\y.txt")
+        );
+        assert_eq!(
+            absolute_path("$LGA_TEST_DIR/z").unwrap(),
+            PathBuf::from(r"C:\data\z")
+        );
+        assert_eq!(
+            absolute_path("relative.txt").unwrap_err().code,
+            ErrorCode::InvalidArgument
+        );
+        assert_eq!(
+            stat(Path::new(r"C:\definitely\missing\file"), 10).unwrap()["exists"],
+            false
+        );
     }
 }
