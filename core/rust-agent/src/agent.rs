@@ -558,7 +558,7 @@ const BASE_GROUPS: [&str; 7] = [
     "task",
 ];
 /// Words (lower case, without accents) that load a group from the start.
-const GROUP_TRIGGERS: [(&str, &[&str]); 9] = [
+const GROUP_TRIGGERS: [(&str, &[&str]); 10] = [
     (
         "office",
         &[
@@ -674,6 +674,26 @@ const GROUP_TRIGGERS: [(&str, &[&str]); 9] = [
             "ngam",
             "ve 3d",
             "thiet ke 3d",
+        ],
+    ),
+    (
+        "code",
+        &[
+            "viet code",
+            "lap trinh",
+            "sua code",
+            "sua loi code",
+            "debug",
+            "refactor",
+            "viet script",
+            "viet chuong trinh",
+            "viet ung dung",
+            "unit test",
+            "python script",
+            "javascript",
+            "typescript",
+            "source code",
+            "ma nguon",
         ],
     ),
     (

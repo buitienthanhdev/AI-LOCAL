@@ -1,0 +1,43 @@
+{
+  "category": "code",
+  "description": "Programming through the opencode coding agent (OpenRouter model): write, edit, run and debug code in a folder.",
+  "tools": [
+    {
+      "name": "code.run",
+      "description": "Give a programming task to the opencode coding agent. It works inside `workdir` (an existing folder): reads the project, edits or creates files, runs commands and tests, and fixes errors by itself, then returns its final answer and the list of files it changed. Use it for writing or changing real code (scripts, apps, bug fixes, refactors, tests); do not use it for desktop, Office or CAD work. Describe the goal, the language and how to check it works. Review the changed files afterwards (filesystem.read / shell.exec) before telling the user it is done.",
+      "input_schema": {
+        "type": "object",
+        "required": ["task", "workdir"],
+        "additionalProperties": false,
+        "properties": {
+          "task": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 8000,
+            "description": "What to build or change, with the language, file names and how to verify it."
+          },
+          "workdir": {
+            "type": "string",
+            "minLength": 3,
+            "description": "Absolute path of an existing folder to work in."
+          },
+          "model": {
+            "type": "string",
+            "description": "Optional opencode model as provider/model (default openrouter/minimax/minimax-m3.1-flash:free)."
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "timeout_ms": 900000,
+      "risk_level": "high",
+      "requires_confirmation": false,
+      "idempotent": false,
+      "supports_rollback": false,
+      "verification": "self",
+      "side_effects": "possible",
+      "policy_category": "code.run"
+    }
+  ]
+}
