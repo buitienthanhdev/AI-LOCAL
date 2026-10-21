@@ -2,7 +2,7 @@
 
 3**One agent, one AI.** Company Brain (company RAG knowledge) lives in this repository
 (`services/company-brain`) and is the agent's knowledge subsystem: a single chat, a single orchestrator, and
-the brain order is Gemini Web -> Gemini API -> Ollama (cloud gemma4:31b, then a local Ollama
+the brain order is OpenRouter API (nvidia/nemotron-3-ultra-550b-a55b:free, see docs/code-agent.md) -> Ollama (cloud gemma4:31b, then a local Ollama
 model); Company Brain uses an Ollama model too. No llama.cpp anywhere (owner rule 2026-10-14). Company knowledge is just more tools (`knowledge.*`), searched natively by the Rust
 core (hybrid Qdrant vectors + SQLite FTS5, reciprocal rank fusion) with no Python process at query time; the
 index is refreshed on demand with `Cập nhật tri thức.bat`. Start/stop everything with
@@ -12,7 +12,7 @@ A local Windows agent that takes a task in natural language and completes it on 
 
 > look → understand → plan → act → check → fix → continue → complete
 
-- **Planner:** Gemini, used through the Gemini Web UI. No Gemini API key is needed.
+- **Planner:** an OpenRouter model (free Nemotron 3 Ultra by default; key `LGA_OPENROUTER_API_KEY` in the git-ignored `.env`, settable in the chat window), falling back to Ollama cloud, then a local Ollama model. Gemini Web/API are still supported but off the default route.
 - **Everything that touches the machine runs locally:** windows, mouse and keyboard, UI Automation, PowerShell, files, Chrome, screen OCR/vision and AutoCAD.
 - **Local tool router:** every action goes through it. The router validates each call against a schema, applies an execution policy, runs the call, and verifies the result.
 - **Completion:** a task counts as complete only when the core has re-run read-only checks that prove the goal, and an independent verifier has accepted the evidence.

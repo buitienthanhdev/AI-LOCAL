@@ -2,7 +2,7 @@
 
 ## Brain
 `brain_order = ["api", "cloud", "local"]` (configs/config.toml). The `api` slot is OpenRouter
-(`https://openrouter.ai/api/v1`, model `minimax/minimax-m3.1-flash:free`, key `LGA_OPENROUTER_API_KEY` in the
+(`https://openrouter.ai/api/v1`, model `nvidia/nemotron-3-ultra-550b-a55b:free`, key `LGA_OPENROUTER_API_KEY` in the
 git-ignored `.env`; set it in the chat window: Settings -> models). A rate-limited or failing free model falls
 through to Ollama cloud, then the local Ollama model. No llama.cpp.
 
@@ -17,3 +17,6 @@ Policy: `code.run` is `confirm` in normal/trusted mode and `allow` in full_acces
 (auto-approves its own permissions) and is NOT bound by the filesystem deny patterns of this agent, so keep it
 confirm unless you trust the task.
 Live check 2026-10-20: `agent run` -> code.run wrote and ran fib.py (exit 0).
+
+Upgrade 2026-10-21: code.run now defaults to Nemotron 3 Ultra, caps one run at 600 s, and appends an instruction to run
+and fix its own tests (the first live test left a wrong-expectation test failing). Tests: tests/test_code_tool_unit.py.

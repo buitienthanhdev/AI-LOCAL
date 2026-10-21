@@ -23,7 +23,7 @@
           },
           "model": {
             "type": "string",
-            "description": "Optional opencode model as provider/model (default openrouter/minimax/minimax-m3.1-flash:free)."
+            "description": "Optional opencode model as provider/model (default ollama/gemma4:12b; also ollama/<model> or openrouter/<model>)."
           }
         }
       },
