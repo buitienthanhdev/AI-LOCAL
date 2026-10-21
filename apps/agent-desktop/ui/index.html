@@ -677,7 +677,7 @@
         <div class="small muted" style="margin-bottom:10px">Các nhà cung cấp không cho đọc số dư hạn mức qua API; số liệu dưới đây do chính Illuminati đo từ các lần gọi (thành công, lỗi, token khi nhà cung cấp trả về). Bấm "Dùng làm mặc định" để ghim bộ não cho các việc mới.</div>
         <div id="brainList" class="cards"></div>
         <div class="grp"><h3>Khóa OpenRouter (bộ não API)</h3>
-          <div class="small muted" style="margin-bottom:6px">Mở <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a>, tạo khóa rồi dán vào đây. Model hiện dùng: minimax/minimax-m3.1-flash:free. Khóa chỉ lưu trên máy này.</div>
+          <div class="small muted" style="margin-bottom:6px">Mở <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a>, tạo khóa rồi dán vào đây. Model hiện dùng: nvidia/nemotron-3-ultra-550b-a55b:free. Khóa chỉ lưu trên máy này.</div>
           <input id="orKey" type="password" autocomplete="off" placeholder="Dán khóa OpenRouter (sk-or-…)" class="wide">
           <div id="orKeyState" class="small muted" style="margin-top:6px"></div>
           <div class="actions"><button class="btn primary" id="saveOrKey">Lưu</button><button class="btn danger" id="removeOrKey">Xóa khóa</button></div>
@@ -1324,7 +1324,7 @@ async function refreshHealth() {
 }
 
 /* ---------- Brain settings ---------- */
-const BRAIN_NAMES = { api: "OpenRouter · MiniMax M3.1 Flash (free)", primary: "Gemini Web", fallback: "Gemini Web (dự phòng)", cloud: "Ollama cloud (gemma4:31b)", local: "AI trên máy (Ollama)" };
+const BRAIN_NAMES = { api: "Gemini API", primary: "Gemini Web", fallback: "Gemini Web (dự phòng)", cloud: "Ollama cloud (gemma4:31b)", local: "AI trên máy (Ollama)" };
 let lastBrains = [];
 function brainState(b) {
   if (b.state === "ready" && b.breaker !== "open") return ["ok", "sẵn sàng"];
@@ -2343,7 +2343,7 @@ for (const b of $("usageDays").children) b.onclick = () => {
   loadUsage();
 };
 const QUOTA_NOTE = {
-  api: ["OpenRouter (model :free): hạn mức lượt gọi theo phút và theo ngày của tài khoản. Xem phần đã dùng tại", "https://openrouter.ai/activity", "openrouter.ai/activity"],
+  api: ["Gemini API: gói miễn phí có hạn mức theo phút và theo ngày, đặt lại mỗi ngày (giờ Thái Bình Dương). Xem hạn mức chính xác của dự án tại", "https://aistudio.google.com/usage", "AI Studio → Usage"],
   cloud: ["Ollama cloud: hạn mức theo tháng của gói tài khoản. Xem phần đã dùng tại", "https://ollama.com/settings", "ollama.com/settings"],
   local: ["Chạy trên máy bạn: không giới hạn lượt, dùng GPU/RAM của máy (chậm hơn khi GPU đang bận)."],
   webapi: ["Gemini web (thử nghiệm): không có hạn mức công bố, Google có thể tạm chặn khi dùng nhiều."],
