@@ -81,3 +81,14 @@ The observation is written to the audit log (`kind: "observe"`), so a failed GUI
 * Live, on this desktop (opens its own windows, never touches the user's): `logs/dev/probe_saveas2.py`,
   `logs/dev/probe_close3.py` (dev helpers, git-ignored) and the GUI category of the benchmark:
   `python tests/bench/run_bench.py --profile product --categories gui --repeat 2`.
+
+## Input backend: Cua Driver (2026-10-22)
+
+Mouse, keyboard and full-desktop screenshots go through [Cua Driver](https://github.com/trycua/cua)
+(`cua-driver` wheel, in-process Rust runtime; upstream clone in `references/cua`), see
+`services/python-agent/lga_worker/windows/cua_backend.py`. Actions use desktop scope + foreground
+delivery, so the provider's checks (`_check_point`, `_require_working_front`, focus checks while
+typing) are unchanged. When Cua refuses an action (typically `foreground_unavailable`: Windows would not
+activate the target window) or fails, that one action falls back to the old uiautomation SendInput path;
+screenshots fall back to `ImageGrab` on multi-monitor desktops. `LGA_INPUT_BACKEND=uia` turns Cua off.
+UIA tree reading, element read/write and window management still use Windows-Use/uiautomation.

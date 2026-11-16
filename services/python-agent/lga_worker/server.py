@@ -84,6 +84,16 @@ class Worker:
         try:
             if remaining_s <= 0:
                 raise ToolError(ErrorCode.TIMEOUT, "deadline already passed when the request arrived")
+            router = self._services.vm_router()
+            if router is not None and router.handles(request.tool):
+                # GUI tools run in the agent VM, never on the user's desktop (docs/vm-isolation.md).
+                reply = await router.forward(request, remaining_s)
+                self.send({"type": "response", "request_id": request.request_id, "status": reply.get("status"),
+                           "result": reply.get("result"), "error": reply.get("error"),
+                           "metrics": reply.get("metrics") or {}})
+                logger.info("%s %s in the agent VM", request.tool, reply.get("status"),
+                            extra={"task_id": request.task_id, "tool": request.tool})
+                return
             spec, outcome = await self._registry.invoke(ctx, request.tool, request.args)
             backend = outcome.backend
             response = {

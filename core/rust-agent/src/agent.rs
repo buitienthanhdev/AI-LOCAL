@@ -230,6 +230,9 @@ pub struct TaskRunner<'a> {
     /// Shown while the agent operates applications with the mouse and keyboard.
     banner: Option<crate::banner::Banner>,
     screen_activity_pause: bool,
+    /// `[vm] enabled`: GUI tools run in the agent VM's own desktop, so the user's mouse/keyboard are never
+    /// taken: no stop ribbon on the host and no pause when the user works (docs/vm-isolation.md).
+    gui_in_vm: bool,
     /// Per-call approvals of the always-confirm classes (single use, short lived).
     approvals: crate::guard::Ledger,
 }
@@ -522,6 +525,12 @@ fn clarification_options(args: &Value) -> (Vec<String>, bool) {
 /// Steps that operate applications directly: the person should keep their hands off meanwhile.
 /// After this many lookups (knowledge.*, web.*, document.read) in a row the planner is told to stop and answer.
 const LOOKUP_STREAK_WARN: usize = 6;
+#[derive(serde::Deserialize)]
+struct VmFlag {
+    #[serde(default)]
+    enabled: bool,
+}
+
 const HANDS_ON_TOOLS: [&str; 16] = [
     "desktop.click",
     "desktop.type",
@@ -869,6 +878,8 @@ impl<'a> TaskRunner<'a> {
             Err(std::env::VarError::NotPresent) => true,
             Err(error) => return Err(anyhow!("could not read screen-control mode: {error}")),
         };
+        let gui_in_vm = rt.config.section::<VmFlag>("vm").map(|v| v.enabled).unwrap_or(false);
+        let screen_activity_pause = screen_activity_pause && !gui_in_vm;
         let cancel = CancelToken::new(rt.store.dir(), &record.task_id);
         cancel.clear_activity_pause()?;
         let audit = AuditLog::open(
@@ -903,6 +914,7 @@ impl<'a> TaskRunner<'a> {
             )),
             banner: None,
             screen_activity_pause,
+            gui_in_vm,
             approvals: crate::guard::Ledger::new(Duration::from_secs(120)),
         })
     }
@@ -1085,6 +1097,11 @@ impl<'a> TaskRunner<'a> {
         let budget = Duration::from_millis(self.rt.config.agent.task_timeout_ms);
         let result = self.run_loop(record, started, budget).await;
         if let Err(err) = &result {
+            if !record.status.is_terminal() && self.cancel.is_cancelled() {
+                // Stop pressed while the planner was thinking: that is a cancellation, not a failure.
+                self.finish(record, TaskStatus::Cancelled, "cancelled by the user")?;
+                return Ok(());
+            }
             if !record.status.is_terminal() {
                 let reason = format!("internal error: {err:#}");
                 self.finish(record, TaskStatus::Failed, &reason)?;
@@ -1868,7 +1885,7 @@ impl<'a> TaskRunner<'a> {
             }
         }
         self.set_status(record, TaskStatus::Executing, None)?;
-        if self.banner.is_none() && HANDS_ON_TOOLS.contains(&spec.name.as_str()) {
+        if self.banner.is_none() && !self.gui_in_vm && HANDS_ON_TOOLS.contains(&spec.name.as_str()) {
             self.banner = Some(
                 crate::banner::Banner::show(
                     BANNER_TEXT,

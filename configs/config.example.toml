@@ -209,6 +209,8 @@ max_write_bytes = 16_777_216
 max_list_entries = 2_000
 
 [browser]
+# Agent overlay on our Chrome while a task drives it: blue frame, progress, Stop button, input shield (UX only).
+overlay = true
 # Empty: detect from the registry (App Paths) and standard install locations.
 chrome_path = ""
 # Dedicated automation profile. The user's default Chrome profile is never used automatically.
@@ -298,3 +300,16 @@ log_level = "info"
 # Values of these environment variables are always redacted from logs, in addition to the built-in
 # patterns (cookies, bearer tokens, API keys).
 redact_env = ["LGA_GATEWAY_API_KEY", "LGA_PRIMARY_API_KEY", "LGA_PRIMARY_ADMIN_TOKEN", "LGA_GEMINI_API_KEY"]
+
+[vm]
+# Agent VM (docs/vm-isolation.md). When enabled, the tools below run in the VM's own desktop, never on yours.
+enabled = false
+# hv:<vm-guid>:<service-guid> (Hyper-V socket, no network needed) or tcp:<host>:<port> (tests).
+endpoint = "hv:00000000-0000-0000-0000-000000000000:6c6761c1-0a4e-4f5d-9a1b-7a6d0c2b9e01"
+# Pre-shared channel key (hex, 32 bytes). Created by scripts/vm/new-agent-vm.ps1; copied into the guest.
+key_file = "runtime/vm/agent-vm.key"
+tools = ["desktop.*", "paint.*", "art.paint", "art.draw", "vision.*"]
+# The only host folder whose files may be handed to the VM (copied, audited). Nothing else on the host is visible.
+host_workspace = "runtime/vm-workspace"
+# Inside the guest: where shared files land.
+guest_workspace = "runtime/vm-workspace"

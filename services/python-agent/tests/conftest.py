@@ -10,7 +10,7 @@ from lga_common.config import Config, load_config
 
 # Real-desktop tests open windows and move the mouse. They run only when explicitly requested:
 #   uv run pytest -m desktop --run-desktop
-SLOW_MARKERS = ("desktop", "autocad", "browser", "gateway")
+SLOW_MARKERS = ("desktop", "autocad", "browser", "gateway", "vm")
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

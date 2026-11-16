@@ -7,6 +7,8 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     # Windows execution layer. Pinned to the audited commit; see [[tool.uv.dependency-metadata]].
     "windows-use",
+    # Mouse, keyboard and screen capture (lga_worker/windows/cua_backend.py); LGA_INPUT_BACKEND=uia reverts.
+    "cua-driver>=0.37",
     # Dependencies actually imported by windows_use.agent.desktop / agent.tree / uia / vdm.
     "pywin32>=308",
     "comtypes>=1.4.8",
@@ -83,6 +85,7 @@ markers = [
     "autocad: requires AutoCAD to be installed",
     "browser: launches Chrome",
     "gateway: requires a running Gemini gateway",
+    "vm: requires the provisioned agent VM ([vm] enabled in configs/config.toml)",
 ]
 
 [tool.ruff]

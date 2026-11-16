@@ -36,7 +36,7 @@ from lga_common.config import Config
 from lga_worker.errors import ErrorCode, ToolError
 from lga_worker.shell.powershell import resolve_powershell, run_powershell
 from lga_worker.sta import StaExecutor
-from lga_worker.windows import _upstream, win32
+from lga_worker.windows import _upstream, cua_backend, win32
 from lga_worker.windows.elements import CacheEntry, ElementCache, matches_query
 from lga_worker.windows.ops import DesktopOpsMixin
 from lga_worker.windows.provider import (
@@ -198,6 +198,8 @@ class WindowsUseProvider(DesktopOpsMixin, WindowsControlProvider):
         self._powershell: str | None = None
         # The window the agent is working in: brought back to the front before any input aimed at it.
         self._target_hwnd: int | None = None
+        # Cua Driver input/capture backend; None = uiautomation SendInput (LGA_INPUT_BACKEND=uia).
+        self._cua: cua_backend.CuaBackend | None = None
 
     # ------------------------------------------------------------------------------------------
     # lifecycle (runs on the STA thread)
@@ -210,6 +212,27 @@ class WindowsUseProvider(DesktopOpsMixin, WindowsControlProvider):
         self._uia = uia
         self._desktop = desktop_service.Desktop(use_vision=False, use_annotation=False, use_accessibility=True)
         uia.GetRootControl()  # creates the UIA client on this STA thread
+        if cua_backend.enabled():
+            try:
+                self._cua = cua_backend.CuaBackend()
+            except Exception:  # missing wheel / driver refused: keep the UIA input path working
+                logger.exception("cua-driver unavailable; using uiautomation input")
+                self._cua = None
+
+    def _cua_do(self, action: str, *args: Any, **kwargs: Any) -> bool:
+        """Run one input action through Cua Driver; False means use the uiautomation path instead.
+
+        Cua refuses foreground input when Windows will not activate the exact target window (focus-steal
+        lock); the old SendInput path still works then, so a refusal falls back rather than failing.
+        """
+        if self._cua is None:
+            return False
+        try:
+            getattr(self._cua, action)(*args, **kwargs)
+            return True
+        except ToolError as exc:
+            logger.warning("cua-driver %s refused, using uiautomation: %s", action, exc)
+            return False
 
     @property
     def uia(self) -> Any:
@@ -628,7 +651,9 @@ class WindowsUseProvider(DesktopOpsMixin, WindowsControlProvider):
 
     def click(self, x: int, y: int, button: MouseButton) -> None:
         self._check_point(x, y)
-        if button == "left":
+        if self._cua_do("click", x, y, button):
+            time.sleep(self._settings.settle_s)
+        elif button == "left":
             self.uia.Click(x, y, waitTime=self._settings.settle_s)
         elif button == "right":
             self.uia.RightClick(x, y, waitTime=self._settings.settle_s)
@@ -637,6 +662,9 @@ class WindowsUseProvider(DesktopOpsMixin, WindowsControlProvider):
 
     def double_click(self, x: int, y: int) -> None:
         self._check_point(x, y)
+        if self._cua_do("click", x, y, "left", count=2):
+            time.sleep(self._settings.settle_s)
+            return
         self.uia.DoubleClick(x, y, waitTime=self._settings.settle_s)
 
     def right_click(self, x: int, y: int) -> None:
@@ -644,7 +672,11 @@ class WindowsUseProvider(DesktopOpsMixin, WindowsControlProvider):
 
     def move_mouse(self, x: int, y: int) -> tuple[int, int]:
         self._check_point(x, y)
-        self.uia.SetCursorPos(x, y)
+        if self._cua_do("move", x, y):
+            time.sleep(self._settings.settle_s)
+            if self._cua.cursor_position() == (x, y):
+                return (x, y)
+        self.uia.SetCursorPos(x, y)  # cua moved only its overlay cursor, or is off
         time.sleep(self._settings.settle_s)
         return self.uia.GetCursorPos()
 
@@ -652,13 +684,18 @@ class WindowsUseProvider(DesktopOpsMixin, WindowsControlProvider):
         self._check_point(*start)
         self._check_point(*end)
         self.bring_point_window_to_front(*start)
-        self.uia.DragTo(start[0], start[1], end[0], end[1], duration=duration_s)
+        if not self._cua_do("drag", start, end, duration_s):
+            self.uia.DragTo(start[0], start[1], end[0], end[1], duration=duration_s)
         time.sleep(self._settings.settle_s)
 
     def scroll(self, x: int | None, y: int | None, direction: ScrollDirection, amount: int) -> None:
         if x is not None and y is not None:
             self._check_point(x, y)
             self.uia.SetCursorPos(x, y)
+        px, py = (x, y) if x is not None and y is not None else self.uia.GetCursorPos()
+        if self._cua_do("scroll", px, py, direction, amount):
+            time.sleep(self._settings.settle_s)
+            return
         wheel = {"up": self.uia.WheelUp, "down": self.uia.WheelDown,
                  "left": self.uia.WheelLeft, "right": self.uia.WheelRight}[direction]
         wheel(amount, interval=WHEEL_INTERVAL_S, waitTime=self._settings.settle_s)
@@ -708,7 +745,9 @@ class WindowsUseProvider(DesktopOpsMixin, WindowsControlProvider):
         else:
             for start in range(0, len(text), TYPE_CHUNK_CHARS):
                 self._require_foreground(target, typed=start)
-                self.uia.TypeText(text[start:start + TYPE_CHUNK_CHARS], interval=self._settings.type_interval_s)
+                chunk = text[start:start + TYPE_CHUNK_CHARS]
+                if not self._cua_do("type_text", chunk, delay_ms=int(self._settings.type_interval_s * 1000)):
+                    self.uia.TypeText(chunk, interval=self._settings.type_interval_s)
         time.sleep(self._settings.settle_s)
 
     def _require_foreground(self, target: int, typed: int) -> None:
@@ -749,12 +788,18 @@ class WindowsUseProvider(DesktopOpsMixin, WindowsControlProvider):
         vk = self._virtual_key(key)
         self._require_working_front(f"key {key!r}")
         for _ in range(repeat):
-            self.uia.SendKey(vk, waitTime=KEY_EVENT_GAP_S)
+            if self._cua_do("press_key", key.strip().lower()):
+                time.sleep(KEY_EVENT_GAP_S)
+            else:
+                self.uia.SendKey(vk, waitTime=KEY_EVENT_GAP_S)
         time.sleep(self._settings.settle_s)
 
     def hotkey(self, keys: list[str]) -> None:
         codes = [self._virtual_key(k) for k in keys]
         self._require_working_front("+".join(keys))
+        if self._cua_do("hotkey", [k.strip().lower() for k in keys]):
+            time.sleep(self._settings.settle_s)
+            return
         pressed: list[int] = []
         try:
             for vk in codes:
@@ -776,8 +821,17 @@ class WindowsUseProvider(DesktopOpsMixin, WindowsControlProvider):
             if win32gui.IsIconic(window_hwnd):
                 raise ToolError(ErrorCode.INVALID_ARGUMENT, "cannot capture a minimized window; focus it first")
             region = win32.window_rect(window_hwnd)
-        image = ImageGrab.grab(all_screens=True)
-        v_left, v_top, _, _ = self.uia.GetVirtualScreenRect()
+        v_left, v_top, v_width, v_height = self.uia.GetVirtualScreenRect()
+        image = None
+        if self._cua is not None:
+            try:
+                image = self._cua.screenshot()
+            except ToolError as exc:
+                logger.warning("cua-driver screenshot failed, using ImageGrab: %s", exc)
+            if image is not None and image.size != (v_width, v_height):
+                image = None  # cua captured one display only; multi-monitor needs the whole virtual screen
+        if image is None:
+            image = ImageGrab.grab(all_screens=True)
         origin_x, origin_y = v_left, v_top
         if region is not None:
             box = (max(region.left - v_left, 0), max(region.top - v_top, 0),

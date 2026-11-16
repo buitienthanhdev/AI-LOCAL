@@ -62,7 +62,9 @@ async def _provider(ctx: ToolContext) -> BrowserProvider:
     async def create() -> BrowserProvider:
         return BrowserProvider(BrowserSettings.from_config(ctx.config))
 
-    return await ctx.services.get_or_create(SERVICE_NAME, create)
+    provider: BrowserProvider = await ctx.services.get_or_create(SERVICE_NAME, create)
+    provider.task_id = ctx.task_id  # the overlay shows this task's progress and Stop cancels it
+    return provider
 
 
 def _with_notice(att: Attached, text: str) -> str:

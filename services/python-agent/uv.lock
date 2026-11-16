@@ -421,6 +421,18 @@ wheels = [
 ]
 
 [[package]]
+name = "cua-driver"
+version = "0.37.0"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e7/f5/86c25585d760d01c339a09d01c286cdd685b1f1d24104591123ec261eb64/cua_driver-0.37.0-py3-none-macosx_13_0_universal2.whl", hash = "sha256:6e6b95b86a7695fb8363bdba66fce6bb55d66bf09ca2329b670392e84b291910", size = 50576165, upload-time = "2026-10-20T03:44:51.327Z" },
+    { url = "https://files.pythonhosted.org/packages/dc/33/81e2531353837f80358fbf56629a74f50d7f097af4b5f67626b0afce2d61/cua_driver-0.37.0-py3-none-manylinux_2_31_aarch64.whl", hash = "sha256:1a0103fd7fa5e9d51ee3ce26d502eb4187702282b3f4bcf1e9c09c6ce9f9d558", size = 35067554, upload-time = "2026-10-20T03:44:55.06Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/b0/97f6d8828b8a6ca3649ad7150ddbc23addde56f014c9bd407876484ecb8d/cua_driver-0.37.0-py3-none-manylinux_2_31_x86_64.whl", hash = "sha256:e530ee36226d99516ef7ec696ba31d516e487ae5e5effdd5e2610c56af3eee19", size = 34913523, upload-time = "2026-10-20T03:44:58.72Z" },
+    { url = "https://files.pythonhosted.org/packages/67/57/069f4d0550bd7f758c280f98c621a6b0e6778bd1d3e71dc2072fdfc09d26/cua_driver-0.37.0-py3-none-win_amd64.whl", hash = "sha256:7057528bdbf2a28c37a85b2a67d12689ec12c46fb1ffc60fa40155a7cca63a2f", size = 32793155, upload-time = "2026-10-20T03:45:02.559Z" },
+    { url = "https://files.pythonhosted.org/packages/07/78/f52bdbe4aa7db328db87fa462e5836d316455b7d2bb56c9a65464f38893f/cua_driver-0.37.0-py3-none-win_arm64.whl", hash = "sha256:123934810004cca5bdebcb8c0a6759f6902531b6bbc65d40c9e29a6f1d92af79", size = 30577937, upload-time = "2026-10-20T03:45:05.91Z" },
+]
+
+[[package]]
 name = "cython"
 version = "3.3.0"
 source = { registry = "https://pypi.org/simple" }
@@ -888,6 +900,7 @@ source = { editable = "." }
 dependencies = [
     { name = "browser-use" },
     { name = "comtypes" },
+    { name = "cua-driver" },
     { name = "fuzzywuzzy" },
     { name = "jsonschema" },
     { name = "lga-common" },
@@ -927,6 +940,7 @@ dev = [
 requires-dist = [
     { name = "browser-use", specifier = "==0.13.11" },
     { name = "comtypes", specifier = ">=1.4.8" },
+    { name = "cua-driver", specifier = ">=0.37" },
     { name = "easyocr", marker = "extra == 'ocr'", specifier = ">=1.7.2" },
     { name = "fuzzywuzzy", specifier = ">=0.18" },
     { name = "jsonschema", specifier = ">=4.23" },

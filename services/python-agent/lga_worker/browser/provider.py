@@ -47,6 +47,7 @@ from lga_common.config import Config
 from lga_worker import inventory
 from lga_worker.browser import chrome as chrome_mod
 from lga_worker.browser.chrome import ChromeProcess
+from lga_worker.browser.overlay import OverlayController
 from lga_worker.browser.state import describe_fingerprint, element_fingerprint
 from lga_worker.errors import ErrorCode, ToolError
 
@@ -133,6 +134,8 @@ class BrowserSettings:
     keep_open: bool
     log_dir: Path
     state_dir: Path
+    tasks_dir: Path
+    overlay: bool
 
     @classmethod
     def from_config(cls, config: Config) -> BrowserSettings:
@@ -154,6 +157,8 @@ class BrowserSettings:
             keep_open=bool(config.get("browser.keep_open")),
             log_dir=(config.path("paths.logs_dir") / "browser").resolve(),
             state_dir=config.path("paths.state_dir").resolve(),
+            tasks_dir=config.path("memory.tasks_dir").resolve(),
+            overlay=bool(config.section("browser").get("overlay", True)),
         )
 
 
@@ -301,6 +306,10 @@ class BrowserProvider:
         self._snapshot: StateSnapshot | None = None
         self._start_notice = ""  # set by _start when a kept-open Chrome had to be replaced
         self.restarts = 0
+        # Task whose tool call is running (set by tools/browser.py) and the Stop/status overlay for it.
+        self.task_id = ""
+        self.overlay = OverlayController(settings.tasks_dir, self._cancel_task_calls)
+        self._calls: set[asyncio.Task[Any]] = set()
 
     # ----------------------------------------------------------------- lifecycle
 
@@ -338,14 +347,37 @@ class BrowserProvider:
     @asynccontextmanager
     async def attached(self, timeout_s: float, action: str = "browser action") -> AsyncIterator[Attached]:
         """Serialise one tool call, ensure a live session and map any failure to a ToolError."""
+        if self.task_id and self.overlay.stopped_task == self.task_id:
+            raise ToolError(ErrorCode.CANCELLED, "the user pressed Stop on the browser overlay; this task is stopped")
+        current = asyncio.current_task()
         async with self._lock:
+            if current is not None:
+                self._calls.add(current)
             try:
-                yield await self._ensure_connected(timeout_s)
+                att = await self._ensure_connected(timeout_s)
+                await self._show_overlay()
+                async with self.overlay.agent_input():
+                    yield att
             except (ToolError, asyncio.CancelledError):
                 raise
             except Exception as exc:  # noqa: BLE001 - mapped to a deterministic error code, never swallowed
                 logger.debug("%s failed", action, exc_info=True)
                 raise to_tool_error(exc, action) from exc
+            finally:
+                self._calls.discard(current)  # type: ignore[arg-type]
+
+    async def _show_overlay(self) -> None:
+        if not (self.settings.overlay and self.task_id):
+            return
+        try:
+            await self.overlay.ensure(self.cdp_url, self.task_id)
+        except Exception:  # noqa: BLE001 - the overlay is UX only; never fail a browser action because of it
+            logger.warning("browser overlay unavailable", exc_info=True)
+
+    def _cancel_task_calls(self, task_id: str) -> None:
+        """Overlay Stop: cancel the browser tool calls running right now (the core cancels the task)."""
+        for call in list(self._calls):
+            call.cancel()
 
     async def _ensure_connected(self, timeout_s: float) -> Attached:
         reason = self.unhealthy_reason()
@@ -483,6 +515,7 @@ class BrowserProvider:
         going away). Closes the Chrome we own (CDP Browser.close, then kill) unless `keep_open` (default:
         [browser] keep_open): then it stays open and the next run re-attaches via DevToolsActivePort."""
         keep = self.settings.keep_open if keep_open is None else keep_open
+        await self.overlay.deactivate()
         async with self._lock:
             self._collect_downloads()
             await self._drop_session(detach=True)

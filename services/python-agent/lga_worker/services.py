@@ -22,6 +22,8 @@ class Services:
         self._desktop: WindowsUseProvider | None = None
         self._extra: dict[str, Any] = {}
         self._locks: dict[str, asyncio.Lock] = {}
+        self._vm_router: Any = None
+        self._vm_checked = False
 
     def _lock(self, name: str) -> asyncio.Lock:
         return self._locks.setdefault(name, asyncio.Lock())
@@ -57,7 +59,21 @@ class Services:
     def forget(self, name: str) -> None:
         self._extra.pop(name, None)
 
+    def vm_router(self) -> Any:
+        """The agent-VM router when `[vm] enabled` (lga_worker.remote.host.VmRouter), else None."""
+        if not self._vm_checked:
+            self._vm_checked = True
+            from lga_worker.remote.host import VmRouter, VmSettings
+
+            settings = VmSettings.from_config(self.config)
+            if settings.enabled:
+                self._vm_router = VmRouter(settings)
+                logger.info("GUI tools %s are routed to the agent VM at %s", settings.tools, settings.endpoint)
+        return self._vm_router
+
     async def close(self) -> None:
+        if self._vm_router is not None:
+            await self._vm_router.close()
         for name, provider in list(self._extra.items()):
             close = getattr(provider, "close", None)
             if close is not None:
